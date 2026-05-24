@@ -36,7 +36,7 @@ function Invoke-OrEcho {
         Write-Host "+ $line" -ForegroundColor DarkGray
         & $Cmd[0] $Cmd[1..($Cmd.Length - 1)]
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Command failed with exit code $LASTEXITCODE: $line"
+            Write-Error "Command failed with exit code ${LASTEXITCODE}: $line"
             exit 1
         }
     }
@@ -98,9 +98,11 @@ Invoke-OrEcho @(
     "-DBUILD_MODULE_Visualization=ON",
     "-DBUILD_MODULE_DataExchange=ON",
     "-DBUILD_MODULE_Draw=OFF",
-    "-DUSE_TBB=ON",
-    "-DUSE_FREETYPE=ON",
-    "-DUSE_FREEIMAGE=ON",
+    # M0: third-party deps disabled — install them and flip to ON when needed.
+    # USE_TBB=ON requires TBB install; USE_FREETYPE/FREEIMAGE need system libs.
+    "-DUSE_TBB=OFF",
+    "-DUSE_FREETYPE=OFF",
+    "-DUSE_FREEIMAGE=OFF",
     "-DCMAKE_INSTALL_PREFIX=$InstallPrefix"
 )
 

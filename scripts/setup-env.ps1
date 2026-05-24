@@ -50,7 +50,24 @@ Write-Host "Setting VCPKG_ROOT = $VcpkgRoot" -ForegroundColor Yellow
 # ---------------------------------------------------------------------------
 # Prepend OCCT bin to User PATH (without duplicating)
 # ---------------------------------------------------------------------------
-$occtBin   = Join-Path $OcctInstallDir "bin"
+# OCCT install layout varies: Windows-native (win64\vc14\bin) vs Generic (bin)
+# depending on -DINSTALL_DIR_LAYOUT choice. Auto-detect by probing for TKernel.dll.
+$occtBin = $null
+$candidates = @(
+    (Join-Path $OcctInstallDir "win64\vc14\bin"),
+    (Join-Path $OcctInstallDir "win64\vc143\bin"),
+    (Join-Path $OcctInstallDir "win64\vc142\bin"),
+    (Join-Path $OcctInstallDir "bin")
+)
+foreach ($cand in $candidates) {
+    if (Test-Path (Join-Path $cand "TKernel.dll")) { $occtBin = $cand; break }
+}
+if (-not $occtBin) {
+    Write-Warning "Could not detect OCCT bin under $OcctInstallDir (looked for TKernel.dll). Falling back to \bin."
+    $occtBin = Join-Path $OcctInstallDir "bin"
+} else {
+    Write-Host "Detected OCCT bin: $occtBin" -ForegroundColor Green
+}
 $userPath  = [Environment]::GetEnvironmentVariable("PATH", "User")
 if (-not $userPath) { $userPath = "" }
 
