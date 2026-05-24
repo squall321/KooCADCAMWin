@@ -1,0 +1,16 @@
+{
+    "cmake.configureOnOpen": true,
+    "cmake.preferredGenerators": ["Ninja"],
+    "cmake.useCMakePresets": "always",
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "ms-vscode.cpptools",
+    "[cpp]": { "editor.defaultFormatter": "xaver.clang-format" },
+    "[c]":   { "editor.defaultFormatter": "xaver.clang-format" },
+    "files.associations": {
+        "*.cxx": "cpp",
+        "*.hxx": "cpp",
+        "*.ixx": "cpp"
+    },
+    "C_Cpp.default.cppStandard": "c++17",
+    "C_Cpp.clang_format_style": "file"
+}

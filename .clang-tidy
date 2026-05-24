@@ -1,0 +1,14 @@
+Checks: >
+  bugprone-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-init-variables,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -readability-identifier-length
+
+WarningsAsErrors: ''
+
+HeaderFilterRegex: '.*/src/.*\.hpp$'

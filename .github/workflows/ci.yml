@@ -1,0 +1,133 @@
+# TODO M0.5: OCCT cache invalidation strategy + Qt version matrix.
+
+name: KooCADCAM CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Install Qt 6 ───────────────────────────────────────
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.6.3
+          host: auto
+          target: desktop
+          archives: qtbase qttools
+          modules: qtopengl
+
+      # ── 3. Cache OCCT install dir ─────────────────────────────
+      - name: Cache OCCT (Windows)
+        if: runner.os == 'Windows'
+        id: cache-occt-win
+        uses: actions/cache@v4
+        with:
+          path: C:\occt-8.0.0
+          key: occt-V8_0_0-${{ matrix.os }}-v1
+
+      - name: Cache OCCT (Linux)
+        if: runner.os == 'Linux'
+        id: cache-occt-linux
+        uses: actions/cache@v4
+        with:
+          path: ~/occt-8.0.0
+          key: occt-V8_0_0-${{ matrix.os }}-v1
+
+      # ── 4. Build OCCT if cache miss ───────────────────────────
+      - name: Build OCCT (Linux)
+        if: runner.os == 'Linux' && steps.cache-occt-linux.outputs.cache-hit != 'true'
+        run: |
+          bash scripts/build-occt.sh \
+            --tag=V8_0_0 \
+            --install-prefix=$HOME/occt-8.0.0 \
+            --jobs=$(nproc)
+
+      - name: Build OCCT (Windows)
+        if: runner.os == 'Windows' && steps.cache-occt-win.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          pwsh scripts/build-occt.ps1 `
+            -Tag V8_0_0 `
+            -InstallPrefix C:\occt-8.0.0
+
+      # ── 5. Bootstrap vcpkg ────────────────────────────────────
+      - name: Bootstrap vcpkg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          git clone https://github.com/microsoft/vcpkg ${{ runner.workspace }}/vcpkg
+          ${{ runner.workspace }}/vcpkg/bootstrap-vcpkg.sh
+
+      - name: Bootstrap vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg ${{ runner.workspace }}/vcpkg
+          & "${{ runner.workspace }}\vcpkg\bootstrap-vcpkg.bat"
+
+      # ── 6. Set OCCT_INSTALL_DIR env var ───────────────────────
+      - name: Set OCCT_INSTALL_DIR (Linux)
+        if: runner.os == 'Linux'
+        run: echo "OCCT_INSTALL_DIR=$HOME/occt-8.0.0" >> $GITHUB_ENV
+
+      - name: Set OCCT_INSTALL_DIR (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "OCCT_INSTALL_DIR=C:\occt-8.0.0" >> $env:GITHUB_ENV
+
+      # ── 7. CMake configure ────────────────────────────────────
+      - name: CMake configure (Linux)
+        if: runner.os == 'Linux'
+        env:
+          VCPKG_ROOT: ${{ runner.workspace }}/vcpkg
+        run: cmake --preset linux-gcc-release
+
+      - name: CMake configure (Windows)
+        if: runner.os == 'Windows'
+        env:
+          VCPKG_ROOT: ${{ runner.workspace }}/vcpkg
+        shell: pwsh
+        run: cmake --preset windows-msvc-debug
+
+      # ── 8. Build ──────────────────────────────────────────────
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build --preset linux-gcc-release
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake --build --preset windows-msvc-debug
+
+      # ── 9. Test ───────────────────────────────────────────────
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
+        run: ctest --preset linux-gcc-release --output-on-failure
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ctest --preset windows-msvc-debug --output-on-failure
+
+      # ── 10. Upload artifact (Windows only) ───────────────────
+      - name: Upload build artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: KooCADCAM-windows-${{ github.sha }}
+          path: build/windows-msvc-debug/KooCADCAM.exe
+          if-no-files-found: warn

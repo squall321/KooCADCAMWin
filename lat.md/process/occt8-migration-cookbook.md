@@ -1,0 +1,504 @@
+# OCCT 7.x → 8.0 Migration Cookbook
+
+OCCT 7.x 기반 코드를 8.0.0으로 올릴 때 반드시 처리해야 할 변경사항을 정리한다.
+마이그레이션 전 체크리스트 및 진행 트래커 템플릿을 포함한다.
+코딩 규약과의 연계는 [[process/coding-standards]] 참고.
+
+---
+
+## §8.4 포팅 — 마이그레이션 주의사항 (Master Spec §8.4 원문 이식)
+
+> 출처: `smartphone_metal_cad_project.md` §8.4 "마이그레이션 주의사항 (7.x → 8.0)"
+
+### 1. C++17 모드 활성화 필수
+```cmake
+# CMakeLists.txt
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+```
+
+### 2. Standard_Failure 예외 처리 변경
+```cpp
+// Before (7.x)
+Standard_Failure::Raise("error");
+Standard_Failure::Instance();
+
+// After (8.0)
+throw Standard_Failure("error");
+// Instance() 제거 — 더 이상 존재하지 않음
+```
+
+### 3. 수학 함수 치환
+OCCT 공식 마이그레이션 스크립트: `adm/scripts/migration_800/replace_typedefs.py`
+
+### 4. NCollection_Array1/2::Assign 동작 변경
+런타임 테스트 필수 (아래 상세 참고).
+
+### 5. Standard_UNUSED → `[[maybe_unused]]`
+수동 마이그레이션 필요 (위치 규칙 엄격화 — 아래 상세 참고).
+
+### 6. 소스 디렉토리 구조 변경
+`src/Module/Toolkit/Package/File` 구조. include 경로 업데이트 필요.
+
+---
+
+## 항목별 실전 가이드
+
+---
+
+### M1: C++17 필수화
+
+**영향 범위**: CMakeLists.txt, 컴파일러 플래그
+
+**VS regex 검색** (구버전 CMake 설정 탐지):
+```
+CXX_STANDARD\s+14
+CXX_STANDARD\s+11
+```
+
+**조치**:
+```cmake
+# 모든 타겟에 일괄 적용
+set_property(TARGET KooCADCAM PROPERTY CXX_STANDARD 17)
+set_property(TARGET KooCADCAM PROPERTY CXX_STANDARD_REQUIRED ON)
+```
+
+---
+
+### M2: Standard_Failure — throw 전환
+
+**영향 범위**: `Raise(` 호출 전체, `Instance()` 호출 전체
+
+**sed 패턴** (Linux/macOS 정방향 참조 필요):
+```bash
+# Raise( → throw Standard_Failure(  (인자가 있는 경우)
+sed -i 's/Standard_Failure::Raise(\(.*\))/throw Standard_Failure(\1)/g' **/*.cxx
+
+# 인자 없는 단순 Raise
+sed -i 's/Standard_Failure::Raise()/throw Standard_Failure("unspecified")/g' **/*.cxx
+```
+
+**VS 정규식** (Find & Replace):
+```
+검색:  Standard_Failure::Raise\((.+)\)
+치환:  throw Standard_Failure($1)
+```
+
+**8.0의 핵심 변화**: `Standard_Failure`가 이제 `std::exception`에서 파생된다.
+따라서 API 경계 캐처를 `const std::exception&` 단일 핸들러로 통합 가능하다.
+
+```cpp
+// 권장 캐처 패턴 (Standard_Failure + std::exception 동시 처리)
+try {
+    doOcctOperation();
+} catch (const std::exception& ex) {
+    // ex.what() 으로 메시지 접근 가능
+    spdlog::error("OCCT failure: {}", ex.what());
+}
+```
+
+> **함정**: 7.x 코드에 `catch (Standard_Failure& e)` 가 있으면
+> 8.0에서도 컴파일되지만, 상위의 `catch (std::exception&)` 가 먼저
+> 잡을 수 있다. 상속 순서를 확인하고 캐처 순서를 정리할 것.
+
+---
+
+### M3: 수학 함수 std::* 전환
+
+**전체 치환 표**
+
+| 7.x (deprecated) | 8.0 표준 | sed/VS 검색 패턴 |
+|---|---|---|
+| `ACos(` | `std::acos(` | `\bACos\(` |
+| `ASin(` | `std::asin(` | `\bASin\(` |
+| `ATan(` | `std::atan(` | `\bATan\(` |
+| `ATan2(` | `std::atan2(` | `\bATan2\(` |
+| `Cos(` | `std::cos(` | `\bCos\(` |
+| `Sin(` | `std::sin(` | `\bSin\(` |
+| `Sqrt(` | `std::sqrt(` | `\bSqrt\(` |
+| `Abs(` | `std::abs(` | `\bAbs\(` |
+| `Pow(` | `std::pow(` | `\bPow\(` |
+| `Exp(` | `std::exp(` | `\bExp\(` |
+| `Log(` | `std::log(` | `\bLog\(` |
+
+**일괄 sed 스크립트**:
+```bash
+#!/usr/bin/env bash
+# migrate_math.sh — OCCT 7.x 수학 함수 일괄 치환
+FILES=$(find src -name "*.cxx" -o -name "*.hxx" -o -name "*.cpp" -o -name "*.hpp")
+for F in $FILES; do
+    sed -i \
+        -e 's/\bACos(/std::acos(/g' \
+        -e 's/\bASin(/std::asin(/g' \
+        -e 's/\bATan2(/std::atan2(/g' \
+        -e 's/\bATan(/std::atan(/g' \
+        -e 's/\bCos(/std::cos(/g' \
+        -e 's/\bSin(/std::sin(/g' \
+        -e 's/\bSqrt(/std::sqrt(/g' \
+        -e 's/\bAbs(/std::abs(/g' \
+        -e 's/\bPow(/std::pow(/g' \
+        -e 's/\bExp(/std::exp(/g' \
+        -e 's/\bLog(/std::log(/g' \
+        "$F"
+done
+```
+
+> **함정 — 네임스페이스 충돌**: `using namespace std;` 가 전역에 있는 레거시
+> 파일에서 `std::abs` 가 `abs` 와 중복될 수 있다. 치환 후 빌드 오류를
+> 확인하고, `using namespace std;` 를 제거하는 것을 권장한다.
+
+---
+
+### M4: Standard_UNUSED → `[[maybe_unused]]`
+
+**변경 전후**:
+```cpp
+// 7.x (매크로)
+void foo(Standard_UNUSED int bar) { }
+
+// 8.0 (C++17 attribute)
+void foo([[maybe_unused]] int bar) { }
+```
+
+**핵심 주의사항 — 위치 규칙**:
+
+C++17 attribute는 **타입 앞(선행 한정자)이 아니라 변수 이름 앞**에 위치해야 한다.
+
+```cpp
+// ❌ 잘못된 위치 (매크로를 그대로 복사한 경우)
+[[maybe_unused]] int x = compute();  // 이건 사실 OK — 선언에는 OK
+
+// ⚠️  파라미터에서 주의:
+void foo(int [[maybe_unused]] bar) { }   // ❌ 컴파일 오류
+void foo([[maybe_unused]] int bar) { }   // ✅ 올바른 위치
+
+// 람다 캡처에서도 주의:
+auto lam = [](auto&& [[maybe_unused]] x) { };  // ❌
+auto lam = []([[maybe_unused]] auto&& x) { }; // ✅
+```
+
+**VS regex 검색** (마이그레이션 잔재 탐지):
+```
+Standard_UNUSED
+```
+
+---
+
+### M5: NCollection_Array1/2::Assign — 사일런트 Breaking Change
+
+#### 변경 내용
+
+7.x에서 `Assign(src)` 는 destination 배열이 자신의 범위(lower/upper bound)를
+유지했다. 8.0에서는 **destination이 source의 범위를 채택**한다.
+
+```
+7.x: dst.Assign(src)
+  → dst 인덱스 범위: 변경 없음 (dst.Lower() 유지)
+  → dst 원소: src 원소로 교체
+
+8.0: dst.Assign(src)
+  → dst 인덱스 범위: src.Lower() ~ src.Upper() 로 변경 ← Breaking!
+  → dst 원소: src 원소로 교체
+```
+
+이 변경은 **컴파일 오류 없이 통과**하며 런타임에만 드러난다.
+
+#### 영향 패턴 — 위험한 코드
+
+```cpp
+NCollection_Array1<gp_Pnt> dst(1, 10);  // lower=1, upper=10
+NCollection_Array1<gp_Pnt> src(0, 5);   // lower=0, upper=5
+
+dst.Assign(src);
+
+// 7.x: dst.Lower() == 1, dst.Upper() == 10 (범위 유지)
+// 8.0: dst.Lower() == 0, dst.Upper() == 5  (범위 변경! ← 버그 가능성)
+
+// 이후 코드가 dst(7) 를 참조하면 8.0에서 범위 초과 예외 발생
+```
+
+#### 런타임 테스트 픽스처
+
+```cpp
+TEST(NCollectionAssignMigration, RangeAdoptsSourceAfterAssign) {
+    NCollection_Array1<int> dst(1, 10);
+    NCollection_Array1<int> src(0, 5);
+    for (int i = src.Lower(); i <= src.Upper(); ++i)
+        src(i) = i * 2;
+
+    dst.Assign(src);
+
+    // 8.0 기대 동작: 범위가 src를 따름
+    EXPECT_EQ(dst.Lower(), src.Lower());   // 0
+    EXPECT_EQ(dst.Upper(), src.Upper());   // 5
+    EXPECT_EQ(dst(0), 0);
+    EXPECT_EQ(dst(5), 10);
+}
+```
+
+#### 점검 grep 패턴
+
+```bash
+grep -rn "\.Assign(" src/ --include="*.cpp" --include="*.hpp" --include="*.cxx"
+```
+
+발견 위치마다 `Assign` 호출 전후 인덱스 범위 사용을 수동 검토한다.
+
+---
+
+### M6: EvalRep 시스템 — 마이그레이션 필요 여부 판단
+
+#### 개요
+
+8.0에서 `Geom_Curve` / `Geom_Surface` 의 가상 `D0/D1/D2/D3` 메서드가
+EvalRep descriptor 시스템으로 교체되었다.
+
+#### 마이그레이션이 필요한 경우
+
+다음 중 하나라도 해당하면 EvalRep를 검토해야 한다:
+
+```cpp
+// 해당하면 마이그레이션 필요
+class MyCustomCurve : public Geom_Curve {    // ← Geom_Curve 직접 서브클래스
+    void D0(Standard_Real U, gp_Pnt& P) const override { ... }
+    void D1(Standard_Real U, gp_Pnt& P, gp_Vec& V1) const override { ... }
+};
+```
+
+#### 마이그레이션이 불필요한 경우
+
+KooCADCAM의 대부분 코드는 **OCCT 고수준 API를 소비**하므로 해당 없음:
+
+```cpp
+// 이런 코드는 EvalRep 영향 없음 — 그냥 컴파일된다
+BRepAdaptor_Curve adaptor(edge);
+gp_Pnt pt = adaptor.Value(0.5);   // 내부적으로 EvalRep 사용, 외부 API 동일
+
+Handle(Geom_BSplineCurve) bsp = GeomAPI_PointsToBSpline(pts).Curve();
+```
+
+#### 확인 명령어
+
+```bash
+# Geom_Curve / Geom_Surface 서브클래스 탐지
+grep -rn "public Geom_Curve\|public Geom_Surface" src/ \
+     --include="*.hpp" --include="*.hxx"
+```
+
+결과가 없으면 EvalRep 마이그레이션 불필요.
+
+---
+
+### M7: 소스 트리 재구성 — include 경로
+
+#### 새 구조
+
+```
+src/
+  BRep/
+    TKBRep/
+      BRepBuilderAPI/
+        BRepBuilderAPI_MakeBox.hxx
+```
+
+#### include 경로 영향
+
+OCCT는 기존 단일 평탄 include 서페이스를 **레거시 호환 레이어로 유지**하므로
+대부분의 경우 아래 코드는 8.0에서도 그대로 컴파일된다:
+
+```cpp
+#include <BRepBuilderAPI_MakeBox.hxx>   // 7.x 방식 — 8.0에서 대부분 호환
+```
+
+#### 직접 빌드 install 트리 (vcpkg 미사용)
+
+KooCADCAM은 OCCT를 소스에서 직접 빌드한다
+([[architecture/build-and-deps#OCCT 8.0.0 빌드 & 배포 (vcpkg 미사용)]]).
+설치 트리의 표준 형태는 다음과 같다:
+
+```
+<OCCT_INSTALL_DIR>/
+├── include/opencascade/   # 플랫 헤더 — #include <BRepBuilderAPI_MakeBox.hxx> 그대로 사용
+├── lib/                   # .lib (Windows) / .a (Linux) 임포트 라이브러리
+├── lib/cmake/opencascade/ # CMake 패키지 (find_package(OpenCASCADE) 가 여기를 잡음)
+├── bin/                   # .dll (Windows) — 런타임 PATH 필요
+└── share/opencascade/     # 리소스 (Standard, UnitsAPI, ShapeProcess 등)
+```
+
+CMakeLists.txt 에서 경로 검증:
+
+```cmake
+get_target_property(OCCT_INCS OpenCASCADE::FoundationClasses
+    INTERFACE_INCLUDE_DIRECTORIES)
+message(STATUS "OCCT include dirs: ${OCCT_INCS}")
+# 정상: <OCCT_INSTALL_DIR>/include/opencascade
+```
+
+Windows 런타임 환경에서는 `<OCCT_INSTALL_DIR>/bin` 이 PATH 에 포함되어야
+OCCT DLL 들이 로드된다. 배포 시 별도 패키징
+([[architecture/build-and-deps#OCCT 8.0.0 빌드 & 배포 (vcpkg 미사용)]]).
+
+#### 빌드 파손 탐지 레시피
+
+```cmake
+# 모든 OCCT 헤더 파일을 명시적으로 include 하는 더미 타겟으로 탐지
+add_executable(occt_include_probe tools/occt_include_probe.cpp)
+target_link_libraries(occt_include_probe PRIVATE OCCT::TKBRep OCCT::TKMath)
+# 빌드 실패 시 경로 문제
+```
+
+---
+
+### M8: OCCT 8.0.0 소스 빌드 (vcpkg 미사용)
+
+> **정책**: OCCT는 vcpkg 포트를 사용하지 않고 [Open-Cascade-SAS/OCCT](https://github.com/Open-Cascade-SAS/OCCT)
+> 의 `V8_0_0` 태그에서 직접 빌드한다. 사유는
+> [[architecture/build-and-deps#OCCT 8.0.0 빌드 & 배포 (vcpkg 미사용)]] 참조.
+
+#### 사전 요구사항 (Master Spec §8.1 기반)
+
+| 항목 | 요구사항 |
+|---|---|
+| C++ 컴파일러 | MSVC 2019+, GCC 9+, Clang 10+ (C++17 지원) |
+| CMake | 3.14+ (KooCADCAM 자체는 3.27+) |
+| OpenGL | 3.2+ |
+| 선택 의존성 | FreeType, FreeImage, TBB, VTK |
+
+#### 소스 취득 & 체크아웃
+
+```bash
+git clone https://github.com/Open-Cascade-SAS/OCCT.git
+cd OCCT
+git checkout V8_0_0
+```
+
+#### CMake 구성 (KooCADCAM 권장 옵션)
+
+```bash
+mkdir build && cd build
+
+cmake .. \
+  -G "Ninja" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_LIBRARY_TYPE=Shared \
+  -DBUILD_MODULE_ApplicationFramework=ON \
+  -DBUILD_MODULE_Visualization=ON \
+  -DBUILD_MODULE_DataExchange=ON \
+  -DBUILD_MODULE_Draw=OFF \
+  -DUSE_TBB=ON \
+  -DUSE_FREETYPE=ON \
+  -DUSE_FREEIMAGE=ON \
+  -DCMAKE_INSTALL_PREFIX=C:/dev/occt-8.0.0
+
+cmake --build . --parallel
+cmake --install .
+```
+
+> **중요**: `BUILD_LIBRARY_TYPE=Shared` 필수 (LGPL 2.1 동적 링크 준수 — 정적 빌드는
+> 사내 도구 전체에 LGPL 전염).
+
+#### KooCADCAM 빌드에 연결
+
+설치 후 환경 변수 설정:
+
+```powershell
+# Windows (PowerShell)
+$env:OCCT_INSTALL_DIR = "C:\dev\occt-8.0.0"
+$env:PATH = "$env:OCCT_INSTALL_DIR\bin;$env:PATH"
+```
+
+```bash
+# Linux / macOS
+export OCCT_INSTALL_DIR=/opt/occt-8.0.0
+export LD_LIBRARY_PATH=$OCCT_INSTALL_DIR/lib:$LD_LIBRARY_PATH
+```
+
+KooCADCAM의 `CMakePresets.json` 은
+`OpenCASCADE_DIR=$env{OCCT_INSTALL_DIR}/lib/cmake/opencascade` 를 자동으로 매핑한다
+([[architecture/build-and-deps]]).
+
+#### 모듈 선택 가이드
+
+| OCCT 모듈 | KooCADCAM 필요 여부 |
+|---|---|
+| `FoundationClasses` (기본) | 필수 |
+| `ModelingData` | 필수 (`TopoDS`, `gp`, `BRep` 등) |
+| `ModelingAlgorithms` | 필수 (`BRepBuilderAPI`, `BRepAlgoAPI`, `BRepFilletAPI`, `BRepExtrema`) |
+| `Visualization` | 필수 (`V3d`, `AIS`, `OpenGl`) |
+| `ApplicationFramework` | 필수 (`TDocStd`, `TDF` — OCAF 향후 도입용) |
+| `DataExchange` | 필수 (`STEPControl`, `IGES`, `XCAF`) |
+| `Draw` | 불필요 (커맨드라인 TCL 인터프리터; CI 시간 절약) |
+
+#### 빌드 결과 검증
+
+```bash
+# 1. 핵심 DLL 존재 확인
+ls $OCCT_INSTALL_DIR/bin/TKernel.dll
+ls $OCCT_INSTALL_DIR/bin/TKV3d.dll
+ls $OCCT_INSTALL_DIR/bin/TKSTEP.dll
+
+# 2. CMake 패키지 검증
+cmake -P - <<'CMK'
+find_package(OpenCASCADE 8.0 REQUIRED PATHS $ENV{OCCT_INSTALL_DIR}/lib/cmake/opencascade)
+message(STATUS "OCCT version: ${OpenCASCADE_VERSION}")
+CMK
+```
+
+---
+
+## 컴파일타임 트립와이어 체크리스트
+
+7.x 코드를 8.0으로 올리기 전에 아래 패턴을 grep으로 전수 검색한다.
+
+```bash
+#!/usr/bin/env bash
+# pre_migration_check.sh
+echo "=== OCCT 8.0 Migration Tripwires ==="
+
+echo "[M2] Standard_Failure::Raise calls:"
+grep -rn "Standard_Failure::Raise\|::Instance()" src/ || echo "  CLEAN"
+
+echo "[M3] Deprecated math functions:"
+grep -rn "\bACos(\|\bASin(\|\bATan(\|\bSqrt(\|\bAbs(\|\bCos(\|\bSin(\|\bPow(\|\bExp(\|\bLog(" \
+     src/ --include="*.cpp" --include="*.hpp" || echo "  CLEAN"
+
+echo "[M4] Standard_UNUSED macro:"
+grep -rn "Standard_UNUSED" src/ || echo "  CLEAN"
+
+echo "[M5] NCollection Assign usage:"
+grep -rn "\.Assign(" src/ --include="*.cpp" --include="*.hpp" || echo "  CLEAN"
+
+echo "[M6] Geom_Curve/Surface subclasses:"
+grep -rn "public Geom_Curve\|public Geom_Surface" src/ || echo "  CLEAN"
+
+echo "[M7] Legacy D0/D1/D2/D3 overrides:"
+grep -rn "void D0.*override\|void D1.*override\|void D2.*override\|void D3.*override" \
+     src/ || echo "  CLEAN"
+```
+
+---
+
+## Migration Progress Tracker
+
+팀원이 각 항목을 처리할 때마다 상태를 업데이트한다.
+
+| # | 항목 | 상태 | 담당자 | 완료 날짜 | 비고 |
+|---|---|---|---|---|---|
+| M1 | C++17 CMake 설정 | ⬜ 미착수 | — | — | |
+| M2 | `Raise()` → `throw` 전환 | ⬜ 미착수 | — | — | sed 스크립트 준비됨 |
+| M3 | 수학 함수 `std::*` 치환 | ⬜ 미착수 | — | — | `migrate_math.sh` 준비됨 |
+| M4 | `Standard_UNUSED` → `[[maybe_unused]]` | ⬜ 미착수 | — | — | 위치 규칙 주의 |
+| M5 | `NCollection::Assign` 범위 변경 확인 | ⬜ 미착수 | — | — | 런타임 테스트 필수 |
+| M6 | EvalRep 서브클래스 확인 | ⬜ 미착수 | — | — | 해당 없으면 생략 |
+| M7 | include 경로 재검증 | ⬜ 미착수 | — | — | vcpkg vs 직접 빌드 |
+| M8 | OCCT 8.0.0 소스 빌드 (vcpkg 미사용) | ⬜ 미착수 | — | — | `BUILD_LIBRARY_TYPE=Shared` 필수 |
+| — | `pre_migration_check.sh` 전체 통과 | ⬜ 미착수 | — | — | 최종 확인 |
+
+상태 아이콘: ⬜ 미착수 / 🔄 진행 중 / ✅ 완료 / ⚠️ 이슈
+
+---
+
+## 크로스-링크 요약
+
+- [[process/coding-standards]] — throw 정책, std::* 수학 함수, [[maybe_unused]] 규약
+- [[architecture/build-and-deps]] — OCCT 소스 빌드 정책, CMake CXX_STANDARD, CI 빌드 행렬

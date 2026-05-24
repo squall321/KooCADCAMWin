@@ -1,0 +1,41 @@
+# Build output directories
+build/
+build-*/
+out/
+
+# IDE directories
+.vs/
+.vscode/*.user
+
+# CMake user-local presets (should not be committed)
+CMakeUserPresets.json
+
+# vcpkg installed packages (generated)
+vcpkg_installed/
+
+# MSVC build artifacts
+*.user
+*.aps
+*.pdb
+*.ilk
+*.exp
+
+# CI test output executables
+*.exe.*
+
+# Generated test data (created by CMake custom_command)
+tests/data/*.step
+tests/data/*.stp
+
+# Editor swap/backup files
+*.swp
+*.bak
+
+# macOS metadata (should not appear, but guard anyway)
+.DS_Store
+
+# Windows thumbnail cache
+Thumbs.db
+
+# Allow .gitkeep sentinels
+!.gitkeep

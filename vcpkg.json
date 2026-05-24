@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
+  "name": "koo-cadcam",
+  "version": "0.1.0",
+  "dependencies": [
+    "nlohmann-json",
+    "spdlog",
+    "gtest"
+  ],
+  "builtin-baseline": "2024.11.16"
+}

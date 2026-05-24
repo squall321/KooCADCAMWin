@@ -1,0 +1,28 @@
+Internal / Proprietary License
+==============================
+
+This software is for internal use only. Not for redistribution.
+
+Copyright (c) 2026 KooCADCAM Project Contributors. All rights reserved.
+
+Unauthorized copying, distribution, or use of this software, in whole or in
+part, is strictly prohibited.
+
+Third-Party Component Licenses
+-------------------------------
+
+This product includes or links against third-party libraries. Their license
+texts are in the licenses/ directory:
+
+  licenses/OCCT_LGPL-2.1.txt  — OpenCASCADE Technology 8.0.0 (LGPL 2.1)
+  licenses/Qt_LGPL-3.txt       — Qt 6.x (LGPL 3.0)
+
+LGPL Compliance Note
+--------------------
+
+OpenCASCADE Technology is linked dynamically (shared libraries, DLL/SO).
+Qt 6 is linked dynamically (shared libraries, DLL/SO).
+Dynamic linking satisfies the LGPL redistribution requirements for both
+libraries when end-users retain the right to relink against modified versions
+of OCCT and Qt. As this is an internal tool, redistribution to end-users is
+not applicable; LGPL obligations are therefore satisfied by design.

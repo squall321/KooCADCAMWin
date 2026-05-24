@@ -1,0 +1,15 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+ColumnLimit: 110
+AccessModifierOffset: -4
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AlignAfterOpenBracket: Align
+AllowShortFunctionsOnASingleLine: Empty
+PointerAlignment: Left
+SpacesBeforeTrailingComments: 2
+IncludeBlocks: Regroup
+SortIncludes: CaseSensitive
+---

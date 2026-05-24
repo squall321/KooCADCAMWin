@@ -1,0 +1,23 @@
+Qt 6.x — LGPL 3.0
+==================
+
+This product links against Qt 6.x, developed by The Qt Company and contributors,
+available under the GNU Lesser General Public License, version 3.0.
+
+Official LGPL 3.0 license text:
+  https://www.gnu.org/licenses/lgpl-3.0.txt
+
+Qt official website:
+  https://www.qt.io
+
+Internal use of Qt 6 under LGPL 3.0 with dynamic linking.
+Dynamic linking satisfies the LGPL 3.0 requirement that end-users retain
+the ability to relink the application against a modified version of Qt.
+
+Commercial license requirement: a Qt Commercial license is required
+before any redistribution of this software to external parties.
+TODO: obtain a commercial Qt license (SRC TODO) if redistribution is ever needed.
+
+TODO: Full LGPL 3.0 text to be inserted during release packaging.
+      Copy the verbatim license from https://www.gnu.org/licenses/lgpl-3.0.txt
+      into this file before any external distribution.
