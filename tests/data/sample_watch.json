@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0.0",
+  "product_name": "Sample Round Watch 44",
+  "form_factor": "round",
+  "noise_seed": 0,
+  "base": {
+    "diameter_mm": 44.0,
+    "thickness_mm": 10.0
+  },
+  "corner_radius": {
+    "r_top_mm": 1.0,
+    "r_side_mm": 0.6
+  },
+  "bezel": {
+    "width_mm": 3.0,
+    "depth_mm": 1.0,
+    "taper_deg": 0.0
+  },
+  "display_pocket": {
+    "d_pocket_mm": 36.0,
+    "depth_pocket_mm": 0.8,
+    "glass_offset_mm": -0.1
+  }
+}

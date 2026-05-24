@@ -42,3 +42,32 @@ add_custom_command(
     VERBATIM
 )
 add_custom_target(golden_step ALL DEPENDS "${KOO_GOLDEN_STEP}")
+
+# ── Watch parametric build test (M1.1) ────────────────────────
+add_executable(watch_test watch/watch_test.cpp)
+target_link_libraries(watch_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_engine
+    koo_io
+)
+target_include_directories(watch_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(watch_test)
+add_test(NAME watch COMMAND watch_test)
+set_tests_properties(watch PROPERTIES
+    TIMEOUT 60
+    ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
+
+# ── JsonSpec validate/roundtrip test (M1.1) ───────────────────
+add_executable(json_spec_test json_spec/json_spec_test.cpp)
+target_link_libraries(json_spec_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_io
+)
+target_include_directories(json_spec_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(json_spec_test)
+add_test(NAME json_spec COMMAND json_spec_test)
+set_tests_properties(json_spec PROPERTIES
+    TIMEOUT 30
+    ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
+)

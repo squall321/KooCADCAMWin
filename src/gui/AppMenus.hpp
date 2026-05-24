@@ -21,6 +21,9 @@ private slots:
     void onOpenStep();
     void onFitAll();
     void onExit();
+    void onNewWatchRound();
+    void onOpenWatchSpec();
+    void onSaveWatchSpec();
 
 private:
     MainWindow* m_window;

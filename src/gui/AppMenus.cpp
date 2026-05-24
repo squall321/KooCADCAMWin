@@ -3,15 +3,20 @@
 #include "AppMenus.hpp"
 #include "MainWindow.hpp"
 #include "OcctViewWidget.hpp"
+#include "ParameterPanel.hpp"
 
 #include <engine/PlaceholderCylinder.hpp>
+#include <engine/WatchFrontModel.hpp>
 #include <io/StepIO.hpp>
+#include <io/JsonSpec.hpp>
 
 #include <QApplication>
 #include <QFileDialog>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+
+#include <nlohmann/json.hpp>
 
 namespace koocadcam::gui {
 
@@ -37,6 +42,23 @@ void AppMenus::install(QMenuBar* menuBar)
     QAction* actOpen = fileMenu->addAction(tr("&Open STEP..."));
     actOpen->setShortcut(QKeySequence("Ctrl+O"));
     connect(actOpen, &QAction::triggered, this, &AppMenus::onOpenStep);
+
+    fileMenu->addSeparator();
+
+    QAction* aNewWatch = new QAction(tr("New Watch (Round)"), this);
+    aNewWatch->setShortcut(QKeySequence("Ctrl+W"));
+    connect(aNewWatch, &QAction::triggered, this, &AppMenus::onNewWatchRound);
+    fileMenu->addAction(aNewWatch);
+
+    QAction* aOpenWatchSpec = new QAction(tr("Open Watch Spec…"), this);
+    aOpenWatchSpec->setShortcut(QKeySequence("Ctrl+Shift+O"));
+    connect(aOpenWatchSpec, &QAction::triggered, this, &AppMenus::onOpenWatchSpec);
+    fileMenu->addAction(aOpenWatchSpec);
+
+    QAction* aSaveWatchSpec = new QAction(tr("Save Watch Spec…"), this);
+    aSaveWatchSpec->setShortcut(QKeySequence("Ctrl+Shift+S"));
+    connect(aSaveWatchSpec, &QAction::triggered, this, &AppMenus::onSaveWatchSpec);
+    fileMenu->addAction(aSaveWatchSpec);
 
     fileMenu->addSeparator();
 
@@ -115,6 +137,72 @@ void AppMenus::onFitAll()
 void AppMenus::onExit()
 {
     qApp->quit();
+}
+
+void AppMenus::onNewWatchRound()
+{
+    nlohmann::json defaultSpec = {
+        {"schema_version", "1.0.0"},
+        {"product_name",   "Default Round Watch 44"},
+        {"form_factor",    "round"},
+        {"base",           {{"diameter_mm", 44.0}, {"thickness_mm", 10.0}}},
+        {"corner_radius",  {{"r_top_mm", 1.0}, {"r_side_mm", 0.6}}},
+        {"bezel",          {{"width_mm", 3.0}, {"depth_mm", 1.0}, {"taper_deg", 0.0}}}
+    };
+    m_window->parameterPanel()->setSpec(defaultSpec);
+    m_window->parameterPanel()->triggerRebuild();
+}
+
+void AppMenus::onOpenWatchSpec()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        m_window,
+        tr("Open Watch Spec"),
+        QString(),
+        tr("Watch Spec (*.json)"));
+
+    if (path.isEmpty())
+        return;
+
+    std::string err;
+    auto specOpt = koocadcam::io::JsonSpec::read(path.toStdString(), err);
+    if (!specOpt) {
+        QMessageBox::critical(m_window, tr("Open Watch Spec"),
+                              tr("Failed to read spec:\n%1").arg(QString::fromStdString(err)));
+        return;
+    }
+
+    std::vector<std::string> validationErrors;
+    koocadcam::io::JsonSpec::validateWatchSpec(*specOpt, validationErrors);
+    if (!validationErrors.empty()) {
+        QMessageBox::warning(
+            m_window,
+            tr("Open Watch Spec"),
+            tr("Validation warning (loading anyway):\n%1")
+                .arg(QString::fromStdString(validationErrors.front())));
+    }
+
+    m_window->parameterPanel()->setSpec(*specOpt);
+    m_window->parameterPanel()->triggerRebuild();
+}
+
+void AppMenus::onSaveWatchSpec()
+{
+    const QString path = QFileDialog::getSaveFileName(
+        m_window,
+        tr("Save Watch Spec"),
+        QString(),
+        tr("Watch Spec (*.json)"));
+
+    if (path.isEmpty())
+        return;
+
+    nlohmann::json spec = m_window->parameterPanel()->currentSpec();
+    std::string err;
+    if (!koocadcam::io::JsonSpec::write(spec, path.toStdString(), err)) {
+        QMessageBox::critical(m_window, tr("Save Watch Spec"),
+                              tr("Failed to write spec:\n%1").arg(QString::fromStdString(err)));
+    }
 }
 
 }  // namespace koocadcam::gui
