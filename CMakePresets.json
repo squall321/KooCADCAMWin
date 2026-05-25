@@ -10,7 +10,9 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "OpenCASCADE_DIR": "$env{OCCT_INSTALL_DIR}/cmake"
+        "OpenCASCADE_DIR": "$env{OCCT_INSTALL_DIR}/cmake",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_CXX_COMPILER": "cl.exe"
       }
     },
     {
@@ -22,7 +24,9 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "OpenCASCADE_DIR": "$env{OCCT_INSTALL_DIR}/cmake"
+        "OpenCASCADE_DIR": "$env{OCCT_INSTALL_DIR}/cmake",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_CXX_COMPILER": "cl.exe"
       }
     },
     {

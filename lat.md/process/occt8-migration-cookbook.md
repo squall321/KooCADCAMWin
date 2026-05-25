@@ -498,6 +498,163 @@ grep -rn "void D0.*override\|void D1.*override\|void D2.*override\|void D3.*over
 
 ---
 
+## Build Troubleshooting (real-world hits 2026-05-25)
+
+> Verified on Windows 11 / MSVC 2022 Community host (Sonic's PC) during M0/M1.1 bring-up.
+> See also [[architecture/build-and-deps]] for the canonical build policy and [[process/coding-standards]] for script style rules.
+
+---
+
+### BT-1: Intel oneAPI `icx` picked instead of `cl.exe`
+
+**Symptom**: CMake configures successfully but the ninja link step fails with exit code 1104 (Intel LLVM linker error) even though VS 2022 is the intended toolchain.
+
+**Root cause**: `D:\Program Files (x86)\intel\oneAPI\compiler\latest\windows\bin\intel64` appears before the VS Dev Shell entries in user PATH, so CMake's compiler detection finds `icx` first.
+
+**Fix**:
+
+```powershell
+# Launch a clean VS 2022 Dev Shell, then strip oneAPI from the inherited PATH before cmake:
+$env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch 'oneAPI' }) -join ';'
+cmake --preset windows-msvc-release
+```
+
+Or set `CC` / `CXX` explicitly in `CMakePresets.json`:
+
+```json
+"cacheVariables": { "CMAKE_C_COMPILER": "cl", "CMAKE_CXX_COMPILER": "cl" }
+```
+
+**Prevention**: `CMakePresets.json` `windows-msvc-release` preset pins `CMAKE_C_COMPILER` and `CMAKE_CXX_COMPILER` to `cl` — see [[architecture/build-and-deps]].
+
+---
+
+### BT-2: Stale OCCT 7.7.0 config picked over OCCT 8.0.0
+
+**Symptom**: `find_package(OpenCASCADE)` resolves to `D:\OpenCASCADE-7.7.0-vc14-64\...\build\OpenCASCADEConfig.cmake` and immediately errors that component target files are missing.
+
+**Root cause**: A leftover OCCT 7.7.0 install at that path exposes an incomplete `build/` config directory; CMake's search order finds it before the correct 8.0.0 install at `C:\Users\Sonic\occt-8.0.0\cmake\`.
+
+**Fix**:
+
+```powershell
+# Point cmake directly at the 8.0.0 cmake directory:
+$env:OpenCASCADE_DIR = "C:\Users\Sonic\occt-8.0.0\cmake"
+cmake --preset windows-msvc-release
+# Or add to preset cacheVariables: "OpenCASCADE_DIR": "$env{OCCT_INSTALL_DIR}/cmake"
+```
+
+**Prevention**: `CMakePresets.json` sets `OpenCASCADE_DIR` via `$env{OCCT_INSTALL_DIR}/cmake`; `OCCT_INSTALL_DIR` must be set to the 8.0.0 root before invoking cmake — documented in [[architecture/build-and-deps]].
+
+---
+
+### BT-3: VS-bundled vcpkg overrides project vcpkg via `VCPKG_ROOT`
+
+**Symptom**: vcpkg reports a baseline SHA resolution failure, or installs packages from the wrong baseline, because `Launch-VsDevShell.ps1` silently sets `VCPKG_ROOT` to `D:\Program Files\Microsoft Visual Studio\2022\Community\VC\vcpkg`.
+
+**Root cause**: The VS-bundled vcpkg clone is often a shallow clone (`--depth 1`); its baseline SHA diverges from `C:\Users\Sonic\vcpkg`, so cross-referencing fails.
+
+**Fix**:
+
+```powershell
+# After launching Dev Shell, override VCPKG_ROOT:
+$env:VCPKG_ROOT = "C:\Users\Sonic\vcpkg"
+$env:PATH = "$env:VCPKG_ROOT;$env:PATH"
+cmake --preset windows-msvc-release -DVCPKG_ROOT="$env:VCPKG_ROOT"
+```
+
+**Prevention**: The project's `init-env.ps1` bootstrap script explicitly sets `VCPKG_ROOT` after Dev Shell activation — see [[architecture/build-and-deps]].
+
+---
+
+### BT-4: PowerShell 5.1 parser — `$LASTEXITCODE:` and inline ternary
+
+**Symptom**: Script fails with `A drive with the name 'LASTEXITCODE' does not exist` or `The term '...' is not recognized` when using `$LASTEXITCODE:` or an inline `(if (...) {...} else {...})` expression.
+
+**Root cause**: PowerShell 5.1 parses `$LASTEXITCODE:` as a PSDrive reference (colon is the drive separator); it also has no ternary operator — `(if ...)` is a statement, not an expression.
+
+**Fix**:
+
+```powershell
+# Brace the variable name to prevent PSDrive mis-parse:
+if (${LASTEXITCODE} -ne 0) { throw "Build failed" }
+
+# Replace inline ternary with explicit if/else + temp variable:
+$msg = if ($ok) { "success" } else { "failure" }   # PS 7+
+# PS 5.1 equivalent:
+$msg = "failure"; if ($ok) { $msg = "success" }
+```
+
+**Prevention**: CI scripts target PS 5.1 explicitly; [[process/coding-standards]] bans ternary syntax and requires `${LASTEXITCODE}` form in all shell snippets.
+
+---
+
+### BT-5: vcpkg manifest `builtin-baseline` set to a date string
+
+**Symptom**: `vcpkg install` refuses with `error: the baseline ... is not a valid commit SHA`.
+
+**Root cause**: `vcpkg.json` contains `"builtin-baseline": "2024.11.16"` (a date, not a hex SHA); vcpkg requires the exact 40-character git commit SHA of the local vcpkg HEAD.
+
+**Fix**:
+
+```powershell
+# Retrieve the correct SHA from your vcpkg clone and patch vcpkg.json:
+$sha = git -C $env:VCPKG_ROOT rev-parse HEAD
+(Get-Content vcpkg.json -Raw) -replace '"builtin-baseline":\s*"[^"]*"',
+    "`"builtin-baseline`": `"$sha`"" | Set-Content vcpkg.json -Encoding utf8
+```
+
+**Prevention**: `scripts/update-vcpkg-baseline.ps1` regenerates this field automatically; it must be run after any `git pull` inside the vcpkg clone — see [[architecture/build-and-deps]].
+
+---
+
+### BT-6: OCCT Windows install layout — `OpenCASCADE_DIR` must point at `cmake/`
+
+**Symptom**: `find_package(OpenCASCADE)` fails with "could not find a package configuration file" even though OCCT is installed, because `OpenCASCADE_DIR` is set to `<install>/lib/cmake/opencascade` (Generic layout) which does not exist.
+
+**Root cause**: The OCCT Windows install does NOT use the standard `bin/lib/include/share` Generic layout; it uses `cmake/` + `inc/` + `win64/vc14/{bin,lib}` + `src/`. The CMake config lives at `<install>/cmake/`, not `<install>/lib/cmake/opencascade/`.
+
+**Fix**:
+
+```powershell
+# Correct:
+$env:OpenCASCADE_DIR = "C:\Users\Sonic\occt-8.0.0\cmake"
+# Wrong (Generic layout assumption — does not exist on Windows):
+# $env:OpenCASCADE_DIR = "C:\Users\Sonic\occt-8.0.0\lib\cmake\opencascade"
+```
+
+In `CMakePresets.json`:
+
+```json
+"OpenCASCADE_DIR": "$env{OCCT_INSTALL_DIR}/cmake"
+```
+
+**Prevention**: `CMakePresets.json` and `init-env.ps1` both use the `cmake/` suffix; the M7 section above documents this layout — see [[architecture/build-and-deps]].
+
+---
+
+### BT-7: `CreateProcess: Access is denied` during parallel ninja build
+
+**Symptom**: Ninja aborts mid-build (~2107/5646 or similar) with `CreateProcess: Access is denied`; restarting the build resumes cleanly from the same point.
+
+**Root cause**: Windows Defender (or another AV process) locks a freshly-compiled `.obj` or `.dll` file at the moment ninja tries to spawn the next process against it; this is a known Windows AV interference pattern documented by the OpenCASCADE community.
+
+**Fix**:
+
+```powershell
+# Simply re-run; ninja resumes from the failure point:
+cmake --build build --preset windows-msvc-release
+
+# Reduce hit rate by limiting parallelism:
+cmake --build build --parallel 8   # instead of --parallel 12 or CPU count
+```
+
+For a permanent fix: add `C:\Users\Sonic\occt-8.0.0` and the KooCADCAM `build/` directory to Windows Defender exclusions.
+
+**Prevention**: `CMakePresets.json` caps `CMAKE_BUILD_PARALLEL_LEVEL` at `8` on Windows to reduce collision rate — see [[architecture/build-and-deps]].
+
+---
+
 ## 크로스-링크 요약
 
 - [[process/coding-standards]] — throw 정책, std::* 수학 함수, [[maybe_unused]] 규약

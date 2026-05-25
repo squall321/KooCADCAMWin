@@ -25,19 +25,48 @@ include(CheckOcctDynamic)
 # OCCT 8.0.0 — 소스에서 직접 빌드한 install 트리를 OpenCASCADE_DIR 또는
 # CMAKE_PREFIX_PATH 로 지정한다. vcpkg 포트는 사용하지 않는다.
 
-# find_package(OpenCASCADE) — 버전 제약 포함 시도, 실패하면 재시도
-find_package(OpenCASCADE 8.0 QUIET)
-if (NOT OpenCASCADE_FOUND)
-    find_package(OpenCASCADE REQUIRED)
-    if (OpenCASCADE_VERSION VERSION_LESS "8.0.0")
-        message(FATAL_ERROR
-            "OpenCASCADE 8.0.0 or newer is required "
-            "(found ${OpenCASCADE_VERSION}). "
-            "Set OpenCASCADE_DIR to the OCCT 8.0+ install tree.")
-    endif()
+# find_package(OpenCASCADE) — robust against multi-OCCT systems.
+# Force search to OCCT_INSTALL_DIR/cmake only; ignore any OCCT 7.x install
+# the user may have on PATH or in CMake registry.
+if (NOT DEFINED OpenCASCADE_DIR AND DEFINED ENV{OCCT_INSTALL_DIR})
+    set(OpenCASCADE_DIR "$ENV{OCCT_INSTALL_DIR}/cmake" CACHE PATH
+        "Path to OpenCASCADEConfig.cmake (from OCCT_INSTALL_DIR/cmake)")
 endif()
+# Normalize Windows backslashes to forward slashes — vcpkg's toolchain wraps
+# find_package args in a string parser that rejects backslash escapes such as
+# \U (\Users\...), \P (\Program Files\...).  file(TO_CMAKE_PATH) is idempotent
+# on Unix-style paths.
+if (OpenCASCADE_DIR)
+    file(TO_CMAKE_PATH "${OpenCASCADE_DIR}" OpenCASCADE_DIR)
+endif()
+if (NOT OpenCASCADE_DIR OR NOT EXISTS "${OpenCASCADE_DIR}/OpenCASCADEConfig.cmake")
+    message(FATAL_ERROR
+        "OpenCASCADE_DIR must point at an OCCT 8.0+ install tree's cmake/ subdir "
+        "containing OpenCASCADEConfig.cmake. "
+        "Current value: '${OpenCASCADE_DIR}'. "
+        "Fix: run scripts/setup-env.ps1 -OcctInstallDir <path-to-occt-8.0-install>, "
+        "then open a new shell and rerun the cmake --preset.")
+endif()
+find_package(OpenCASCADE 8.0 REQUIRED CONFIG
+    PATHS "${OpenCASCADE_DIR}"
+    NO_DEFAULT_PATH
+)
+if (OpenCASCADE_VERSION VERSION_LESS "8.0.0")
+    message(FATAL_ERROR
+        "OpenCASCADE 8.0.0 or newer is required (found ${OpenCASCADE_VERSION} at ${OpenCASCADE_DIR}).")
+endif()
+message(STATUS "KooCADCAM: OpenCASCADE ${OpenCASCADE_VERSION} pinned to ${OpenCASCADE_DIR}")
 
+# Qt6 — pin to Qt6_DIR if provided (avoids picking a stray system install).
+if (NOT DEFINED Qt6_DIR AND DEFINED ENV{Qt6_DIR})
+    set(Qt6_DIR "$ENV{Qt6_DIR}/lib/cmake/Qt6" CACHE PATH
+        "Path to Qt6Config.cmake (from Qt6_DIR/lib/cmake/Qt6)")
+endif()
+if (Qt6_DIR)
+    file(TO_CMAKE_PATH "${Qt6_DIR}" Qt6_DIR)
+endif()
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets OpenGLWidgets)
+message(STATUS "KooCADCAM: Qt ${Qt6_VERSION} via ${Qt6_DIR}")
 find_package(nlohmann_json REQUIRED)
 find_package(spdlog REQUIRED)
 
