@@ -35,4 +35,14 @@ function(koo_apply_compiler_flags target)
     endif()
 
     target_compile_features(${target} PRIVATE cxx_std_17)
+
+    # Some OCCT 8.0 imported targets (e.g. TKStep) ship without
+    # IMPORTED_LOCATION in their config files, so link.exe sees bare
+    # "TKStep.lib" with no search path. Inject the Windows-native OCCT
+    # lib dir as a PRIVATE link path so bare names resolve.
+    # KOO_OCCT_LIB_DIR is set by the top-level CMakeLists.txt after
+    # find_package(OpenCASCADE).
+    if (WIN32 AND DEFINED KOO_OCCT_LIB_DIR AND EXISTS "${KOO_OCCT_LIB_DIR}")
+        target_link_directories(${target} PRIVATE "${KOO_OCCT_LIB_DIR}")
+    endif()
 endfunction()

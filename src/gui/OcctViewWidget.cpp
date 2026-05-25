@@ -26,8 +26,8 @@ OcctViewWidget::~OcctViewWidget() = default;
 void OcctViewWidget::initializeGL()
 {
     // Stage 1: Create OpenGl_GraphicDriver with external (Qt-owned) GL context.
-    // Standard_False = do NOT create its own GL context; Qt's QOpenGLWidget owns it.
-    m_driver = new OpenGl_GraphicDriver(Handle(Aspect_DisplayConnection)(), Standard_False);
+    // false = do NOT create its own GL context; Qt's QOpenGLWidget owns it.
+    m_driver = new OpenGl_GraphicDriver(Handle(Aspect_DisplayConnection)(), false);
 
     // Stage 2: Tune caps — disable driver-side buffer swap (Qt handles it) and
     // suppress debug output for release builds.
@@ -59,7 +59,7 @@ void OcctViewWidget::initializeGL()
 
     // Create AIS interactive context attached to this viewer.
     m_aisContext = new AIS_InteractiveContext(m_viewer);
-    m_aisContext->SetDisplayMode(AIS_Shaded, Standard_False);
+    m_aisContext->SetDisplayMode(AIS_Shaded, false);
 }
 
 void OcctViewWidget::paintGL()
@@ -86,11 +86,11 @@ void OcctViewWidget::setShape(const TopoDS_Shape& shape)
         return;
     try
     {
-        m_aisContext->RemoveAll(Standard_False);
+        m_aisContext->RemoveAll(false);
         Handle(AIS_Shape) ais = new AIS_Shape(shape);
-        m_aisContext->Display(ais, Standard_False);
+        m_aisContext->Display(ais, false);
         m_currentShape = shape;
-        m_view->FitAll(0.05, Standard_False);
+        m_view->FitAll(0.05, false);
         update();
     }
     catch (const std::exception& e)
@@ -103,7 +103,7 @@ void OcctViewWidget::clearShape()
 {
     if (m_aisContext.IsNull())
         return;
-    m_aisContext->RemoveAll(Standard_False);
+    m_aisContext->RemoveAll(false);
     m_currentShape = TopoDS_Shape();
     update();
 }
@@ -170,7 +170,7 @@ void OcctViewWidget::wheelEvent(QWheelEvent* e)
     if (m_view.IsNull())
         return;
     const int delta = e->angleDelta().y();
-    m_view->SetZoom(static_cast<Standard_Real>(delta > 0 ? 1.1 : 0.9));
+    m_view->SetZoom(delta > 0 ? 1.1 : 0.9);
     update();
 }
 

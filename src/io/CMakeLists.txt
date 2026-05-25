@@ -9,7 +9,7 @@ target_include_directories(koo_io SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 target_link_libraries(koo_io
     PUBLIC
         TKernel TKBRep TKTopAlgo
-        TKStep TKXSBase TKXCAF
+        TKDESTEP TKXSBase TKXCAF
         nlohmann_json::nlohmann_json
     PRIVATE
         spdlog::spdlog

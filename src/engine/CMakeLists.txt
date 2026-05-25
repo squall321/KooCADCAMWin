@@ -9,6 +9,10 @@ target_include_directories(koo_engine SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 target_link_libraries(koo_engine
     PUBLIC
         TKernel TKMath TKBRep TKTopAlgo TKGeomAlgo
+        TKPrim       # BRepPrimAPI_MakeCylinder/MakeBox
+        TKFillet     # BRepFilletAPI_MakeFillet (+ ChFi3d_*)
+        TKBO         # BRepAlgoAPI_Cut/Fuse (Boolean ops)
+        TKShHealing  # ShapeFix; BRepCheck_Analyzer ties pull these in
         nlohmann_json::nlohmann_json
     PRIVATE
         spdlog::spdlog

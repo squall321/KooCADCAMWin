@@ -118,15 +118,15 @@ void AppMenus::onOpenStep()
         return;
 
     std::string err;
-    TopoDS_Shape shape = koocadcam::io::StepIO::read(path.toStdString(), err);
-    if (shape.IsNull())
+    auto shapeOpt = koocadcam::io::StepIO::read(path.toStdString(), err);
+    if (!shapeOpt || shapeOpt->IsNull())
     {
         QMessageBox::critical(m_window, tr("Open STEP"),
                               tr("Failed to read STEP file:\n%1").arg(QString::fromStdString(err)));
         return;
     }
 
-    m_window->viewWidget()->setShape(shape);
+    m_window->viewWidget()->setShape(*shapeOpt);
 }
 
 void AppMenus::onFitAll()

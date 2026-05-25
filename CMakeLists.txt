@@ -57,6 +57,20 @@ if (OpenCASCADE_VERSION VERSION_LESS "8.0.0")
 endif()
 message(STATUS "KooCADCAM: OpenCASCADE ${OpenCASCADE_VERSION} pinned to ${OpenCASCADE_DIR}")
 
+# Expose OCCT lib dir as a global so cmake/KooCompilerFlags.cmake can inject
+# it into every target's link search via target_link_directories.
+# (link_directories() at directory scope did not propagate reliably into
+# the tests subdir under the vcpkg + Ninja toolchain combo.)
+if (WIN32)
+    set(_occt_lib_dir "${OpenCASCADE_DIR}/../win64/vc14/lib")
+    get_filename_component(_occt_lib_dir "${_occt_lib_dir}" ABSOLUTE)
+    if (EXISTS "${_occt_lib_dir}")
+        set(KOO_OCCT_LIB_DIR "${_occt_lib_dir}" CACHE INTERNAL
+            "OCCT Windows-native lib dir, injected per-target by koo_apply_compiler_flags")
+        message(STATUS "KooCADCAM: OCCT lib dir exposed as KOO_OCCT_LIB_DIR: ${_occt_lib_dir}")
+    endif()
+endif()
+
 # Qt6 — pin to Qt6_DIR if provided (avoids picking a stray system install).
 if (NOT DEFINED Qt6_DIR AND DEFINED ENV{Qt6_DIR})
     set(Qt6_DIR "$ENV{Qt6_DIR}/lib/cmake/Qt6" CACHE PATH
@@ -102,9 +116,8 @@ target_link_libraries(KooCADCAM PRIVATE
     TKGeomAlgo
     TKTopAlgo
     TKV3d
-    TKAIS
     TKOpenGl
-    TKStep
+    TKDESTEP
     TKXCAF
     TKXSBase
     nlohmann_json::nlohmann_json

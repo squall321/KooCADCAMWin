@@ -60,7 +60,7 @@ TEST(WatchFrontModel, BuildAllSampleRoundWatchValidShape)
 
     Bnd_Box box;
     BRepBndLib::Add(shape, box);
-    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    double xmin, ymin, zmin, xmax, ymax, zmax;
     box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
     const double dx = xmax - xmin;
     const double dy = ymax - ymin;
