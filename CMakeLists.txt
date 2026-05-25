@@ -47,7 +47,7 @@ if (NOT OpenCASCADE_DIR OR NOT EXISTS "${OpenCASCADE_DIR}/OpenCASCADEConfig.cmak
         "Fix: run scripts/setup-env.ps1 -OcctInstallDir <path-to-occt-8.0-install>, "
         "then open a new shell and rerun the cmake --preset.")
 endif()
-find_package(OpenCASCADE 8.0 REQUIRED CONFIG
+find_package(OpenCASCADE 8.0.0 REQUIRED CONFIG
     PATHS "${OpenCASCADE_DIR}"
     NO_DEFAULT_PATH
 )
