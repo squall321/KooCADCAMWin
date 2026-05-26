@@ -92,6 +92,7 @@ find_package(spdlog REQUIRED)
 # ── 서브디렉토리 ───────────────────────────────────────────────────────────
 add_subdirectory(src/gui)
 add_subdirectory(src/engine)
+add_subdirectory(src/skills)
 add_subdirectory(src/io)
 add_subdirectory(src/dfm)
 add_subdirectory(src/re)

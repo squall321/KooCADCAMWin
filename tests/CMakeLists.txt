@@ -73,6 +73,19 @@ set_tests_properties(watch_features PROPERTIES
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
 
+# ── Skill drill_hole round-trip test (slice 1) ────────────────
+add_executable(skill_drill_hole_test skills/drill_hole_test.cpp)
+target_link_libraries(skill_drill_hole_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills
+    koo_engine
+    koo_io
+)
+target_include_directories(skill_drill_hole_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(skill_drill_hole_test)
+add_test(NAME skill_drill_hole COMMAND skill_drill_hole_test)
+set_tests_properties(skill_drill_hole PROPERTIES TIMEOUT 60)
+
 # ── Phone parametric build test (M2-phase-1) ──────────────────
 add_executable(phone_test phone/phone_test.cpp)
 target_link_libraries(phone_test PRIVATE
