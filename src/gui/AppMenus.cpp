@@ -18,6 +18,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QStatusBar>
 
 #include <nlohmann/json.hpp>
 
@@ -69,6 +70,11 @@ void AppMenus::install(QMenuBar* menuBar)
     aNewPhoneRect->setShortcut(QKeySequence("Ctrl+Shift+P"));
     connect(aNewPhoneRect, &QAction::triggered, this, &AppMenus::onNewPhoneRect);
     fileMenu->addAction(aNewPhoneRect);
+
+    QAction* aRenderFullWatch = new QAction(tr("Render Full Demo Watch (all 10 steps)"), this);
+    aRenderFullWatch->setShortcut(QKeySequence("Ctrl+Shift+D"));
+    connect(aRenderFullWatch, &QAction::triggered, this, &AppMenus::onRenderFullDemoWatch);
+    fileMenu->addAction(aRenderFullWatch);
 
     fileMenu->addSeparator();
 
@@ -194,6 +200,30 @@ void AppMenus::onOpenWatchSpec()
 
     m_window->parameterPanel()->setSpec(*specOpt);
     m_window->parameterPanel()->triggerRebuild();
+}
+
+void AppMenus::onRenderFullDemoWatch()
+{
+    // Bypasses ParameterPanel — that widget set only covers M1.2 fields, so
+    // it would silently strip speaker_grille / rear_sensors / lugs /
+    // secondary_fillets keys on a rebuild.  Render directly via buildAll
+    // against the canonical 10-step defaultSpec.  Phone widget set + watch
+    // M1.5 widget expansion are M2-phase-2 work.
+    nlohmann::json spec = koocadcam::engine::WatchFrontModel::defaultSpec();
+    std::vector<koocadcam::engine::BuildWarning> warnings;
+    TopoDS_Shape shape = koocadcam::engine::WatchFrontModel::buildAll(spec, warnings);
+    if (shape.IsNull()) {
+        QMessageBox::critical(
+            m_window, tr("Render Full Demo Watch"),
+            tr("buildAll failed (%1 warning(s)).").arg(warnings.size()));
+        return;
+    }
+    auto report = koocadcam::engine::WatchFrontModel::runDFM(shape, spec);
+    QString msg = tr("Rendered full watch.  DFM: %1, %2 finding(s).")
+        .arg(report.passed ? tr("PASS") : tr("FAIL"))
+        .arg(report.findings.size());
+    m_window->statusBar()->showMessage(msg, 5000);
+    m_window->viewWidget()->setShape(shape);
 }
 
 void AppMenus::onNewPhoneRect()

@@ -25,6 +25,7 @@ private slots:
     void onOpenWatchSpec();
     void onSaveWatchSpec();
     void onNewPhoneRect();
+    void onRenderFullDemoWatch();
 
 private:
     MainWindow* m_window;

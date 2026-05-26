@@ -24,12 +24,13 @@
 - [[architecture/build-and-deps]] — CMake/vcpkg/MSVC2022/Qt6/OCCT8
 
 ### Engine (실제로 만드는 형상과 로직)
-- [[engine/parametric-templates]] — Watch/Phone 공통 Feature 베이스
-- [[engine/feature-watch]] — `WatchFrontModel` API + JSON Schema (1차 타겟)
-- [[engine/feature-phone]] — `PhoneFrontModel` (Master Spec §6.3 이식)
+- [[engine/skills]] — ★ **머시닝 스킬 라이브러리** (post-v0.1 아키텍처 중심)
+- [[engine/parametric-templates]] — v0.1 primitives 레이어 (Layer 1)
+- [[engine/feature-watch]] — v0.1 `WatchFrontModel` (Layer 3 데모로 재분류)
+- [[engine/feature-phone]] — v0.1 `PhoneFrontModel` (Layer 3 데모로 재분류)
 - [[engine/morphing-route]] — 외곽면 모핑 (한계 + 데모로 강등)
-- [[engine/reverse-route]] — STL → STEP 복원 (CGAL Shape Detection + OCCT)
-- [[engine/dfm-rules]] — DFM 룰 카탈로그 (22+ 항목)
+- [[engine/reverse-route]] — STL → skill seq 복원 (M3+ 구현)
+- [[engine/dfm-rules]] — DFM 룰 카탈로그 (25 항목, skill 마다 호출)
 - [[engine/cam-3axis-verify]] — OCL toolpath + OCCT `BRepExtrema` 간섭검사
 
 ### Process (어떻게 일하나)
