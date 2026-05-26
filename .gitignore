@@ -37,5 +37,8 @@ tests/data/*.stp
 # Windows thumbnail cache
 Thumbs.db
 
+# Temporary clones used while researching upstream samples
+_*/
+
 # Allow .gitkeep sentinels
 !.gitkeep

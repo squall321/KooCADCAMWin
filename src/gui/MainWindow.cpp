@@ -10,6 +10,7 @@
 #include <QDockWidget>
 #include <QMenuBar>
 #include <QStatusBar>
+#include <QTimer>
 
 #include <nlohmann/json.hpp>
 
@@ -39,8 +40,12 @@ MainWindow::MainWindow(QWidget* parent)
 
     statusBar()->showMessage("Ready", 0);
 
-    // Trigger initial build with default spec.
-    onSpecChanged();
+    // Defer initial build until after the OcctViewWidget's initializeGL has
+    // run (QOpenGLWidget creates its GL context lazily on first show + paint).
+    // QTimer 0 fires from the event loop after Qt has had a chance to paint.
+    QTimer::singleShot(0, this, [this]() {
+        QTimer::singleShot(50, this, &MainWindow::onSpecChanged);
+    });
 }
 
 MainWindow::~MainWindow() = default;

@@ -98,7 +98,7 @@ add_subdirectory(src/re)
 add_subdirectory(src/cam)
 
 # ── 메인 실행 파일 ────────────────────────────────────────────────────────
-add_executable(KooCADCAM WIN32 src/main.cpp)
+add_executable(KooCADCAM src/main.cpp)  # WIN32 removed: keep console for log output
 
 target_link_libraries(KooCADCAM PRIVATE
     koo_gui
@@ -131,6 +131,33 @@ koo_check_occt_dynamic(KooCADCAM)
 # ── Qt6 전용 마무리 ────────────────────────────────────────────────────────
 if (Qt6_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(KooCADCAM)
+endif()
+
+# ── Post-build: deploy Qt + OCCT DLLs next to KooCADCAM.exe ───────────────
+# Without this the .exe silently exits on launch when run directly from the
+# build dir (missing Qt6Cored.dll, TKernel.dll, etc.).
+if (WIN32)
+    # 1) Qt: run windeployqt6 to bring in Qt6*d.dll + platforms/iconengines/...
+    get_target_property(_qt6_qmake Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_qt6_bin "${_qt6_qmake}" DIRECTORY)
+    find_program(WINDEPLOYQT_EXE NAMES windeployqt6.exe windeployqt.exe
+                 HINTS "${_qt6_bin}" NO_DEFAULT_PATH)
+    if (WINDEPLOYQT_EXE)
+        add_custom_command(TARGET KooCADCAM POST_BUILD
+            COMMAND "${WINDEPLOYQT_EXE}" --debug --no-translations
+                    --no-system-d3d-compiler --no-opengl-sw
+                    "$<TARGET_FILE:KooCADCAM>"
+            COMMENT "windeployqt: copying Qt6 DLLs + plugins to $<TARGET_FILE_DIR:KooCADCAM>"
+            VERBATIM)
+    endif()
+    # 2) OCCT: copy TK*.dll next to the exe (OCCT install is in a non-standard
+    #    win64/vc14/bin path that doesn't get auto-resolved at runtime).
+    add_custom_command(TARGET KooCADCAM POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                "${KOO_OCCT_LIB_DIR}/../bin"
+                "$<TARGET_FILE_DIR:KooCADCAM>"
+        COMMENT "copying OCCT TK*.dll to $<TARGET_FILE_DIR:KooCADCAM>"
+        VERBATIM)
 endif()
 
 # ── 테스트 ────────────────────────────────────────────────────────────────

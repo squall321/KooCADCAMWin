@@ -1,10 +1,22 @@
 // @lat: [[architecture/multi-view#3단계 — QOpenGLWidget 당 V3d_View 생성 및 바인딩]]
+//
+// OCCT 8.0 + QOpenGLWidget integration uses the gkv311 OcctGlTools pattern
+// (MIT licensed, see licenses/OcctGlTools_MIT.txt). Core idea: per-paintGL
+// FBO wrapping so OCCT renders into Qt's QOpenGLFramebufferObject instead of
+// the default (0) framebuffer (which Qt does not display).
+
+#ifdef _WIN32
+  #include <windows.h>
+#endif
+#include <OpenGl_Context.hxx>
 
 #include "OcctViewWidget.hpp"
 
+#include "occt/OcctGlTools.h"
+
 #include <AIS_Shape.hxx>
 #include <Aspect_DisplayConnection.hxx>
-#include <OpenGl_Caps.hxx>
+#include <OpenGl_GraphicDriver.hxx>
 #include <Quantity_Color.hxx>
 
 #include <QMouseEvent>
@@ -19,78 +31,120 @@ OcctViewWidget::OcctViewWidget(QWidget* parent)
 {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
-}
+    setAttribute(Qt::WA_AcceptTouchEvents);
+    setBackgroundRole(QPalette::NoRole);
+    setUpdatesEnabled(true);
+    setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
 
-OcctViewWidget::~OcctViewWidget() = default;
-
-void OcctViewWidget::initializeGL()
-{
-    // Stage 1: Create OpenGl_GraphicDriver with external (Qt-owned) GL context.
-    // false = do NOT create its own GL context; Qt's QOpenGLWidget owns it.
-    m_driver = new OpenGl_GraphicDriver(Handle(Aspect_DisplayConnection)(), false);
-
-    // Stage 2: Tune caps — disable driver-side buffer swap (Qt handles it) and
-    // suppress debug output for release builds.
+    // ── OpenGl_GraphicDriver — create up front, no native context yet ──────
+    Handle(Aspect_DisplayConnection) aDisp;
+    m_driver = new OpenGl_GraphicDriver(aDisp, false);
     OpenGl_Caps& caps = m_driver->ChangeOptions();
-    caps.buffersNoSwap = true;
-    caps.contextDebug  = false;
+    caps.buffersNoSwap = true;       // Qt swaps buffers, not OCCT
+    caps.buffersOpaqueAlpha = true;  // do not write into alpha channel
+    caps.useSystemBuffer = false;    // force offscreen FBO (key for QOpenGLWidget)
+    caps.contextDebug = false;
 
-    m_driver->InitContext();
-
-    // Stage 2: Create V3d_Viewer and enable default lights.
+    // ── V3d_Viewer ─────────────────────────────────────────────────────────
     m_viewer = new V3d_Viewer(m_driver);
+    m_viewer->SetDefaultBackgroundColor(Quantity_NOC_GRAY30);
     m_viewer->SetDefaultLights();
     m_viewer->SetLightOn();
 
-    // Stage 3: Wrap the native window handle in Aspect_NeutralWindow.
-    m_window = new Aspect_NeutralWindow();
-    m_window->SetSize(width(), height());
-    m_window->SetNativeHandle(
-        reinterpret_cast<Aspect_Drawable>(static_cast<intptr_t>(winId())));
-
-    // Stage 3: Create V3d_View and bind to the neutral window.
+    // ── V3d_View — window/context attached lazily in initializeGL ──────────
     m_view = m_viewer->CreateView();
-    m_view->SetWindow(m_window, nullptr);
-    m_view->MustBeResized();
-    m_view->TriedronDisplay(Aspect_TOTP_LEFT_LOWER, Quantity_NOC_WHITE, 0.08);
+    m_view->SetImmediateUpdate(false);
+    m_view->ChangeRenderingParams().NbMsaaSamples = 4;
 
-    // Set a neutral dark-grey background.
-    m_view->SetBackgroundColor(Quantity_NOC_GRAY30);
-
-    // Create AIS interactive context attached to this viewer.
+    // ── AIS context ────────────────────────────────────────────────────────
     m_aisContext = new AIS_InteractiveContext(m_viewer);
     m_aisContext->SetDisplayMode(AIS_Shaded, false);
 }
 
+OcctViewWidget::~OcctViewWidget()
+{
+    // Hold display connection until another GL context is made current to
+    // avoid sudden crash in QOpenGLWidget destructor on X11.
+    Handle(Aspect_DisplayConnection) aDisp = m_viewer->Driver()->GetDisplayConnection();
+    if (!m_aisContext.IsNull())
+        m_aisContext->RemoveAll(false);
+    m_aisContext.Nullify();
+    if (!m_view.IsNull())
+        m_view->Remove();
+    m_view.Nullify();
+    m_viewer.Nullify();
+    makeCurrent();
+    aDisp.Nullify();
+}
+
+void OcctViewWidget::initializeGL()
+{
+    const Aspect_Drawable nativeWin = (Aspect_Drawable)effectiveWinId();
+    const NCollection_Vec2<int> viewSize(rect().right() - rect().left(),
+                                         rect().bottom() - rect().top());
+
+    if (!OcctGlTools::InitializeGlWindow(m_view, nativeWin, viewSize, devicePixelRatioF()))
+    {
+        spdlog::error("[OcctView] OcctGlTools::InitializeGlWindow FAILED");
+        return;
+    }
+    makeCurrent();
+    m_view->TriedronDisplay(Aspect_TOTP_LEFT_LOWER, Quantity_NOC_WHITE, 0.08);
+    spdlog::debug("[OcctView] initializeGL ok ({}x{} @ {})",
+                  width(), height(), devicePixelRatioF());
+}
+
 void OcctViewWidget::paintGL()
 {
-    if (m_view.IsNull())
+    if (m_view.IsNull() || m_view->Window().IsNull())
         return;
+
+    // Re-init GL window if Qt recreated the native handle (DPI / monitor change).
+    if (m_view->Window()->NativeHandle()
+        != OcctGlTools::GetGlNativeWindow((Aspect_Drawable)effectiveWinId()))
+    {
+        spdlog::warn("[OcctView] native window changed, re-initialising GL");
+        initializeGL();
+    }
+
+    // Per-paint: wrap Qt's current QOpenGLFramebufferObject so OCCT renders into it.
+    if (!OcctGlTools::InitializeGlFbo(m_view))
+    {
+        spdlog::error("[OcctView] OcctGlTools::InitializeGlFbo FAILED");
+        return;
+    }
+
+    OcctGlTools::ResetGlStateBeforeOcct(m_view);
+
+    m_view->InvalidateImmediate();
     m_view->Redraw();
+
+    OcctGlTools::ResetGlStateAfterOcct(m_view);
 }
 
 void OcctViewWidget::resizeGL(int w, int h)
 {
-    if (!m_window.IsNull())
-        m_window->SetSize(w, h);
-    if (!m_view.IsNull())
-    {
-        m_view->MustBeResized();
-        m_view->Invalidate();
-    }
+    if (m_view.IsNull() || m_view->Window().IsNull())
+        return;
+    Handle(Aspect_NeutralWindow) win =
+        Handle(Aspect_NeutralWindow)::DownCast(m_view->Window());
+    if (!win.IsNull())
+        win->SetSize(w, h);
+    m_view->MustBeResized();
+    m_view->Invalidate();
 }
 
 void OcctViewWidget::setShape(const TopoDS_Shape& shape)
 {
-    if (m_aisContext.IsNull())
+    if (m_aisContext.IsNull() || shape.IsNull())
         return;
     try
     {
         m_aisContext->RemoveAll(false);
         Handle(AIS_Shape) ais = new AIS_Shape(shape);
-        m_aisContext->Display(ais, false);
+        m_aisContext->Display(ais, AIS_Shaded, 0, false);
         m_currentShape = shape;
-        m_view->FitAll(0.05, false);
+        m_view->FitAll(0.05, true);
         update();
     }
     catch (const std::exception& e)
@@ -117,15 +171,10 @@ void OcctViewWidget::fitAll()
     }
 }
 
-// @lat: [[architecture/multi-view#피킹(Picking) 흐름]]
-// Picking implementation is reserved for a later milestone.
-// The mouse handlers below cover rotate / pan / zoom navigation only.
-
 void OcctViewWidget::mousePressEvent(QMouseEvent* e)
 {
     m_lastX = e->pos().x();
     m_lastY = e->pos().y();
-
     if (e->button() == Qt::LeftButton)
     {
         m_drag = DragMode::Rotate;
@@ -142,10 +191,8 @@ void OcctViewWidget::mouseMoveEvent(QMouseEvent* e)
 {
     if (m_view.IsNull())
         return;
-
     const int x = e->pos().x();
     const int y = e->pos().y();
-
     if (m_drag == DragMode::Rotate)
     {
         m_view->Rotation(x, y);
