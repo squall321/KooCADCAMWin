@@ -1,0 +1,28 @@
+{
+  "schema_version": "0.1.0",
+  "product_name": "Sample Phone 76x160",
+  "noise_seed": 0,
+  "base": {
+    "width_mm": 76.0,
+    "height_mm": 160.0,
+    "thickness_mm": 8.0,
+    "initial_corner_r_mm": 8.0
+  },
+  "corner_radius": {
+    "r_top_mm":  1.0,
+    "r_side_mm": 0.6
+  },
+  "display_pocket": {
+    "width_mm":    70.0,
+    "height_mm":  152.0,
+    "depth_mm":     0.6,
+    "corner_r_mm":  6.0,
+    "offset_x_mm":  0.0,
+    "offset_y_mm":  0.0
+  },
+  "cameras": [
+    {"offset_x_mm": -22.0, "offset_y_mm": -55.0, "hole_dia_mm": 8.0, "depth_mm": 2.0},
+    {"offset_x_mm": -22.0, "offset_y_mm": -67.0, "hole_dia_mm": 8.0, "depth_mm": 2.0},
+    {"offset_x_mm": -10.0, "offset_y_mm": -61.0, "hole_dia_mm": 6.0, "depth_mm": 1.5}
+  ]
+}

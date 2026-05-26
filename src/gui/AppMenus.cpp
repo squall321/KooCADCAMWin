@@ -5,10 +5,13 @@
 #include "OcctViewWidget.hpp"
 #include "ParameterPanel.hpp"
 
+#include <engine/PhoneFrontModel.hpp>
 #include <engine/PlaceholderCylinder.hpp>
 #include <engine/WatchFrontModel.hpp>
 #include <io/StepIO.hpp>
 #include <io/JsonSpec.hpp>
+
+#include <TopoDS_Shape.hxx>
 
 #include <QApplication>
 #include <QFileDialog>
@@ -59,6 +62,13 @@ void AppMenus::install(QMenuBar* menuBar)
     aSaveWatchSpec->setShortcut(QKeySequence("Ctrl+Shift+S"));
     connect(aSaveWatchSpec, &QAction::triggered, this, &AppMenus::onSaveWatchSpec);
     fileMenu->addAction(aSaveWatchSpec);
+
+    fileMenu->addSeparator();
+
+    QAction* aNewPhoneRect = new QAction(tr("New Phone (Rectangular)"), this);
+    aNewPhoneRect->setShortcut(QKeySequence("Ctrl+Shift+P"));
+    connect(aNewPhoneRect, &QAction::triggered, this, &AppMenus::onNewPhoneRect);
+    fileMenu->addAction(aNewPhoneRect);
 
     fileMenu->addSeparator();
 
@@ -184,6 +194,24 @@ void AppMenus::onOpenWatchSpec()
 
     m_window->parameterPanel()->setSpec(*specOpt);
     m_window->parameterPanel()->triggerRebuild();
+}
+
+void AppMenus::onNewPhoneRect()
+{
+    // M2-phase-1 visual smoke: build the default phone via PhoneFrontModel and
+    // push the shape directly to the viewer.  ParameterPanel still drives the
+    // watch spec (phone widget set lands in M2-phase-2), so this menu is a
+    // one-shot view-only render.
+    nlohmann::json spec = koocadcam::engine::PhoneFrontModel::defaultSpec();
+    std::vector<koocadcam::engine::BuildWarning> warnings;
+    TopoDS_Shape shape = koocadcam::engine::PhoneFrontModel::buildAll(spec, warnings);
+    if (shape.IsNull()) {
+        QMessageBox::critical(
+            m_window, tr("New Phone"),
+            tr("Failed to build phone shape (%1 warning(s)).").arg(warnings.size()));
+        return;
+    }
+    m_window->viewWidget()->setShape(shape);
 }
 
 void AppMenus::onSaveWatchSpec()

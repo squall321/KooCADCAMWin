@@ -3,9 +3,55 @@
 스마트폰 전면 메탈 케이스의 파라메트릭 모델. Master Spec §6.3 구조를 보존하되
 `ProductFrontModel` CRTP 기반([[engine/parametric-templates]])으로 재구성한다.
 
-> **계획 등급 스펙** — 이 문서는 M2/M7+ 착수 전 설계 의도 보존을 목적으로 한다.
-> 빌드-나우 수준의 구현 세부는 시계 구현([[engine/feature-watch]])이 안정화된 후 확정한다.
-> 1차 납품 대상은 시계([[scope/milestones-and-krs#M1]]). 스마트폰은 M2 이후다.
+> **M2-phase-1 (SHIPPED, 2026-05-26)** — 4-step rectangular slab builder
+> (buildBase / applyCornerRadius / buildDisplayPocket / addCameraHoles).
+> Composes only `koocadcam::engine::prim` 헬퍼 — OCCT 직접 호출 0회. 캡슐화
+> 가설 검증의 첫 실증.  나머지 스텝(side buttons, port, deco rings, DFM)은
+> M2-phase-2/M7+에서 점진 추가.
+
+---
+
+## Build Sequence (M2-phase-1, shipped)
+
+| # | 메서드 | 도메인 책임 | 사용 프리미티브 |
+|---|---|---|---|
+| 1 | `buildBase` | 직사각형 슬랩 + 4개 수직 코너 필렛 | `prim::box`, `prim::filletEdges` + `verticalCornerEdges` |
+| 2 | `applyCornerRadius` | 상면(rTop) + 저면(rSide) 리브 필렛 단일 패스 | `prim::optimalBbox`, `prim::filletEdgesMulti` + `edgesAtZ` |
+| 3 | `buildDisplayPocket` | 상면 대형 라운드 직사각 포켓 컷 | `prim::roundedRectPocketTool`, `prim::cut` |
+| 4 | `addCameraHoles` | 하면 카메라 렌즈 원홀 배열 (compound + 1-pass Boolean) | `prim::cylinder`, `prim::cutMany` |
+
+각 스텝은 `prim::runStep` 으로 래핑되어 try/catch → `E_OCCT`, BRepCheck →
+`W_BREPCHECK` 일관 처리.  본체는 5–15 줄로 도메인 어휘만 남는다.
+
+소스: [[src/engine/PhoneFrontModel.hpp]] · [[src/engine/PhoneFrontModel.cpp]]
+회귀 테스트: `tests/phone/phone_test.cpp` — 5 케이스 (BRepCheck valid, 결정론,
+포켓 볼륨 감소, 카메라 개수 단조성, optional 섹션 pass-through).
+
+### 캡슐화 검증
+
+워치(`WatchFrontModel.cpp` 263 LOC) 와 폰(`PhoneFrontModel.cpp` ~160 LOC) 모두
+OCCT 헤더 직접 `#include` 는 단 4개 (`gp.hxx`, `gp_Ax2.hxx`, `gp_Pnt.hxx`,
+`Standard_Failure.hxx`).  나머지 OCCT 호출은 전부 `prim::` 를 경유한다.
+PhoneFrontModel.cpp의 추가 OCCT 호출 0건, primitives 확장 단 2건
+(`Fillets.hpp::verticalCornerEdges` 6-arg 오버로드, `Tools.hpp::roundedRectPocketTool`)
+이 두 추가는 폰뿐 아니라 향후 태블릿/컨트롤러의 사각 포켓 패턴에도 재사용됨.
+
+---
+
+## 향후 단계 (M2-phase-2 ~)
+
+| 단계 | 추가 스텝 | 필요 프리미티브 확장 |
+|---|---|---|
+| M2-phase-2 | side buttons (전원·볼륨) + port (USB-C) | `Frames.hpp::rectSideFrameAt(bbox, RectSide, offset, z)`, `Tools.hpp::roundedRectPortTool` |
+| M2-phase-3 | 카메라 deco ring (DFM-007 비율) | `Tools.hpp::ringTorus` 또는 `annularPlateOnFace` |
+| M3 | runDFM — DFM-007/009/013/018 게이트 | `prim::stepHook<BeforeAfter>` |
+
+기존 계획 등급 API 블록(아래)은 M2-phase-2 착수 시 위 표 기준으로 재구성한다.
+
+---
+
+> **계획 등급 스펙 (아래)** — M2-phase-1 에서 미실장. M2-phase-2/M7+ 작업 시 위 표
+> 기준으로 재구성한다.  Master Spec §6.3 의 메서드 명칭은 보존된다.
 
 ---
 

@@ -73,6 +73,21 @@ set_tests_properties(watch_features PROPERTIES
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
 
+# ── Phone parametric build test (M2-phase-1) ──────────────────
+add_executable(phone_test phone/phone_test.cpp)
+target_link_libraries(phone_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_engine
+    koo_io
+)
+target_include_directories(phone_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(phone_test)
+add_test(NAME phone COMMAND phone_test)
+set_tests_properties(phone PROPERTIES
+    TIMEOUT 60
+    ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
+
 # ── JsonSpec validate/roundtrip test (M1.1) ───────────────────
 add_executable(json_spec_test json_spec/json_spec_test.cpp)
 target_link_libraries(json_spec_test PRIVATE

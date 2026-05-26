@@ -24,6 +24,7 @@ private slots:
     void onNewWatchRound();
     void onOpenWatchSpec();
     void onSaveWatchSpec();
+    void onNewPhoneRect();
 
 private:
     MainWindow* m_window;

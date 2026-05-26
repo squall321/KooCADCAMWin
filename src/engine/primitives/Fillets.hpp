@@ -91,17 +91,31 @@ inline EdgePredicate edgesAtZ(double z, double tol = 1e-3)
     };
 }
 
-// Vertical edges running along Z at the XY corners of a rectangular box.
-// `hx` / `hy` = half-width / half-height (box is centred on Z axis).
+// Vertical edges running along Z at the XY corners of an axis-aligned box.
+//   (cx, cy)       — XY centre of the box
+//   (hx, hy)       — half-extents (so box spans cx ± hx, cy ± hy)
+//   (zMin, zMax)   — Z extents of the box
+// Used by `buildBase` (case body), screen-pocket cut tools, button arrays.
+inline EdgePredicate verticalCornerEdges(double cx, double cy,
+                                         double hx, double hy,
+                                         double zMin, double zMax,
+                                         double tol = 1e-3)
+{
+    return [cx, cy, hx, hy, zMin, zMax, tol](const TopoDS_Edge&, const gp_Pnt& mp) {
+        const bool nearMidZ  = (mp.Z() > zMin + tol) && (mp.Z() < zMax - tol);
+        const bool atCornerX = (std::abs(mp.X() - cx) > hx - tol);
+        const bool atCornerY = (std::abs(mp.Y() - cy) > hy - tol);
+        return nearMidZ && atCornerX && atCornerY;
+    };
+}
+
+// Convenience overload for the most common case: box centred on the Z axis
+// (cx=cy=0) and rising from z=0 to z=thickness.  Watch square form factor
+// and any axis-centred phone base reuse this.
 inline EdgePredicate verticalCornerEdges(double hx, double hy, double thickness,
                                          double tol = 1e-3)
 {
-    return [hx, hy, thickness, tol](const TopoDS_Edge&, const gp_Pnt& mp) {
-        const bool nearMidZ  = (mp.Z() > tol) && (mp.Z() < thickness - tol);
-        const bool atCornerX = (std::abs(mp.X()) > hx - tol);
-        const bool atCornerY = (std::abs(mp.Y()) > hy - tol);
-        return nearMidZ && atCornerX && atCornerY;
-    };
+    return verticalCornerEdges(0.0, 0.0, hx, hy, 0.0, thickness, tol);
 }
 
 }  // namespace koocadcam::engine::prim

@@ -6,6 +6,7 @@
 // annular rings.  Each function throws `Standard_Failure` on build failure
 // so that `prim::runStep` can convert it to a BuildWarning.
 
+#include "Fillets.hpp"
 #include "Frames.hpp"
 
 #include <BRepAlgoAPI_Cut.hxx>
@@ -14,7 +15,9 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Pnt.hxx>
 
 #include <algorithm>
 
@@ -86,6 +89,31 @@ inline TopoDS_Shape sidePocketBox(const SideFrame& frame,
         -width  / 2.0, frame.axialZ);
     const gp_Ax2 ax(origin, frame.inwardRadial, frame.tangentCCW);
     return box(ax, depth, length, width);
+}
+
+// Rounded-rectangle pocket cut tool, axis-aligned, going UP from `bottomCenter`
+// to `bottomCenter.Z() + depth`.  The 4 vertical corner edges are filleted by
+// `cornerR` (skipped if cornerR <= 0).  Used for phone/tablet screen pockets,
+// large rectangular recesses on any flat top face.
+//
+// `bottomCenter` is the XY centre of the pocket footprint at the cut tool's
+// bottom Z; callers typically pass `(0, 0, topZ - depth)` for a centred pocket
+// on a top face, or non-zero XY for an offset pocket.
+inline TopoDS_Shape roundedRectPocketTool(const gp_Pnt& bottomCenter,
+                                          double sx, double sy, double depth,
+                                          double cornerR)
+{
+    const gp_Pnt origin(bottomCenter.X() - sx / 2.0,
+                        bottomCenter.Y() - sy / 2.0,
+                        bottomCenter.Z());
+    const TopoDS_Shape baseBox = box(gp_Ax2(origin, gp::DZ()), sx, sy, depth);
+    if (cornerR <= 0.0) return baseBox;
+
+    return filletEdges(baseBox, cornerR,
+        verticalCornerEdges(
+            bottomCenter.X(), bottomCenter.Y(),
+            sx / 2.0,         sy / 2.0,
+            bottomCenter.Z(), bottomCenter.Z() + depth));
 }
 
 }  // namespace koocadcam::engine::prim
