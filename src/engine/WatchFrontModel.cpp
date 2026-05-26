@@ -16,6 +16,7 @@
 #include "primitives/StepGuard.hpp"
 #include "primitives/Tools.hpp"
 
+#include <BRepCheck_Analyzer.hxx>
 #include <Standard_Failure.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pnt.hxx>
@@ -23,8 +24,10 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <string>
 
 namespace koocadcam::engine {
 
@@ -198,7 +201,179 @@ StepResult WatchFrontModel::addSideButtons(const TopoDS_Shape& in,
         });
 }
 
-// ── Convenience: chain all M1.2 steps (1–6) ────────────────────────────────
+// @lat: [[engine/feature-watch#스텝 7 — addSpeakerGrille]]
+StepResult WatchFrontModel::addSpeakerGrille(const TopoDS_Shape& in,
+                                              const nlohmann::json& spec)
+{
+    if (!spec.contains("speaker_grille")) return StepResult{ in, {} };
+
+    return pr::runStep("WatchFrontModel::addSpeakerGrille",
+        [&](std::vector<BuildWarning>&) {
+            const auto& sg = spec["speaker_grille"];
+            const double angleDeg = sg["angle_deg"].get<double>();
+            const double heightZ  = sg["height_pos_mm"].get<double>();
+            const int    rows     = sg["rows"].get<int>();
+            const int    cols     = sg["cols"].get<int>();
+            const double rowSp    = sg["row_spacing_mm"].get<double>();
+            const double colSp    = sg["col_spacing_mm"].get<double>();
+            const double dia      = sg["hole_dia_mm"].get<double>();
+            const double depth    = sg["depth_mm"].get<double>();
+
+            const double R     = pr::optimalBbox(in).outerRadiusXY();
+            const auto   frame = pr::sideFrameAt(R, angleDeg, heightZ);
+
+            std::vector<TopoDS_Shape> tools;
+            tools.reserve(static_cast<std::size_t>(rows) * cols);
+            for (int r = 0; r < rows; ++r) {
+                const double dz = (r - (rows - 1) / 2.0) * rowSp;
+                for (int c = 0; c < cols; ++c) {
+                    const double dy = (c - (cols - 1) / 2.0) * colSp;
+                    const gp_Pnt holeCenter = pr::offsetPoint(
+                        frame.center, dy, frame.tangentCCW, dz, frame.axialZ);
+                    const gp_Ax2 ax(holeCenter, frame.inwardRadial);
+                    tools.push_back(pr::cylinder(ax, dia / 2.0, depth));
+                }
+            }
+            return pr::cutMany(in, tools);
+        });
+}
+
+// @lat: [[engine/feature-watch#스텝 8 — addRearSensors]]
+StepResult WatchFrontModel::addRearSensors(const TopoDS_Shape& in,
+                                            const nlohmann::json& spec)
+{
+    if (!spec.contains("rear_sensors") || spec["rear_sensors"].empty())
+        return StepResult{ in, {} };
+
+    return pr::runStep("WatchFrontModel::addRearSensors",
+        [&](std::vector<BuildWarning>&) {
+            const auto bb = pr::optimalBbox(in);
+
+            std::vector<TopoDS_Shape> tools;
+            tools.reserve(spec["rear_sensors"].size());
+            for (const auto& s : spec["rear_sensors"]) {
+                const double x   = s["offset_x_mm"].get<double>();
+                const double y   = s["offset_y_mm"].get<double>();
+                const double dia = s["dia_mm"].get<double>();
+                const double dep = s["depth_mm"].get<double>();
+                // Hole axis +Z, starts 0.05 mm below rear face for clean cut.
+                const double kOverhang = 0.05;
+                const gp_Ax2 ax(gp_Pnt(x, y, bb.zMin - kOverhang), gp::DZ());
+                tools.push_back(pr::cylinder(ax, dia / 2.0, dep + kOverhang));
+            }
+            return pr::cutMany(in, tools);
+        });
+}
+
+// @lat: [[engine/feature-watch#스텝 9 — addLugs]]
+StepResult WatchFrontModel::addLugs(const TopoDS_Shape& in,
+                                     const nlohmann::json& spec)
+{
+    if (!spec.contains("lugs") || spec["lugs"].empty())
+        return StepResult{ in, {} };
+
+    return pr::runStep("WatchFrontModel::addLugs",
+        [&](std::vector<BuildWarning>& warnings) {
+            const auto   bb   = pr::optimalBbox(in);
+            const double R    = bb.outerRadiusXY();
+            const double midZ = (bb.zMin + bb.zMax) / 2.0;
+
+            // Build protrusions (material to add) and optional pin holes (material to cut).
+            std::vector<TopoDS_Shape> protrusions;
+            std::vector<TopoDS_Shape> pinHoles;
+            protrusions.reserve(spec["lugs"].size());
+
+            for (const auto& lug : spec["lugs"]) {
+                const double angleDeg = lug["angle_deg"].get<double>();
+                const double length   = lug["length_mm"].get<double>();
+                const double width    = lug["width_mm"].get<double>();
+                const double thick    = lug["thickness_mm"].get<double>();
+                const double pinDia   = lug.value("pin_hole_dia_mm", 0.0);
+
+                const auto    frame   = pr::sideFrameAt(R, angleDeg, midZ);
+                const gp_Dir  outward = frame.inwardRadial.Reversed();
+
+                // Lug box: extends outward by `length`, centered on tangent
+                // (`width`) and axial (`thick`).  Origin = case-surface corner.
+                //
+                // gp_Ax2(P, V, Vx) sets local Z = V and local X = Vx.  We want
+                // DX = length along outward, DY = width along tangent, DZ =
+                // thick along axial.  Picking V = axialZ and Vx = outward gives
+                // Y = axialZ × outward = tangentCCW (verified for any angle θ).
+                const gp_Pnt origin = pr::offsetPoint(
+                    frame.center,
+                    -width / 2.0, frame.tangentCCW,
+                    -thick / 2.0, frame.axialZ);
+                const gp_Ax2 ax(origin, frame.axialZ, outward);
+                protrusions.push_back(pr::box(ax, length, width, thick));
+
+                // Optional pin hole: through-hole along tangent direction,
+                // positioned 70 % out along the lug length.
+                if (pinDia >= 0.6) {  // ignore tiny / zero — DFM-002 also enforces
+                    const double pinOutOffset = length * 0.7;
+                    const double kOverhang    = 0.05;
+                    const gp_Pnt pinStart(
+                        frame.center.X()
+                            + pinOutOffset * outward.X()
+                            - (width / 2.0 + kOverhang) * frame.tangentCCW.X(),
+                        frame.center.Y()
+                            + pinOutOffset * outward.Y()
+                            - (width / 2.0 + kOverhang) * frame.tangentCCW.Y(),
+                        frame.center.Z());
+                    const gp_Ax2 pinAx(pinStart, frame.tangentCCW);
+                    pinHoles.push_back(
+                        pr::cylinder(pinAx, pinDia / 2.0, width + 2.0 * kOverhang));
+                } else if (pinDia > 0.0) {
+                    warnings.push_back(BuildWarning{
+                        "W_DFM_002_PIN", "lug pin_hole_dia_mm < 0.6, skipped (DFM-002)"
+                    });
+                }
+            }
+            // First fuse all protrusions, then cut pin holes through fused body.
+            const TopoDS_Shape withLugs = pr::fuseMany(in, protrusions);
+            return pr::cutMany(withLugs, pinHoles);
+        });
+}
+
+// @lat: [[engine/feature-watch#스텝 10 — addSecondaryFillets]]
+StepResult WatchFrontModel::addSecondaryFillets(const TopoDS_Shape& in,
+                                                 const nlohmann::json& spec)
+{
+    if (!spec.contains("secondary_fillets")) return StepResult{ in, {} };
+
+    return pr::runStep("WatchFrontModel::addSecondaryFillets",
+        [&](std::vector<BuildWarning>& warnings) {
+            const double r  = spec["secondary_fillets"].value("r_mm", 0.2);
+            const auto   bb = pr::optimalBbox(in);
+
+            // Apply forgiving fillets to two specific Z-bands:
+            //   1. display-pocket top rim    @ z = zMax
+            //   2. bezel inner step          @ z = zMax - bezel.depth_mm
+            // If either pass fails (no matching edges, fillet solver fails),
+            // log a warning and pass the previous shape through.
+            TopoDS_Shape current = in;
+            auto safeFillet = [&](double radius, double z, const char* label) {
+                try {
+                    current = pr::filletEdges(current, radius, pr::edgesAtZ(z));
+                } catch (const std::exception& e) {
+                    warnings.push_back(BuildWarning{
+                        "W_FILLET_SKIP",
+                        std::string(label) + " fillet skipped: " + e.what()
+                    });
+                }
+            };
+            safeFillet(r, bb.zMax, "top rim");
+            if (spec.contains("bezel")) {
+                const double bezDepth = spec["bezel"].value("depth_mm", 0.0);
+                if (bezDepth > 0.0)
+                    safeFillet(r * 0.5, bb.zMax - bezDepth, "bezel inner step");
+            }
+            return current;
+        },
+        /*checkValidity=*/false);  // multi-fillet may leave benign minor invalid edges
+}
+
+// ── Convenience: chain all M1.5 steps (1–10) ───────────────────────────────
 TopoDS_Shape WatchFrontModel::buildAll(const nlohmann::json& spec,
                                         std::vector<BuildWarning>& warnings)
 {
@@ -214,13 +389,121 @@ TopoDS_Shape WatchFrontModel::buildAll(const nlohmann::json& spec,
     };
 
     TopoDS_Shape s;
-    s = absorb(m.buildBase(spec),             "step1 buildBase");      if (s.IsNull()) return {};
-    s = absorb(m.applyCornerRadius(s, spec),  "step2 cornerRad");      if (s.IsNull()) return {};
-    s = absorb(m.buildBezel(s, spec),         "step3 buildBezel");     if (s.IsNull()) return {};
-    s = absorb(m.buildDisplayPocket(s, spec), "step4 displayPocket");  if (s.IsNull()) return {};
-    s = absorb(m.addCrownCavity(s, spec),     "step5 crownCavity");    if (s.IsNull()) return {};
-    s = absorb(m.addSideButtons(s, spec),     "step6 sideButtons");    if (s.IsNull()) return {};
+    s = absorb(m.buildBase(spec),               "step1 buildBase");        if (s.IsNull()) return {};
+    s = absorb(m.applyCornerRadius(s, spec),    "step2 cornerRad");        if (s.IsNull()) return {};
+    s = absorb(m.buildBezel(s, spec),           "step3 buildBezel");       if (s.IsNull()) return {};
+    s = absorb(m.buildDisplayPocket(s, spec),   "step4 displayPocket");    if (s.IsNull()) return {};
+    s = absorb(m.addCrownCavity(s, spec),       "step5 crownCavity");      if (s.IsNull()) return {};
+    s = absorb(m.addSideButtons(s, spec),       "step6 sideButtons");      if (s.IsNull()) return {};
+    s = absorb(m.addSpeakerGrille(s, spec),     "step7 speakerGrille");    if (s.IsNull()) return {};
+    s = absorb(m.addRearSensors(s, spec),       "step8 rearSensors");      if (s.IsNull()) return {};
+    s = absorb(m.addLugs(s, spec),              "step9 lugs");             if (s.IsNull()) return {};
+    s = absorb(m.addSecondaryFillets(s, spec),  "step10 secondaryFillets"); if (s.IsNull()) return {};
     return s;
+}
+
+// ── Step 11: runDFM — DFM rule catalog validation ──────────────────────────
+// @lat: [[engine/feature-watch#스텝 11 — runDFM]]
+DFMReport WatchFrontModel::runDFM(const TopoDS_Shape& shape,
+                                   const nlohmann::json& spec)
+{
+    DFMReport report;
+    auto addFinding = [&](const char* code, const char* severity,
+                          const std::string& msg) {
+        report.findings.push_back(DFMFinding{ code, severity, msg });
+        if (std::string_view(severity) == "error") report.passed = false;
+    };
+
+    if (shape.IsNull()) {
+        addFinding("DFM-NULL", "error", "shape is null — cannot run DFM");
+        return report;
+    }
+
+    // ── DFM-002: minimum hole / cavity diameter ≥ 0.8 mm ───────────────
+    constexpr double kMinHoleDia = 0.8;
+    auto checkHoleDia = [&](double dia, const char* src) {
+        if (dia > 0.0 && dia < kMinHoleDia) {
+            addFinding("DFM-002", "error",
+                std::string(src) + " diameter " + std::to_string(dia) +
+                " mm < min " + std::to_string(kMinHoleDia) + " mm");
+        }
+    };
+    if (spec.contains("crown_cavity")) {
+        const auto& cc = spec["crown_cavity"];
+        checkHoleDia(cc["diameter_mm"].get<double>(),  "crown_cavity.diameter_mm");
+        checkHoleDia(cc["shaft_dia_mm"].get<double>(), "crown_cavity.shaft_dia_mm");
+    }
+    if (spec.contains("speaker_grille")) {
+        checkHoleDia(spec["speaker_grille"]["hole_dia_mm"].get<double>(),
+                     "speaker_grille.hole_dia_mm");
+    }
+    if (spec.contains("rear_sensors")) {
+        std::size_t i = 0;
+        for (const auto& s : spec["rear_sensors"]) {
+            checkHoleDia(s["dia_mm"].get<double>(),
+                         ("rear_sensors[" + std::to_string(i) + "].dia_mm").c_str());
+            ++i;
+        }
+    }
+    if (spec.contains("lugs")) {
+        std::size_t i = 0;
+        for (const auto& l : spec["lugs"]) {
+            checkHoleDia(l.value("pin_hole_dia_mm", 0.0),
+                         ("lugs[" + std::to_string(i) + "].pin_hole_dia_mm").c_str());
+            ++i;
+        }
+    }
+
+    // ── DFM-009: bezel minimum width ≥ 0.6 mm ─────────────────────────
+    constexpr double kMinBezelW = 0.6;
+    if (spec.contains("bezel")) {
+        const double w = spec["bezel"]["width_mm"].get<double>();
+        if (w < kMinBezelW) {
+            addFinding("DFM-009", "error",
+                "bezel.width_mm " + std::to_string(w) +
+                " < min " + std::to_string(kMinBezelW));
+        }
+    }
+
+    // ── DFM-014: speaker-grille pin (web between holes) ≥ 0.25 mm ─────
+    constexpr double kMinPinThick = 0.25;
+    if (spec.contains("speaker_grille")) {
+        const auto& sg = spec["speaker_grille"];
+        const double colSp = sg["col_spacing_mm"].get<double>();
+        const double rowSp = sg["row_spacing_mm"].get<double>();
+        const double dia   = sg["hole_dia_mm"].get<double>();
+        const double pinT  = std::min(colSp, rowSp) - dia;
+        if (pinT < kMinPinThick) {
+            addFinding("DFM-014", "error",
+                "speaker_grille pin thickness " + std::to_string(pinT) +
+                " mm < min " + std::to_string(kMinPinThick) + " mm");
+        }
+    }
+
+    // ── DFM-020: all shells closed (topology check) ────────────────────
+    {
+        BRepCheck_Analyzer analyzer(shape);
+        if (!analyzer.IsValid()) {
+            addFinding("DFM-020", "warning",
+                "BRepCheck_Analyzer reports invalid topology — likely "
+                "non-closed shell or geometry tolerance issue");
+        }
+    }
+
+    // ── DFM-022: OBB Z aligned (thickness axis is the smallest extent) ─
+    {
+        const auto bb = pr::optimalBbox(shape);
+        const double dx = bb.dx(), dy = bb.dy(), dz = bb.dz();
+        const double minExt = std::min({ dx, dy, dz });
+        if (std::abs(dz - minExt) > 1e-3) {
+            addFinding("DFM-022", "warning",
+                "thickness axis dz=" + std::to_string(dz) +
+                " mm is not the smallest extent (min=" +
+                std::to_string(minExt) + " mm)");
+        }
+    }
+
+    return report;
 }
 
 // ── Default spec: 44 mm round watch baseline ───────────────────────────────
@@ -264,7 +547,46 @@ nlohmann::json WatchFrontModel::defaultSpec()
                 { "depth_mm",    0.8 },
                 { "taper_deg",   0.0 }
             }
-        })}
+        })},
+        { "speaker_grille", {
+            { "angle_deg",       180.0 },   // 9 o'clock (convention 0°=+X=3시, CCW)
+            { "height_pos_mm",     5.0 },
+            { "rows",              2 },
+            { "cols",              6 },
+            { "row_spacing_mm",    1.5 },
+            { "col_spacing_mm",    1.5 },
+            { "hole_dia_mm",       0.8 },   // DFM-002 minimum
+            { "depth_mm",          1.0 }
+        }},
+        { "rear_sensors", nlohmann::json::array({
+            nlohmann::json{
+                { "offset_x_mm",  0.0 }, { "offset_y_mm",  0.0 },
+                { "dia_mm",       5.0 }, { "depth_mm",     0.5 }
+            },
+            nlohmann::json{
+                { "offset_x_mm",  5.0 }, { "offset_y_mm",  0.0 },
+                { "dia_mm",       1.5 }, { "depth_mm",     0.3 }
+            }
+        })},
+        { "lugs", nlohmann::json::array({
+            nlohmann::json{
+                { "angle_deg",        90.0 },   // 12 o'clock
+                { "length_mm",         6.0 },
+                { "width_mm",         18.0 },
+                { "thickness_mm",      3.0 },
+                { "pin_hole_dia_mm",   1.8 }
+            },
+            nlohmann::json{
+                { "angle_deg",       270.0 },   // 6 o'clock
+                { "length_mm",         6.0 },
+                { "width_mm",         18.0 },
+                { "thickness_mm",      3.0 },
+                { "pin_hole_dia_mm",   1.8 }
+            }
+        })},
+        { "secondary_fillets", {
+            { "r_mm",  0.2 }
+        }}
     };
 }
 

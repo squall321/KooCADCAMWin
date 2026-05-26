@@ -186,17 +186,21 @@ TEST(WatchFeaturesM12, FullBuildPreservesBaseDimensions)
     double xmin, ymin, zmin, xmax, ymax, zmax;
     box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
 
+    // M1.5 full envelope: case 44 mm Ø, lugs at 12/6 o'clock extend Y by
+    // 6 mm each side → dy ≈ 56.  Lugs are axially centered, no Z extension.
     EXPECT_NEAR(xmax - xmin, 44.0, 1.0) << "dx out of range";
-    EXPECT_NEAR(ymax - ymin, 44.0, 1.0) << "dy out of range";
+    EXPECT_NEAR(ymax - ymin, 56.0, 1.0) << "dy out of range";
     EXPECT_NEAR(zmax - zmin, 10.0, 0.5) << "dz out of range";
 }
 
 // 7. Bezel taper changes geometry
-// TODO M1.3: buildBezel cut currently leaves the case outer wall untouched
-// (annular tool sits OUTSIDE the wall), so taper-degree variation has no
-// measurable volume effect. Re-enable this test after buildBezel is
-// redesigned to actually cut into the side wall.
-TEST(WatchFeaturesM12, DISABLED_BezelTaperChangesShape)
+// Re-enabled in M1.3 — the refactor (797903b) switched buildBezel from
+// BRepBndLib::Add (NURBS control-polygon bulge ≈ +1.8 mm) to
+// BRepBndLib::AddOptimal (true surface bbox), so the annular cut tool's
+// outer wall now sits AT the case surface instead of 1.8 mm outside it.
+// With taper_deg > 0, the cut tool's outer wall slopes inward at the
+// bottom, removing additional material near the inner rim.
+TEST(WatchFeaturesM12, BezelTaperChangesShape)
 {
     using namespace koocadcam;
     nlohmann::json specFlat = engine::WatchFrontModel::defaultSpec();
@@ -211,8 +215,151 @@ TEST(WatchFeaturesM12, DISABLED_BezelTaperChangesShape)
     ASSERT_FALSE(sFlat.IsNull());
     ASSERT_FALSE(sTaper.IsNull());
 
-    // Tapered bezel removes more material; threshold is intentionally loose
-    // (0.1 mm³) to tolerate 0-fallback in Agent A's implementation.
+    // Tapered cut tool removes more material (outer wall narrows toward
+    // bottom → larger annular ring carved). Loose 0.1 mm³ threshold tolerates
+    // OCCT solver micro-variation.
     const double diff = std::abs(volumeOf(sFlat) - volumeOf(sTaper));
     EXPECT_GE(diff, 0.1) << "taper_deg=5 should change volume by >= 0.1 mm³";
+}
+
+// ── M1.5 step 7-10 tests ──────────────────────────────────────────────────
+
+// 8. Speaker grille removes material in proportion to hole count
+TEST(WatchFeaturesM15, SpeakerGrilleReducesVolume)
+{
+    using namespace koocadcam;
+    nlohmann::json full = engine::WatchFrontModel::defaultSpec();
+    nlohmann::json noGrille = full;
+    noGrille.erase("speaker_grille");
+
+    std::vector<engine::BuildWarning> w1, w2;
+    TopoDS_Shape sFull   = engine::WatchFrontModel::buildAll(full,     w1);
+    TopoDS_Shape sNoGr   = engine::WatchFrontModel::buildAll(noGrille, w2);
+    ASSERT_FALSE(sFull.IsNull());
+    ASSERT_FALSE(sNoGr.IsNull());
+    EXPECT_LT(volumeOf(sFull), volumeOf(sNoGr))
+        << "speaker grille should remove material";
+}
+
+// 9. Rear sensor holes remove material
+TEST(WatchFeaturesM15, RearSensorsReduceVolume)
+{
+    using namespace koocadcam;
+    nlohmann::json full = engine::WatchFrontModel::defaultSpec();
+    nlohmann::json noSensors = full;
+    noSensors.erase("rear_sensors");
+
+    std::vector<engine::BuildWarning> w1, w2;
+    TopoDS_Shape sFull = engine::WatchFrontModel::buildAll(full,      w1);
+    TopoDS_Shape sNoS  = engine::WatchFrontModel::buildAll(noSensors, w2);
+    ASSERT_FALSE(sFull.IsNull());
+    ASSERT_FALSE(sNoS.IsNull());
+    EXPECT_LT(volumeOf(sFull), volumeOf(sNoS))
+        << "rear sensors should remove material";
+}
+
+// 10. Lugs ADD material (fuse, not cut) — opposite sign from cut steps
+TEST(WatchFeaturesM15, LugsAddMaterial)
+{
+    using namespace koocadcam;
+    nlohmann::json full = engine::WatchFrontModel::defaultSpec();
+    // For a clean A/B, also drop pin holes (lugs adds material; pin holes
+    // remove it).  Test the protrusion sign independently of pin holes.
+    if (full.contains("lugs")) {
+        for (auto& l : full["lugs"]) l.erase("pin_hole_dia_mm");
+    }
+    nlohmann::json noLugs = full;
+    noLugs.erase("lugs");
+
+    std::vector<engine::BuildWarning> w1, w2;
+    TopoDS_Shape sFull   = engine::WatchFrontModel::buildAll(full,   w1);
+    TopoDS_Shape sNoLugs = engine::WatchFrontModel::buildAll(noLugs, w2);
+    ASSERT_FALSE(sFull.IsNull());
+    ASSERT_FALSE(sNoLugs.IsNull());
+    EXPECT_GT(volumeOf(sFull), volumeOf(sNoLugs))
+        << "lugs (no pin holes) should ADD material";
+}
+
+// 11. Lug span symmetry — bbox should grow symmetrically with 12 + 6 o'clock lugs
+TEST(WatchFeaturesM15, LugBboxSymmetric)
+{
+    using namespace koocadcam;
+    nlohmann::json spec = engine::WatchFrontModel::defaultSpec();
+
+    std::vector<engine::BuildWarning> warnings;
+    TopoDS_Shape shape = engine::WatchFrontModel::buildAll(spec, warnings);
+    ASSERT_FALSE(shape.IsNull());
+
+    Bnd_Box box;
+    BRepBndLib::AddOptimal(shape, box);
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    box.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+
+    // Lugs at 90° (+Y) and 270° (-Y) → both extend the Y extent symmetrically.
+    EXPECT_NEAR(std::abs(yMax), std::abs(yMin), 0.2)
+        << "Y extent should be symmetric (12/6 o'clock lugs)";
+    // Y extent must exceed case diameter (44) by some lug projection.
+    EXPECT_GT(yMax - yMin, 50.0)
+        << "Y extent should grow past 50mm with 6mm lugs on both sides";
+}
+
+// 12. runDFM passes on the default sample
+TEST(WatchFeaturesM15, RunDFMPassesOnSampleSpec)
+{
+    using namespace koocadcam;
+    nlohmann::json spec = engine::WatchFrontModel::defaultSpec();
+
+    std::vector<engine::BuildWarning> warnings;
+    TopoDS_Shape shape = engine::WatchFrontModel::buildAll(spec, warnings);
+    ASSERT_FALSE(shape.IsNull());
+
+    auto report = engine::WatchFrontModel::runDFM(shape, spec);
+    EXPECT_TRUE(report.passed)
+        << "default spec must pass DFM — first failure: "
+        << (report.findings.empty() ? std::string("none")
+                                    : report.findings.front().code + ": " +
+                                      report.findings.front().message);
+}
+
+// 13. runDFM catches DFM-002 violation (sub-0.8 mm hole)
+TEST(WatchFeaturesM15, RunDFMCatchesDFM002UnderSizedHole)
+{
+    using namespace koocadcam;
+    nlohmann::json spec = engine::WatchFrontModel::defaultSpec();
+    spec["crown_cavity"]["shaft_dia_mm"] = 0.5;  // violates DFM-002 (min 0.8)
+
+    std::vector<engine::BuildWarning> warnings;
+    TopoDS_Shape shape = engine::WatchFrontModel::buildAll(spec, warnings);
+    ASSERT_FALSE(shape.IsNull());
+
+    auto report = engine::WatchFrontModel::runDFM(shape, spec);
+    EXPECT_FALSE(report.passed);
+    bool foundDfm002 = false;
+    for (const auto& f : report.findings) {
+        if (f.code == "DFM-002") { foundDfm002 = true; break; }
+    }
+    EXPECT_TRUE(foundDfm002) << "expected DFM-002 finding for 0.5 mm shaft";
+}
+
+// 14. runDFM catches DFM-009 violation (bezel too narrow)
+TEST(WatchFeaturesM15, RunDFMCatchesDFM009ThinBezel)
+{
+    using namespace koocadcam;
+    nlohmann::json spec = engine::WatchFrontModel::defaultSpec();
+    spec["bezel"]["width_mm"] = 0.4;  // violates DFM-009 (min 0.6)
+
+    std::vector<engine::BuildWarning> warnings;
+    TopoDS_Shape shape = engine::WatchFrontModel::buildAll(spec, warnings);
+    // shape may or may not be null with such thin bezel; runDFM only needs spec
+    auto report = engine::WatchFrontModel::runDFM(
+        shape.IsNull() ? engine::WatchFrontModel::buildAll(
+                            engine::WatchFrontModel::defaultSpec(), warnings)
+                       : shape,
+        spec);
+    EXPECT_FALSE(report.passed);
+    bool found = false;
+    for (const auto& f : report.findings) {
+        if (f.code == "DFM-009") { found = true; break; }
+    }
+    EXPECT_TRUE(found) << "expected DFM-009 finding for 0.4 mm bezel";
 }

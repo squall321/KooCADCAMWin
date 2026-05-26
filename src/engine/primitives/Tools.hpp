@@ -80,6 +80,13 @@ inline TopoDS_Shape annularConeRing(const gp_Ax2& axis,
 // Rectangular pocket centred on a side-frame's `center` in the tangent
 // (length) and axial (width) directions, extending `depth` inward.  Side
 // buttons, lateral speaker grilles, lateral SIM trays all reuse this.
+//
+// gp_Ax2(P, V, Vx) interprets V as the LOCAL Z direction (the "main"
+// direction along which DZ extends in BRepPrimAPI_MakeBox(P, DX, DY, DZ))
+// and Vx as the LOCAL X direction.  We pick MainDir = axialZ so that DZ =
+// width extrudes along the case axis, XDir = inwardRadial so that DX =
+// depth extrudes into the case, leaving YDir = MainDir × XDir = tangentCCW
+// so DY = length extends along the side surface.
 inline TopoDS_Shape sidePocketBox(const SideFrame& frame,
                                   double depth, double length, double width)
 {
@@ -87,7 +94,7 @@ inline TopoDS_Shape sidePocketBox(const SideFrame& frame,
         frame.center,
         -length / 2.0, frame.tangentCCW,
         -width  / 2.0, frame.axialZ);
-    const gp_Ax2 ax(origin, frame.inwardRadial, frame.tangentCCW);
+    const gp_Ax2 ax(origin, frame.axialZ, frame.inwardRadial);
     return box(ax, depth, length, width);
 }
 

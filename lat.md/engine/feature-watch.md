@@ -1,11 +1,53 @@
 # WatchFrontModel
 
 시계 전면 케이스의 파라메트릭 모델. `ProductFrontModel` CRTP 기반을 상속하여
-10개 빌드 스텝을 순서대로 실행한다. 1차 납품 대상(`[[scope/milestones-and-krs#M1]]`).
+10개 빌드 스텝을 순서대로 실행하고 별도의 `runDFM` 게이트로 DFM 검증한다.
+1차 납품 대상(`[[scope/milestones-and-krs#M1]]`).
 
 - 공통 기반: [[engine/parametric-templates]]
 - DFM 규칙: [[engine/dfm-rules]]
 - 스마트폰 포팅 참조: [[engine/feature-phone]]
+
+> **M1.5 SHIPPED (2026-05-27)** — 10/10 build steps + runDFM 게이트, 모두 `koocadcam::engine::prim` 헬퍼만 조합.
+> ctest `watch` + `watch_features` 14 sub-test PASS (M1.2 7 + M1.5 7).  KooCADCAM.exe 시각 검증 통과.
+
+---
+
+## Build Sequence (M1.5, shipped)
+
+| # | 메서드 | 도메인 책임 | 주요 프리미티브 |
+|---|---|---|---|
+| 1 | `buildBase` | 원형/사각 케이스 바디 + 사각 폼팩터의 수직 코너 필렛 | `prim::cylinder` 또는 `prim::box` + `filletEdges` + `verticalCornerEdges` |
+| 2 | `applyCornerRadius` | 상면(rTop) + 저면(rSide) 동시 필렛 | `prim::filletEdgesMulti` + `edgesAtZ` |
+| 3 | `buildBezel` | 베젤 환형 포켓; taper>0 → cone-frustum 외벽 | `prim::annularRing` 또는 `annularConeRing` + `cut` |
+| 4 | `buildDisplayPocket` | 상면 원형 디스플레이 안착 홈 (glass_offset 보정) | `prim::cylinder` + `cut` |
+| 5 | `addCrownCavity` | 측면 캐비티 + 관통 샤프트 (3시 표준 0°) | `prim::sideFrameAt` + `cylinder` × 2 + `cutMany` |
+| 6 | `addSideButtons` | 측면 직사각 버튼 포켓 배열 | `prim::sideFrameAt` + `sidePocketBox` + `cutMany` |
+| 7 | `addSpeakerGrille` | 측면 rows×cols 그릴 홀 패턴 (compound + 1-pass) | `prim::sideFrameAt` + `cylinder` × N + `offsetPoint` + `cutMany` |
+| 8 | `addRearSensors` | 후면 HR/PPG 광학 창 (+Z 축 원홀 배열) | `prim::cylinder` + `cutMany` |
+| 9 | `addLugs` | 12/6시 스트랩 러그 — **유일한 fuse 스텝** + 선택적 핀 홀 | `prim::sideFrameAt` + `box` + `fuseMany` + 선택적 `cylinder` + `cutMany` |
+| 10 | `addSecondaryFillets` | 디스플레이 림 + 베젤 안쪽 단차의 마무리 필렛 (forgiving) | `prim::edgesAtZ` + `filletEdges` (try/catch per band) |
+
+`buildAll` = 1→10 순차, 각 스텝은 `prim::runStep` 으로 `E_OCCT`/`W_BREPCHECK`/bbox-debug 동일 처리.
+
+### Step 11 — `runDFM` (별도 정적 메서드)
+
+`static DFMReport WatchFrontModel::runDFM(shape, spec)` — buildAll 과 분리된 게이트.
+현재 구현 규칙 ([[engine/dfm-rules]]):
+
+| Rule | Severity | Check |
+|---|---|---|
+| DFM-002 | Error | crown_cavity / speaker_grille / rear_sensors / lugs[].pin_hole 모든 홀 직경 ≥ 0.8 mm |
+| DFM-009 | Error | bezel.width_mm ≥ 0.6 mm |
+| DFM-014 | Error | speaker_grille pin thickness = min(row_sp, col_sp) − hole_dia ≥ 0.25 mm |
+| DFM-020 | Warning | `BRepCheck_Analyzer` IsValid — open shells / tolerance 이슈 |
+| DFM-022 | Warning | bbox dz(두께)가 dx/dy 중 최솟값과 같은지 확인 |
+
+`DFMReport { passed, findings: [{code, severity, message}] }` 반환. `passed == false` 이면 STEP export 차단 (M3 이후 게이팅 정책).
+
+### 좌표계 표준 (재확인)
+- 각도 0° = +X (3시), CCW.  90° = 12시, 180° = 9시, 270° = 6시.
+- `gp_Ax2(P, V, Vx)`: **V = 메인(Z) 방향, Vx = X 방향**.  이 규약을 무시하면 `box` dim이 직교 축으로 회전하여 측정이 어긋난다.  과거 commit (M1.5) 에서 lug box 의 V/Vx 혼동으로 dz=21.5mm 가 측정된 사례 있음 — 수정 후 dz=10.
 
 ---
 

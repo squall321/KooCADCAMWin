@@ -69,8 +69,11 @@ TEST(WatchFrontModel, BuildAllSampleRoundWatchValidShape)
     const double dx = xmax - xmin;
     const double dy = ymax - ymin;
     const double dz = zmax - zmin;
+    // M1.5 envelope: case 44 mm Ø, lugs at 12 / 6 o'clock extend Y by 6 mm
+    // each side → dy ≈ 56 mm.  dz stays 10 mm because lugs are centred
+    // axially with thickness 3 mm (z 3.5 .. 6.5, inside the case range).
     EXPECT_NEAR(dx, 44.0, 1.0);
-    EXPECT_NEAR(dy, 44.0, 1.0);
+    EXPECT_NEAR(dy, 56.0, 1.0);
     EXPECT_NEAR(dz, 10.0, 0.5);
 }
 
