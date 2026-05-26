@@ -12,6 +12,89 @@
 
 ---
 
+## 기하 프리미티브 레이어 (`koocadcam::engine::prim`) — M1.2-refactor
+
+빌더 스텝의 **중간 과정을 재사용 가능한 캡슐로 분해**한 헤더-온리 레이어다.
+워치만이 아니라 폰/태블릿 등 향후 모든 제품 모델이 같은 프리미티브를 호출해
+스텝을 작성한다.  스텝 본체는 도메인 어휘(베젤, 크라운, 사이드버튼)로 짧게
+표현되고, 예외/검증/로그/Boolean 디테일은 프리미티브가 흡수한다.
+
+```
+src/engine/primitives/
+ ├─ Bbox.hpp        Bbox3d  (dx/dy/dz, outerRadiusXY, center/topCenter/bottomCenter)
+ │                  optimalBbox(shape) — BRepBndLib::AddOptimal 래퍼
+ ├─ Frames.hpp      SideFrame  (center, inwardRadial, tangentCCW, axialZ, ax2InwardRadial())
+ │                  sideFrameAt(R, angleDeg, z) — 각도 0°=+X, CCW 표준
+ │                  axisAtZ(point), offsetPoint(base, dx, xDir, dy, yDir)
+ ├─ Tools.hpp       cylinder / coneFrustum / box  (gp_Ax2 기반 팩토리)
+ │                  annularRing(ax, outerR, innerR, h)
+ │                  annularConeRing(ax, r1bottom, r2top, innerR, h)  ← 베젤 taper
+ │                  sidePocketBox(frame, depth, length, width)       ← 측면 버튼/SIM 트레이
+ ├─ Cuts.hpp        cut(base, tool)
+ │                  cutMany(base, [tool…])  ← compound + 단일 Boolean (배열 피처용)
+ ├─ Fillets.hpp     EdgePredicate / FilletSpec
+ │                  filletEdges(shape, r, predicate)
+ │                  filletEdgesMulti(shape, {{r1, pred1}, {r2, pred2}, …})  ← 단일 패스
+ │                  edgesAtZ(z, tol), verticalCornerEdges(hx, hy, thickness, tol)
+ └─ StepGuard.hpp   runStep(name, body, checkValidity=true) → StepResult
+                    body 시그니처: TopoDS_Shape(std::vector<BuildWarning>&)
+                    try/catch → E_OCCT, BRepCheck → W_BREPCHECK, bbox spdlog::debug
+```
+
+### 의도 — "어디까지를 캡슐화 했나"
+
+| 레이어 | 책임 | 사용처 |
+|---|---|---|
+| **prim/** | OCCT 호출 시퀀스, 예외→경고, BRepCheck, 로그, 좌표계 표준 | 모든 제품 모델 |
+| **{Product}FrontModel::stepX** | 스펙 키 ↔ 도메인 의미 매핑, 어떤 프리미티브를 어떻게 조합할지 | 제품별 |
+| **{Product}FrontModel::buildAll** | 스텝 순서 + warning 합산 + abort 정책 | 제품별 |
+
+스텝 본체에는 더 이상 `try/catch`, `BRepCheck_Analyzer`, `Bnd_Box.Get(...)`,
+`gp_Ax2(...)`, `BRepPrimAPI_Make…`, `BRepAlgoAPI_Cut`, `TopoDS_Compound` 같은
+OCCT 골격이 들어가지 않는다.  스텝은 "버튼 위치 → sideFrameAt → sidePocketBox →
+cutMany" 식의 4–5 줄로 압축된다.  자세한 비교는 [[engine/feature-watch]] 참조.
+
+### 호출 패턴 예시
+
+```cpp
+// 워치 측면 버튼 — addSideButtons의 본질만 남김
+return pr::runStep("WatchFrontModel::addSideButtons",
+    [&](std::vector<BuildWarning>& w) {
+        const double R = pr::optimalBbox(in).outerRadiusXY();
+        std::vector<TopoDS_Shape> tools;
+        for (const auto& btn : spec["side_buttons"]) {
+            const auto frame = pr::sideFrameAt(R,
+                btn["angle_deg"].get<double>(),
+                btn["height_mm"].get<double>());
+            tools.push_back(pr::sidePocketBox(frame,
+                btn["depth_mm"].get<double>(),
+                btn["length_mm"].get<double>(),
+                btn["width_mm"].get<double>()));
+        }
+        return pr::cutMany(in, tools);
+    });
+```
+
+### 좌표/규약 표준 (모든 프리미티브 공통)
+
+- 각도 0° = +X (3시), CCW.  워치 12시 = 90°, 폰 카메라 패턴도 동일.
+- 측정은 항상 `prim::optimalBbox` (NURBS 컨트롤 폴리곤 아닌 실제 표면 bbox).
+  근거: [[process/occt8-migration-cookbook#BT-6 BRepBndLib::Add vs AddOptimal]]
+- 예외는 `Standard_Failure(const char*)` 만 던진다.  `runStep`이 `BuildWarning`
+  으로 변환한다.
+- 셋업 단계에서는 `checkValidity=false` (예: `buildBase`의 cylinder/box는
+  태생부터 valid).  Boolean 후속 스텝은 기본값 `true`.
+
+### 비목표 (M1.2-refactor에서 의도적으로 미포함)
+
+- 스텝 자체의 추상화 (`FeatureGraph`, `FeatureNode`) — 현 문서 아래 §공통
+  기반 클래스 에서 **RESERVED**.  M3+ 인크리멘털 재실행 + RE 통합 시점 도입.
+- DFM hook injection — M1.5 step 11 runDFM 도입 시.
+- 멀티 제품 — `PhoneFrontModel`이 같은 프리미티브로 첫 스텝을 작성하는
+  시점 ([[engine/feature-phone]]) 까지는 워치 한 제품만 사용한다.
+
+---
+
 ## 공통 기반 클래스: `ProductFrontModel`
 
 > **예약 경로** — 아래 헤더 블록의 실제 소스 위치는 `[[src/engine/ProductFrontModel.hpp]]`입니다.
