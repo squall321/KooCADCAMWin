@@ -58,6 +58,21 @@ set_tests_properties(watch PROPERTIES
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
 
+# ── Watch features test (M1.2) — steps 4-6 ──────────────────
+add_executable(watch_features_test watch/watch_features_test.cpp)
+target_link_libraries(watch_features_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_engine
+    koo_io
+)
+target_include_directories(watch_features_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(watch_features_test)
+add_test(NAME watch_features COMMAND watch_features_test)
+set_tests_properties(watch_features PROPERTIES
+    TIMEOUT 60
+    ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
+
 # ── JsonSpec validate/roundtrip test (M1.1) ───────────────────
 add_executable(json_spec_test json_spec/json_spec_test.cpp)
 target_link_libraries(json_spec_test PRIVATE

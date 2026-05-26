@@ -20,5 +20,16 @@
     "d_pocket_mm": 36.0,
     "depth_pocket_mm": 0.8,
     "glass_offset_mm": -0.1
-  }
+  },
+  "crown_cavity": {
+    "side_angle_deg": 0.0,
+    "height_pos_mm":  5.0,
+    "depth_mm":       2.5,
+    "diameter_mm":    3.0,
+    "shaft_dia_mm":   1.5
+  },
+  "side_buttons": [
+    {"angle_deg": 60.0, "height_mm": 5.0, "length_mm": 5.0,
+     "width_mm":  2.0,  "depth_mm":  0.8, "taper_deg":  0.0}
+  ]
 }

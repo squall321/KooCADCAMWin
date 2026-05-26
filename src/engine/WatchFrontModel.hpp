@@ -33,11 +33,23 @@ public:
 
     // ── Step 3: bezel annular pocket
     // outer cylinder − inner cylinder = annular tool; BRepAlgoAPI_Cut from base.
-    // taper_deg > 0 → ThruSections between two coaxial wires.
+    // taper_deg > 0 → cone frustum outer minus straight inner cylinder.
     StepResult buildBezel(const TopoDS_Shape& in,
                           const nlohmann::json& spec);
 
-    // ── Convenience: run all M1.1 steps in order, collecting warnings.
+    // ── Step 4: display pocket (circular recess on top face)
+    // spec["display_pocket"] missing → pass-through.
+    StepResult buildDisplayPocket(const TopoDS_Shape& in, const nlohmann::json& spec);
+
+    // ── Step 5: crown cavity + shaft hole on side surface (optional)
+    // spec["crown_cavity"] missing → pass-through.
+    StepResult addCrownCavity(const TopoDS_Shape& in, const nlohmann::json& spec);
+
+    // ── Step 6: side button pockets from array spec (optional)
+    // spec["side_buttons"] missing or empty → pass-through.
+    StepResult addSideButtons(const TopoDS_Shape& in, const nlohmann::json& spec);
+
+    // ── Convenience: run all M1.2 steps (1–6) in order, collecting warnings.
     // Returns null shape on failure; warnings carries diagnostics.
     static TopoDS_Shape buildAll(const nlohmann::json& spec,
                                  std::vector<BuildWarning>& warnings);

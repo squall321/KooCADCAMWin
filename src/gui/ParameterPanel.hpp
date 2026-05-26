@@ -9,9 +9,11 @@
 
 #include <memory>
 
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QPushButton;
+class QTableWidget;
 class QTimer;
 class QFormLayout;
 
@@ -42,11 +44,15 @@ private slots:
     void onAnyValueChanged();
     void onRebuildClicked();
     void onDebounceTimeout();
+    void onCrownEnabledToggled(bool checked);
+    void onAddButtonRow();
+    void onRemoveLastButtonRow();
 
 private:
     void buildUi();
     void updateFieldVisibility();
     void scheduleEmit();
+    void appendButtonRow(const nlohmann::json& obj);
 
     // Form factor selector
     QComboBox*       m_formFactor{nullptr};
@@ -69,6 +75,25 @@ private:
     QDoubleSpinBox*  m_bezelWidth{nullptr};
     QDoubleSpinBox*  m_bezelDepth{nullptr};
     QDoubleSpinBox*  m_bezelTaper{nullptr};
+
+    // Display pocket
+    QDoubleSpinBox*  m_displayDiameter{nullptr};
+    QDoubleSpinBox*  m_displayDepth{nullptr};
+    QDoubleSpinBox*  m_glassOffset{nullptr};
+
+    // Crown cavity
+    QCheckBox*       m_crownEnabled{nullptr};
+    QWidget*         m_crownGroup{nullptr};
+    QDoubleSpinBox*  m_crownAngle{nullptr};
+    QDoubleSpinBox*  m_crownHeight{nullptr};
+    QDoubleSpinBox*  m_crownDepth{nullptr};
+    QDoubleSpinBox*  m_crownDiameter{nullptr};
+    QDoubleSpinBox*  m_crownShaft{nullptr};
+
+    // Side buttons
+    QTableWidget*    m_sideButtonsTable{nullptr};
+    QPushButton*     m_addButtonBtn{nullptr};
+    QPushButton*     m_removeButtonBtn{nullptr};
 
     QPushButton*     m_rebuildButton{nullptr};
     QTimer*          m_debounce{nullptr};
