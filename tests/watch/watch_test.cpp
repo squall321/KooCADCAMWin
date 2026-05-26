@@ -58,15 +58,19 @@ TEST(WatchFrontModel, BuildAllSampleRoundWatchValidShape)
     BRepCheck_Analyzer analyzer(shape);
     EXPECT_TRUE(analyzer.IsValid()) << "shape failed BRepCheck_Analyzer";
 
+    // BRepBndLib::Add gives the NURBS control-polygon bbox — a conservative
+    // over-approximation that bulges outward by the fillet's control point
+    // offset (~1.8 mm here).  AddOptimal walks the actual surface, so it
+    // returns the true geometric bbox (matches what AIS_Shape mesh shows).
     Bnd_Box box;
-    BRepBndLib::Add(shape, box);
+    BRepBndLib::AddOptimal(shape, box);
     double xmin, ymin, zmin, xmax, ymax, zmax;
     box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
     const double dx = xmax - xmin;
     const double dy = ymax - ymin;
     const double dz = zmax - zmin;
-    EXPECT_NEAR(dx, 44.0, 2.0);
-    EXPECT_NEAR(dy, 44.0, 2.0);
+    EXPECT_NEAR(dx, 44.0, 1.0);
+    EXPECT_NEAR(dy, 44.0, 1.0);
     EXPECT_NEAR(dz, 10.0, 0.5);
 }
 

@@ -216,31 +216,43 @@ StepResult WatchFrontModel::buildBezel(const TopoDS_Shape& in,
 TopoDS_Shape WatchFrontModel::buildAll(const nlohmann::json& spec,
                                         std::vector<BuildWarning>& warnings)
 {
+    auto bboxOf = [](const TopoDS_Shape& s) {
+        if (s.IsNull()) return std::string("<null>");
+        Bnd_Box b; BRepBndLib::Add(s, b);
+        if (b.IsVoid()) return std::string("<void>");
+        double x0,y0,z0,x1,y1,z1; b.Get(x0,y0,z0,x1,y1,z1);
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "[%.3f..%.3f]x[%.3f..%.3f]x[%.3f..%.3f]  dx=%.3f dy=%.3f dz=%.3f",
+                      x0,x1,y0,y1,z0,z1, x1-x0, y1-y0, z1-z0);
+        return std::string(buf);
+    };
+
     WatchFrontModel model;
 
-    // Step 1
     StepResult s1 = model.buildBase(spec);
     warnings.insert(warnings.end(), s1.warnings.begin(), s1.warnings.end());
     if (s1.shape.IsNull()) {
         spdlog::error("WatchFrontModel::buildAll aborted at step 1");
         return TopoDS_Shape{};
     }
+    spdlog::info("WatchFrontModel::buildAll step1 buildBase   bbox: {}", bboxOf(s1.shape));
 
-    // Step 2
     StepResult s2 = model.applyCornerRadius(s1.shape, spec);
     warnings.insert(warnings.end(), s2.warnings.begin(), s2.warnings.end());
     if (s2.shape.IsNull()) {
         spdlog::error("WatchFrontModel::buildAll aborted at step 2");
         return TopoDS_Shape{};
     }
+    spdlog::info("WatchFrontModel::buildAll step2 cornerRad   bbox: {}", bboxOf(s2.shape));
 
-    // Step 3
     StepResult s3 = model.buildBezel(s2.shape, spec);
     warnings.insert(warnings.end(), s3.warnings.begin(), s3.warnings.end());
     if (s3.shape.IsNull()) {
         spdlog::error("WatchFrontModel::buildAll aborted at step 3");
         return TopoDS_Shape{};
     }
+    spdlog::info("WatchFrontModel::buildAll step3 buildBezel  bbox: {}", bboxOf(s3.shape));
 
     return s3.shape;
 }
