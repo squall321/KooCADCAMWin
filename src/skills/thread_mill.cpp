@@ -1,43 +1,34 @@
 // @lat: [[engine/skills#thread_mill]]
 //
-// ─── APPROXIMATION NOTE (slice 2) ────────────────────────────────────────
+// thread_mill — external or internal thread produced by a thread-mill cutter
+// traversing a 3-axis helical path.  Geometrically identical to tap_thread
+// (a V-thread helix) but the tool is a smaller-diameter end-mill following
+// the helix in NC code rather than a self-feeding tap.
 //
-// A real thread-milled thread is identical in final geometry to a tapped
-// thread — a helical groove (internal) or ridge (external).  The same
-// MISSING PRIMITIVE blocks both skills:
-//
-//   MISSING PRIMITIVE:
-//       prim::helicalSweep(
-//           const gp_Ax1&   axis,
-//           double          pitch_mm,
-//           double          length_mm,
-//           const TopoDS_Wire& profile_section);
-//
-//   Internally driven by Geom_Helix + BRepOffsetAPI_MakePipeShell.  Until
-//   this primitive lands in src/engine/primitives/, thread_mill::apply()
-//   is a metadata-only no-op identical in shape (but not in kind) to
-//   tap_thread.  The signature.pattern.kind differs so a future
-//   recognize() can refine the intent (helical-tool-path vs. tap).
-//
-//   When prim::helicalSweep arrives, swap the body for the real helical
-//   pipe-cut and implement face-pattern based recognition.
-//
-// ─────────────────────────────────────────────────────────────────────────
+// Slice 4: geometry is now REAL — `prim::helicalSweep` builds the V-thread
+// helical solid.  For internal threads (`is_external=false`) we SUBTRACT
+// the cutter from the workpiece; for external threads (`is_external=true`)
+// we FUSE the helical thread material onto the workpiece.
 
 #include "thread_mill.hpp"
 
 #include "Workpiece.hpp"
+#include "engine/primitives/Cuts.hpp"
+#include "engine/primitives/HelicalSweep.hpp"
 
 #include <BRepAdaptor_Surface.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Cylinder.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace koocadcam::skill::thread_mill {
 
+namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
 // ── Validation ───────────────────────────────────────────────────────────
@@ -67,7 +58,7 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     return r;
 }
 
-// ── Synthesis (metadata-only approximation) ──────────────────────────────
+// ── Synthesis (real helical sweep — slice 4) ─────────────────────────────
 
 SkillOutput apply(const Workpiece& wp, const Input& in)
 {
@@ -81,12 +72,78 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     auto datumId = wp.resolve(in.existing_hole_datum);
     const int datumIdOut = datumId.value_or(-1);
 
+    gp_Ax1 cylAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
     double datumDia = 0.0;
+    double datumRad = 0.0;
+    bool   gotAxis  = false;
     if (datumId) {
         BRepAdaptor_Surface surf(wp.face(*datumId));
         if (surf.GetType() == GeomAbs_Cylinder) {
-            datumDia = 2.0 * surf.Cylinder().Radius();
+            const gp_Cylinder cyl = surf.Cylinder();
+            datumRad = cyl.Radius();
+            datumDia = 2.0 * datumRad;
+            cylAxis  = cyl.Axis();
+            gotAxis  = true;
         }
+    }
+
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+
+    const double pitch         = in.pitch_mm;
+    // V-thread valley depth: standard rule-of-thumb is pitch × 0.65.
+    const double threadDepthV  = pitch * 0.65;
+    const double helixLength   = in.thread_depth_mm;
+
+    // Orient helix axis to descend into the bore (for internal) or up along
+    // the cylinder (for external — direction doesn't matter geometrically,
+    // we just need a stable progression).
+    gp_Dir helixDir = cylAxis.Direction();
+    if (helixDir.Z() > 0.0) helixDir = gp_Dir(-helixDir.X(), -helixDir.Y(), -helixDir.Z());
+
+    // Entry point: same projection rule as tap_thread.
+    const gp_Pnt& O = cylAxis.Location();
+    gp_Pnt entryPnt = O;
+    const double bdZ = cylAxis.Direction().Z();
+    if (std::abs(bdZ) > 1e-9) {
+        const double t = (zMax - O.Z()) / bdZ;
+        entryPnt = gp_Pnt(O.X() + t * cylAxis.Direction().X(),
+                          O.Y() + t * cylAxis.Direction().Y(),
+                          O.Z() + t * cylAxis.Direction().Z());
+    }
+
+    const gp_Ax1 helixAxis(entryPnt, helixDir);
+
+    TopoDS_Shape thread;
+    bool         geomSwept = true;
+    try {
+        if (gotAxis && datumRad > 0.0 && threadDepthV > 0.0) {
+            thread = pr::helicalSweep(helixAxis, pitch, helixLength,
+                                      datumRad, threadDepthV);
+        }
+    }
+    catch (const std::exception& e) {
+        spdlog::warn("thread_mill: helicalSweep threw ({}); leaving geometry unchanged",
+                     e.what());
+        thread.Nullify();
+        geomSwept = false;
+    }
+
+    TopoDS_Shape newShape = wp.shape();
+    if (!thread.IsNull()) {
+        try {
+            // Internal (cut) vs external (fuse).
+            newShape = in.is_external ? pr::fuse(wp.shape(), thread)
+                                      : pr::cut (wp.shape(), thread);
+        }
+        catch (const std::exception& e) {
+            spdlog::warn("thread_mill: boolean failed ({}); leaving workpiece unchanged",
+                         e.what());
+            newShape = wp.shape();
+            geomSwept = false;
+        }
+    } else {
+        geomSwept = false;
     }
 
     json params = {
@@ -104,7 +161,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "thread_depth_mm",   in.thread_depth_mm },
         { "is_external",       in.is_external },
         { "datum_diameter_mm", datumDia },
-        { "geometry",          "metadata_only" },
+        { "geometry",          geomSwept ? "helical_swept" : "metadata_only" },
     };
     ToolingMeta tooling;
     tooling.tool_type         = "thread_mill";
@@ -114,22 +171,32 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     tooling.flute_count       = 3;
     tooling.cutting_speed_sfm = 400.0;
     tooling.feed_per_tooth_mm = 0.02;
-    tooling.stock_removed_mm3 = 0.0;
+    {
+        const double triArea = 0.5 * threadDepthV * (in.pitch_mm * 0.5);
+        const double helLen  = (datumRad > 0.0)
+            ? 2.0 * M_PI * datumRad * (in.thread_depth_mm / in.pitch_mm)
+            : 0.0;
+        tooling.stock_removed_mm3 = triArea * helLen;
+    }
     tooling.est_cycle_time_s  = std::max(2.0, in.thread_depth_mm / 3.0);
 
     FeatureSignature sig{ kSkillId, params, pattern, tooling };
 
-    auto wpNew = std::make_shared<Workpiece>(wp.shape(), wp.material());
+    auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
     for (const auto& prev : wp.features()) wpNew->addFeature(prev);
     wpNew->addFeature(sig);
 
-    spdlog::debug("skill::thread_mill applied (metadata-only): {} pitch={} depth={} ext={}",
-                  in.thread_size, in.pitch_mm, in.thread_depth_mm, in.is_external);
+    spdlog::debug("skill::thread_mill applied: {} pitch={} depth={} ext={} geom={}",
+                  in.thread_size, in.pitch_mm, in.thread_depth_mm,
+                  in.is_external, geomSwept ? "swept" : "metadata");
 
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition (metadata-only) ──────────────────────────────────────────
+// ── Recognition ──────────────────────────────────────────────────────────
+//
+// As with tap_thread, geometric recognition of helical thread faces is
+// deferred to a future slice; today's recognize() replays metadata.
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {

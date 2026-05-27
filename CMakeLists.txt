@@ -99,6 +99,7 @@ add_subdirectory(src/process)
 add_subdirectory(src/adapt)
 add_subdirectory(src/re)
 add_subdirectory(src/cam)
+add_subdirectory(src/parts)
 
 # ── 메인 실행 파일 ────────────────────────────────────────────────────────
 add_executable(KooCADCAM src/main.cpp)  # WIN32 removed: keep console for log output
@@ -113,6 +114,7 @@ target_link_libraries(KooCADCAM PRIVATE
     koo_re
     koo_skills
     koo_cam
+    koo_parts
     Qt6::Core
     Qt6::Widgets
     Qt6::OpenGLWidgets

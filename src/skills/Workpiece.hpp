@@ -70,6 +70,10 @@ public:
 
     // ── Feature history ───────────────────────────────────────────────────
     void                                      addFeature(const FeatureSignature& s);
+    // Set the entire feature list (replaces existing features).  Used by
+    // the process Executor to mirror its accumulator into each step's output
+    // Workpiece, so wp.features() reflects the full chain history.
+    void                                      setFeatures(const std::vector<FeatureSignature>& fs);
     const std::vector<FeatureSignature>&      features() const { return m_features; }
 
 private:

@@ -1,6 +1,6 @@
 // @lat: [[process/test-strategy#skill round-trip]]
 //
-// engrave_path skill — spot-chain approximation tests.
+// engrave_path skill — polyline-offset cutter tests (slice 4).
 
 #include <gtest/gtest.h>
 

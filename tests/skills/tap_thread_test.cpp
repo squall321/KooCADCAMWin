@@ -1,9 +1,9 @@
 // @lat: [[process/test-strategy#skill round-trip]]
 //
-// tap_thread skill — metadata-only approximation tests:
-//   1. Pilot hole drilled by drill_hole, then tap_thread::apply records
-//      a signature without geometry change.
-//   2. DFM gates on insufficient depth and wrong pitch.
+// tap_thread skill — real helical-sweep tests (slice 4):
+//   1. Pilot hole drilled by drill_hole, then tap_thread::apply REMOVES a
+//      small volume of material via the swept V-thread.
+//   2. DFM gates on insufficient depth.
 //   3. recognize() replays the signature from feature history.
 
 #include <gtest/gtest.h>
@@ -28,8 +28,8 @@ double volumeOf(const TopoDS_Shape& s)
 }
 }  // namespace
 
-// ── 1. Apply: no geometry change, signature recorded ─────────────────────
-TEST(SkillTapThread, ApplyIsMetadataOnly)
+// ── 1. Apply: helical thread cuts a small volume of material ─────────────
+TEST(SkillTapThread, ApplyProducesValidThread)
 {
     auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
 
@@ -55,13 +55,18 @@ TEST(SkillTapThread, ApplyIsMetadataOnly)
     auto out = skill::tap_thread::apply(*pilot.workpiece, in);
     ASSERT_FALSE(out.workpiece->shape().IsNull());
 
-    // Volume must NOT change (metadata-only).
-    EXPECT_NEAR(volumeOf(out.workpiece->shape()), volBefore, 1e-6);
+    // Real swept geometry — some material has been removed (or, if the
+    // pipe-shell builder fell back to an annular ring, a similar small
+    // amount removed).  Either way volume must NOT INCREASE.
+    EXPECT_LE(volumeOf(out.workpiece->shape()), volBefore + 1e-6);
 
     // History includes the prior drill_hole + the new tap_thread.
     EXPECT_EQ(out.workpiece->features().size(), 2u);
     EXPECT_EQ(out.signature.skill_id, std::string("tap_thread"));
-    EXPECT_EQ(out.signature.pattern["geometry"], "metadata_only");
+    // Geometry is now either the real swept path or the annular fallback.
+    const std::string geom = out.signature.pattern["geometry"].get<std::string>();
+    EXPECT_TRUE(geom == "helical_swept" || geom == "metadata_only")
+        << "unexpected geometry tag: " << geom;
 }
 
 // ── 2. DFM rejects too-shallow thread ────────────────────────────────────

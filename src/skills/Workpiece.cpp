@@ -66,6 +66,11 @@ void Workpiece::addFeature(const FeatureSignature& s)
     m_features.push_back(s);
 }
 
+void Workpiece::setFeatures(const std::vector<FeatureSignature>& fs)
+{
+    m_features = fs;
+}
+
 // ── Face geometry ────────────────────────────────────────────────────────
 
 gp_Dir Workpiece::faceNormal(int face_id) const

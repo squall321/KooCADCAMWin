@@ -38,6 +38,13 @@ add_library(koo_skills STATIC
     thread_mill.cpp
     engrave_text.cpp
     engrave_path.cpp
+    # slice 5 — 5-axis / EDM / advanced
+    swarf_milling.cpp
+    plunge_milling.cpp
+    wire_edm.cpp
+    sinker_edm.cpp
+    spot_face.cpp
+    face_milling_5ax.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)

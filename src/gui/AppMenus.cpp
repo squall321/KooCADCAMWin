@@ -4,17 +4,29 @@
 #include "MainWindow.hpp"
 #include "OcctViewWidget.hpp"
 #include "ParameterPanel.hpp"
+#include "ProcessPlanEditor.hpp"
 
+#include <adapt/EditOp.hpp>
+#include <adapt/NaturalLanguageStub.hpp>
+#include <adapt/PlanEditor.hpp>
 #include <engine/PhoneFrontModel.hpp>
 #include <engine/PlaceholderCylinder.hpp>
 #include <engine/WatchFrontModel.hpp>
 #include <io/StepIO.hpp>
 #include <io/JsonSpec.hpp>
+#include <process/ProcessPlan.hpp>
+#include <process/StepInvocation.hpp>
+#include <re/Recognizer.hpp>
+#include <skills/Skill.hpp>
+#include <skills/Workpiece.hpp>
 
 #include <TopoDS_Shape.hxx>
 
 #include <QApplication>
+#include <QDockWidget>
 #include <QFileDialog>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -88,6 +100,39 @@ void AppMenus::install(QMenuBar* menuBar)
     QAction* actFit = viewMenu->addAction(tr("&Fit All"));
     actFit->setShortcut(QKeySequence("F"));
     connect(actFit, &QAction::triggered, this, &AppMenus::onFitAll);
+
+    // ── Plan menu (Layer 3 / 4 / 5 GUI) ──────────────────────────────────────
+    QMenu* planMenu = menuBar->addMenu(tr("&Plan"));
+
+    QAction* aShowEditor = new QAction(tr("Show Process Plan Editor"), this);
+    aShowEditor->setShortcut(QKeySequence("Ctrl+Shift+L"));
+    aShowEditor->setCheckable(true);
+    connect(aShowEditor, &QAction::triggered,
+            this, &AppMenus::onShowProcessPlanEditor);
+    planMenu->addAction(aShowEditor);
+    // Keep the toggle in sync with the dock's visibility (e.g. when the user
+    // closes the dock from its title bar X).
+    if (auto* dock = m_window->processPlanDock()) {
+        aShowEditor->setChecked(dock->isVisible());
+        connect(dock, &QDockWidget::visibilityChanged, aShowEditor,
+                [aShowEditor](bool visible) { aShowEditor->setChecked(visible); });
+    }
+
+    QAction* aRecognize = new QAction(tr("Recognize Current Shape"), this);
+    aRecognize->setShortcut(QKeySequence("Ctrl+R"));
+    connect(aRecognize, &QAction::triggered,
+            this, &AppMenus::onRecognizeCurrentShape);
+    planMenu->addAction(aRecognize);
+
+    QAction* aExecutePlan = new QAction(tr("Execute Plan from Editor"), this);
+    aExecutePlan->setShortcut(QKeySequence("Ctrl+E"));
+    connect(aExecutePlan, &QAction::triggered,
+            this, &AppMenus::onExecutePlanFromEditor);
+    planMenu->addAction(aExecutePlan);
+
+    QAction* aNlEdit = new QAction(tr("NL → EditOp (try stub)…"), this);
+    connect(aNlEdit, &QAction::triggered, this, &AppMenus::onNlToEditOpStub);
+    planMenu->addAction(aNlEdit);
 }
 
 void AppMenus::onNewSampleCylinder()
@@ -260,6 +305,115 @@ void AppMenus::onSaveWatchSpec()
     if (!koocadcam::io::JsonSpec::write(spec, path.toStdString(), err)) {
         QMessageBox::critical(m_window, tr("Save Watch Spec"),
                               tr("Failed to write spec:\n%1").arg(QString::fromStdString(err)));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layer 3 / 4 / 5 menu slots
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AppMenus::onShowProcessPlanEditor()
+{
+    QDockWidget* dock = m_window->processPlanDock();
+    if (!dock) return;
+    const bool show = !dock->isVisible();
+    dock->setVisible(show);
+    if (show) dock->raise();
+}
+
+void AppMenus::onRecognizeCurrentShape()
+{
+    const TopoDS_Shape shape = m_window->viewWidget()->currentShape();
+    if (shape.IsNull()) {
+        QMessageBox::information(m_window, tr("Recognize Current Shape"),
+                                 tr("Viewer has no shape — build or open something first."));
+        return;
+    }
+
+    try {
+        skill::Workpiece wp(shape);
+
+        // Run full pipeline: analyze → drop low-confidence → dedupe.  The
+        // candidate-count message uses the full analyze() result so the user
+        // sees the unfiltered scan size; the plan uses the inferred (filtered
+        // + ordered) plan instead.
+        auto candidates = re::analyze(wp);
+        auto plan       = re::inferProcessPlan(wp, /* min_confidence */ 0.7);
+
+        if (auto* editor = m_window->processPlanEditor()) {
+            editor->setPlan(plan);
+        }
+        if (auto* dock = m_window->processPlanDock()) {
+            dock->show();
+            dock->raise();
+        }
+
+        QMessageBox::information(
+            m_window,
+            tr("Recognize Current Shape"),
+            tr("Recognized %1 candidate feature(s); inferred %2 plan step(s).")
+                .arg(static_cast<int>(candidates.size()))
+                .arg(plan.size()));
+    } catch (const skill::SkillError& e) {
+        QMessageBox::warning(m_window, tr("Recognize Current Shape"),
+                             tr("SkillError: %1").arg(QString::fromUtf8(e.what())));
+    } catch (const std::exception& e) {
+        QMessageBox::critical(m_window, tr("Recognize Current Shape"),
+                              tr("Exception: %1").arg(QString::fromUtf8(e.what())));
+    }
+}
+
+void AppMenus::onExecutePlanFromEditor()
+{
+    auto* editor = m_window->processPlanEditor();
+    if (!editor) return;
+    process::ProcessPlan plan = editor->currentPlan();
+    if (plan.empty()) {
+        QMessageBox::information(m_window, tr("Execute Plan"),
+                                 tr("Plan editor is empty.  Add a step or run "
+                                    "Recognize Current Shape first."));
+        return;
+    }
+    // Delegate to MainWindow::onExecutePlan via the editor's signal so we
+    // share a single execution code path (stock creation + Executor + view
+    // push happens there).  TODO: stock-selection dialog.
+    emit editor->executeRequested(plan);
+}
+
+void AppMenus::onNlToEditOpStub()
+{
+    auto* editor = m_window->processPlanEditor();
+    if (!editor) return;
+
+    bool ok = false;
+    const QString text = QInputDialog::getText(
+        m_window,
+        tr("NL → EditOp (stub)"),
+        tr("Natural-language instruction:"),
+        QLineEdit::Normal,
+        QString(),
+        &ok);
+    if (!ok || text.trimmed().isEmpty()) return;
+
+    try {
+        process::ProcessPlan plan = editor->currentPlan();
+        adapt::EditOp op = adapt::stubNaturalLanguageToEditOp(
+            text.toStdString(), plan);
+        process::ProcessPlan newPlan = adapt::PlanEditor::apply(plan, op);
+        editor->setPlan(newPlan);
+        if (auto* dock = m_window->processPlanDock()) {
+            dock->show();
+            dock->raise();
+        }
+        m_window->statusBar()->showMessage(
+            tr("Applied NL stub edit (%1).").arg(adapt::editKindName(op.kind)),
+            4000);
+    } catch (const skill::SkillError& e) {
+        QMessageBox::warning(m_window, tr("NL → EditOp (stub)"),
+                             tr("SkillError: %1").arg(QString::fromUtf8(e.what())));
+    } catch (const std::exception& e) {
+        QMessageBox::critical(m_window, tr("NL → EditOp (stub)"),
+                              tr("Exception: %1").arg(QString::fromUtf8(e.what())));
     }
 }
 

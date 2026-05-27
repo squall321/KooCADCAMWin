@@ -1,42 +1,17 @@
 // @lat: [[engine/skills#engrave_path]]
 //
-// ─── APPROXIMATION NOTE (slice 2) ────────────────────────────────────────
+// engrave_path — engrave along an arbitrary 2D polyline on a face.
 //
-// A real engrave_path uses an offset wire derived from the waypoint
-// polyline, extruded down by depth_mm, then cut from the workpiece.  Doing
-// this cleanly requires:
-//
-//   MISSING PRIMITIVE:
-//       prim::offsetPolylineCutter(
-//           const std::vector<gp_Pnt2d>& waypoints,
-//           double                       channel_width_mm,
-//           double                       depth_mm,
-//           const gp_Pln&                base_plane);   // -> TopoDS_Shape
-//
-//   Internally: BRepBuilderAPI_MakeWire from the polyline → BRepOffsetAPI_
-//   MakeOffset for the channel width → BRepPrimAPI_MakePrism for the
-//   depth.  Plus end-cap rounding to match a real end-mill footprint.
-//
-//   Until that primitive lands, engrave_path::apply() walks the waypoint
-//   list and emits a chain of overlapping cylindrical "spot" cuts (one at
-//   each waypoint, plus interior samples spaced at width_mm/2 along each
-//   segment) — producing a connected groove without complex offsetting.
-//
-//   This sacrifices exact channel-edge fidelity but builds a valid solid
-//   that records the engrave-path intent.  Swap for the offset-wire
-//   primitive once it lands.
-//
-// ─────────────────────────────────────────────────────────────────────────
+// Slice 4: the body now delegates to `prim::offsetPolylineCutter`, which
+// builds a stadium-chain cutter (cylinder + box + cylinder per segment)
+// and fuses them into a single solid.  This replaces the inline overlapping
+// cylinder chain that previously lived in this file.
 
 #include "engrave_path.hpp"
 
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
-#include "engine/primitives/Tools.hpp"
-
-#include <gp.hxx>
-#include <gp_Ax2.hxx>
-#include <gp_Pnt.hxx>
+#include "engine/primitives/PolylineOffset.hpp"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -92,38 +67,17 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
     const double kOverhang = 0.02;
-    const double radius    = in.width_mm / 2.0;
-    const double cutterH   = in.depth_mm + kOverhang;
-    const double stride    = std::max(radius, 0.05);  // overlap to keep solid connected
 
-    auto addSpotAt = [&](std::vector<TopoDS_Shape>& sink, double x, double y) {
-        const gp_Pnt top(x, y, zMax + kOverhang);
-        const gp_Ax2 ax(top, gp_Dir(0.0, 0.0, -1.0));
-        sink.push_back(pr::cylinder(ax, radius, cutterH));
-    };
+    // Build the channel cutter via the primitive.  The cutter's top sits
+    // slightly above the workpiece top (by kOverhang) so the Boolean cut
+    // produces a clean entry; total cutter depth = depth_mm + kOverhang.
+    const TopoDS_Shape cutter = pr::offsetPolylineCutter(
+        in.waypoints,
+        in.width_mm,
+        in.depth_mm + kOverhang,
+        /*base_z=*/zMax + kOverhang);
 
-    std::vector<TopoDS_Shape> spots;
-    // Spot at every waypoint, plus interpolated samples on each segment.
-    for (size_t i = 0; i < in.waypoints.size(); ++i) {
-        const double x0 = in.waypoints[i][0];
-        const double y0 = in.waypoints[i][1];
-        addSpotAt(spots, x0, y0);
-
-        if (i + 1 < in.waypoints.size()) {
-            const double x1 = in.waypoints[i + 1][0];
-            const double y1 = in.waypoints[i + 1][1];
-            const double segLen = std::hypot(x1 - x0, y1 - y0);
-            if (segLen > stride) {
-                const int n = static_cast<int>(std::floor(segLen / stride));
-                for (int k = 1; k <= n; ++k) {
-                    const double t = static_cast<double>(k) / (n + 1);
-                    addSpotAt(spots, x0 + t * (x1 - x0), y0 + t * (y1 - y0));
-                }
-            }
-        }
-    }
-
-    const TopoDS_Shape newShape = pr::cutMany(wp.shape(), spots);
+    const TopoDS_Shape newShape = pr::cut(wp.shape(), cutter);
 
     // Serialize waypoints as a JSON array of [x, y] pairs.
     json wpJson = json::array();
@@ -140,7 +94,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "waypoint_count", in.waypoints.size() },
         { "width_mm",       in.width_mm },
         { "depth_mm",       in.depth_mm },
-        { "geometry",       "spot_chain_approximation" },
+        { "geometry",       "polyline_offset_cutter" },
     };
     ToolingMeta tooling;
     tooling.tool_type         = "v_cutter";
@@ -174,11 +128,10 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// Connected-channel recognition is hard without explicit metadata.
-// Approach:
-//   (a) Metadata replay — replay signatures in workpiece.features().
-//   (b) Without metadata: return empty (the spot chain is hard to
-//       distinguish from drill_hole patterns).
+// Connected-channel recognition without metadata is hard (would require
+// detecting a chain of overlapping cylinder/box faces and reconstructing
+// the polyline).  We rely on metadata replay; STEP round-trip workpieces
+// without history return an empty result.
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {

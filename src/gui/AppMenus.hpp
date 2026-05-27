@@ -27,6 +27,12 @@ private slots:
     void onNewPhoneRect();
     void onRenderFullDemoWatch();
 
+    // ── Layer 3/4/5 GUI ──────────────────────────────────────────────────
+    void onShowProcessPlanEditor();
+    void onRecognizeCurrentShape();
+    void onExecutePlanFromEditor();
+    void onNlToEditOpStub();
+
 private:
     MainWindow* m_window;
 };

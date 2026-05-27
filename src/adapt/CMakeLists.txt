@@ -4,6 +4,7 @@
 add_library(koo_adapt STATIC
     PlanEditor.cpp
     NaturalLanguageStub.cpp
+    LlmBridge.cpp
 )
 
 target_include_directories(koo_adapt PUBLIC ${CMAKE_SOURCE_DIR}/src)

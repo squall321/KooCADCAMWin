@@ -13,6 +13,7 @@ target_link_libraries(koo_engine
         TKPrim       # BRepPrimAPI_MakeCylinder/MakeBox
         TKFillet     # BRepFilletAPI_MakeFillet (+ ChFi3d_*)
         TKBO         # BRepAlgoAPI_Cut/Fuse (Boolean ops)
+        TKOffset     # BRepOffsetAPI_MakePipeShell (helical thread sweep)
         TKShHealing  # ShapeFix; BRepCheck_Analyzer ties pull these in
         nlohmann_json::nlohmann_json
     PRIVATE

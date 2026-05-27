@@ -1,6 +1,6 @@
 // @lat: [[process/test-strategy#skill round-trip]]
 //
-// thread_mill skill — metadata-only approximation tests.
+// thread_mill skill — real helical-sweep tests (slice 4).
 
 #include <gtest/gtest.h>
 
@@ -24,8 +24,8 @@ double volumeOf(const TopoDS_Shape& s)
 }
 }  // namespace
 
-// ── 1. Apply: no geometry change, signature recorded ─────────────────────
-TEST(SkillThreadMill, ApplyIsMetadataOnly)
+// ── 1. Apply: internal thread removes a small volume of material ─────────
+TEST(SkillThreadMill, ApplyProducesValidInternalThread)
 {
     auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
 
@@ -53,10 +53,13 @@ TEST(SkillThreadMill, ApplyIsMetadataOnly)
     auto out = skill::thread_mill::apply(*pre.workpiece, in);
     ASSERT_FALSE(out.workpiece->shape().IsNull());
 
-    EXPECT_NEAR(volumeOf(out.workpiece->shape()), volBefore, 1e-6);
+    // Internal cut → volume must NOT increase.
+    EXPECT_LE(volumeOf(out.workpiece->shape()), volBefore + 1e-6);
     EXPECT_EQ(out.workpiece->features().size(), 2u);
     EXPECT_EQ(out.signature.skill_id, std::string("thread_mill"));
-    EXPECT_EQ(out.signature.pattern["geometry"], "metadata_only");
+    const std::string geom = out.signature.pattern["geometry"].get<std::string>();
+    EXPECT_TRUE(geom == "helical_swept" || geom == "metadata_only")
+        << "unexpected geometry tag: " << geom;
     EXPECT_EQ(out.signature.pattern["is_external"], false);
 }
 

@@ -249,14 +249,10 @@ TEST(ProcessExecutor, ExecuteCompound)
     EXPECT_EQ(result.signatures[0].skill_id, "drill_hole");
     EXPECT_EQ(result.signatures[1].skill_id, "counterbore");
 
-    // TODO(slice-5 history propagation): each skill::apply() creates a fresh
-    // Workpiece via `std::make_shared<Workpiece>(newShape)` and adds only ITS
-    // own feature; prior history is NOT inherited.  The authoritative ordered
-    // history of an executed plan therefore lives in `result.signatures` (the
-    // Executor-level accumulator), not in `result.workpiece->features()`.
-    // To unify these, add `Workpiece::setFeatures(vector<FeatureSignature>)`
-    // and have Executor mirror its accumulator into each step's output WP.
-    EXPECT_GE(result.workpiece->features().size(), 1u);
+    // The Executor mirrors its signatures accumulator into each step's
+    // output Workpiece via setFeatures(), so wp.features() reflects the full
+    // chain history.
+    EXPECT_EQ(result.workpiece->features().size(), 2u);
 }
 
 // ─── 6. (bonus) Unknown skill_id → failedAtStep set, partial wp preserved ─
@@ -276,4 +272,104 @@ TEST(ProcessExecutor, UnknownSkillFailsCleanly)
     EXPECT_EQ(result.failedAtStep, 1);
     EXPECT_EQ(result.signatures.size(), 1u);   // step 0 succeeded
     ASSERT_TRUE(result.workpiece != nullptr);  // partial workpiece preserved
+}
+
+// ─── 7. ExecuteAllSkillCategories ────────────────────────────────────────
+//
+// Smoke test for the expanded dispatch table (slice-2): exercise FIVE distinct
+// skill categories in a single plan to confirm each is wired up correctly and
+// that the full chain history propagates via Workpiece::setFeatures().
+//
+// Categories covered:
+//   1. face_milling             (subtractive — planar skim, first so all
+//                                later operations work off the trimmed top)
+//   2. chamfer_edge             (additive bevel on the bottom rim, Z = 0)
+//   3. fillet_edge              (additive blend on the post-skim top rim)
+//   4. drill_hole               (subtractive — drill after rim is filleted)
+//   5. mill_circular_pocket     (subtractive — pocket on far side)
+//
+// We intentionally use simple, well-separated geometry so no skill rejects
+// its input (entry_face resolves, fillet edges exist, etc.).
+TEST(ProcessExecutor, ExecuteAllSkillCategories)
+{
+    auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);
+    ASSERT_TRUE(stock != nullptr);
+
+    process::ProcessPlan plan;
+
+    // 1) face_milling — skim 0.5 mm off the top.  Done FIRST so subsequent
+    //    drill / pocket / fillet work on a clean planar top at Z = 14.5.
+    process::StepInvocation fm;
+    fm.skill_id = "face_milling";
+    fm.params = {
+        { "entry_face", "top" },
+        { "depth_mm",   0.5 },
+    };
+    plan.append(fm);
+
+    // 2) chamfer_edge — bevel the bottom rim at Z = 0 BEFORE any drilling
+    //    or pocketing so we know the 4 bottom edges are unmodified.
+    process::StepInvocation ce;
+    ce.skill_id = "chamfer_edge";
+    ce.params = {
+        { "edges_at_z_mm",  0.0 },
+        { "tolerance_mm",   0.05 },
+        { "chamfer_size_mm", 0.5 },
+        { "angle_deg",      45.0 },
+    };
+    plan.append(ce);
+
+    // 3) fillet_edge — round the top-rim outline at the post-skim Z = 14.5
+    //    BEFORE drilling, so only the outer 4 rim edges are filleted (no
+    //    interior drill rim to confuse the fillet builder).
+    process::StepInvocation fe;
+    fe.skill_id = "fillet_edge";
+    fe.params = {
+        { "edges_at_z_mm", 14.5 },
+        { "tolerance_mm",  0.05 },
+        { "radius_mm",     0.5 },
+    };
+    plan.append(fe);
+
+    // 4) drill_hole — small hole, well clear of the rim, after fillet to
+    //    keep the rim edges out of the way.
+    process::StepInvocation dh;
+    dh.skill_id = "drill_hole";
+    dh.params = {
+        { "entry_face",     "top" },
+        { "position_x_mm",  20.0 },
+        { "position_y_mm",  20.0 },
+        { "diameter_mm",    4.0 },
+        { "depth_mm",       6.0 },
+        { "through_hole",   false },
+    };
+    plan.append(dh);
+
+    // 5) mill_circular_pocket — wide pocket on the far side.
+    process::StepInvocation mcp;
+    mcp.skill_id = "mill_circular_pocket";
+    mcp.params = {
+        { "entry_face",    "top" },
+        { "position_x_mm", 60.0 },
+        { "position_y_mm", 60.0 },
+        { "diameter_mm",   8.0 },
+        { "depth_mm",      3.0 },
+    };
+    plan.append(mcp);
+
+    auto result = process::Executor::execute(plan, stock);
+    ASSERT_TRUE(result.ok())
+        << "errors=" << (result.errors.empty() ? "<none>" : result.errors[0]);
+    EXPECT_EQ(result.failedAtStep, -1);
+    ASSERT_EQ(result.signatures.size(), 5u);
+    ASSERT_TRUE(result.workpiece != nullptr);
+
+    // Full history is mirrored into the final workpiece's feature list.
+    EXPECT_EQ(result.workpiece->features().size(), 5u);
+
+    EXPECT_EQ(result.signatures[0].skill_id, "face_milling");
+    EXPECT_EQ(result.signatures[1].skill_id, "chamfer_edge");
+    EXPECT_EQ(result.signatures[2].skill_id, "fillet_edge");
+    EXPECT_EQ(result.signatures[3].skill_id, "drill_hole");
+    EXPECT_EQ(result.signatures[4].skill_id, "mill_circular_pocket");
 }

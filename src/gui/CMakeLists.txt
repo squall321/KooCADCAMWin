@@ -4,6 +4,7 @@ add_library(koo_gui STATIC
     OcctViewWidget.cpp
     AppMenus.cpp
     ParameterPanel.cpp
+    ProcessPlanEditor.cpp
     occt/OcctGlTools.cpp     # MIT — Kirill Gavrilov 2023, see licenses/OcctGlTools_MIT.txt
 )
 target_include_directories(koo_gui PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -18,6 +19,10 @@ target_link_libraries(koo_gui
     PRIVATE
         koo_engine
         koo_io
+        koo_skills
+        koo_process
+        koo_re
+        koo_adapt
         spdlog::spdlog
 )
 

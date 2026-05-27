@@ -115,6 +115,20 @@ koo_add_skill_test(thread_mill)
 koo_add_skill_test(engrave_text)
 koo_add_skill_test(engrave_path)
 
+# ── Engine primitive unit tests (slice 4 — helical sweep, polyline offset) ─
+macro(koo_add_primitive_test name)
+    add_executable(prim_${name}_test engine/primitives/${name}_test.cpp)
+    target_link_libraries(prim_${name}_test PRIVATE
+        GTest::gtest GTest::gtest_main koo_engine)
+    target_include_directories(prim_${name}_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+    koo_apply_compiler_flags(prim_${name}_test)
+    add_test(NAME prim_${name} COMMAND prim_${name}_test)
+    set_tests_properties(prim_${name} PROPERTIES TIMEOUT 60)
+endmacro()
+
+koo_add_primitive_test(helical_sweep)
+koo_add_primitive_test(polyline_offset)
+
 # ── Layer 3 ProcessPlan + Executor tests ──────────────────────
 add_executable(process_plan_test process/process_plan_test.cpp)
 target_link_libraries(process_plan_test PRIVATE
@@ -141,6 +155,33 @@ target_include_directories(plan_editor_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE
 koo_apply_compiler_flags(plan_editor_test)
 add_test(NAME plan_editor COMMAND plan_editor_test)
 set_tests_properties(plan_editor PROPERTIES TIMEOUT 60)
+
+# ── Layer 5 LlmBridge tests ───────────────────────────────────
+add_executable(llm_bridge_test adapt/llm_bridge_test.cpp)
+target_link_libraries(llm_bridge_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_adapt
+    koo_process
+    koo_skills
+    koo_engine
+)
+target_include_directories(llm_bridge_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(llm_bridge_test)
+add_test(NAME llm_bridge COMMAND llm_bridge_test)
+set_tests_properties(llm_bridge PROPERTIES TIMEOUT 30)
+
+# ── Layer 6 CAM toolpath + collision-check tests ──────────────
+add_executable(cam_test cam/cam_test.cpp)
+target_link_libraries(cam_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_cam
+    koo_skills
+    koo_engine
+)
+target_include_directories(cam_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(cam_test)
+add_test(NAME cam COMMAND cam_test)
+set_tests_properties(cam PROPERTIES TIMEOUT 60)
 
 # ── Layer 4 RE / Recognizer tests ─────────────────────────────
 add_executable(recognizer_test re/recognizer_test.cpp)
@@ -184,3 +225,30 @@ set_tests_properties(json_spec PROPERTIES
     TIMEOUT 30
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
+
+# ── Integration: watch built as a skill::ProcessPlan ──────────
+# Deliverable 1 — synthesise a round watch case using only the 8 skills
+# registered in the Executor dispatch table.  Verifies bbox/volume/
+# BRepCheck on the resulting workpiece.
+add_executable(integration_watch integration/watch_as_skill_sequence_test.cpp)
+target_link_libraries(integration_watch PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills koo_process koo_re koo_io koo_engine)
+target_include_directories(integration_watch SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(integration_watch)
+add_test(NAME integration_watch COMMAND integration_watch)
+set_tests_properties(integration_watch PROPERTIES TIMEOUT 120)
+
+# ── Integration: full RE round-trip on watch workpiece ────────
+# Deliverable 2 — stock → exec → STEP → exec → analyze → inferPlan →
+# exec; verifies the inferred plan's skill set & bbox/volume close the
+# bidirectional loop on a watch-style cylindrical workpiece.
+add_executable(integration_watch_re_roundtrip
+    integration/watch_re_roundtrip_test.cpp)
+target_link_libraries(integration_watch_re_roundtrip PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills koo_process koo_re koo_io koo_adapt koo_engine)
+target_include_directories(integration_watch_re_roundtrip SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(integration_watch_re_roundtrip)
+add_test(NAME integration_watch_re_roundtrip COMMAND integration_watch_re_roundtrip)
+set_tests_properties(integration_watch_re_roundtrip PROPERTIES TIMEOUT 180)
