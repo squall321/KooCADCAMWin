@@ -115,6 +115,47 @@ koo_add_skill_test(thread_mill)
 koo_add_skill_test(engrave_text)
 koo_add_skill_test(engrave_path)
 
+# ── Layer 3 ProcessPlan + Executor tests ──────────────────────
+add_executable(process_plan_test process/process_plan_test.cpp)
+target_link_libraries(process_plan_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_process
+    koo_skills
+    koo_engine
+)
+target_include_directories(process_plan_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(process_plan_test)
+add_test(NAME process_plan COMMAND process_plan_test)
+set_tests_properties(process_plan PROPERTIES TIMEOUT 60)
+
+# ── Layer 5 LLM adapter / PlanEditor tests ────────────────────
+add_executable(plan_editor_test adapt/plan_editor_test.cpp)
+target_link_libraries(plan_editor_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_adapt
+    koo_process
+    koo_skills
+    koo_engine
+)
+target_include_directories(plan_editor_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(plan_editor_test)
+add_test(NAME plan_editor COMMAND plan_editor_test)
+set_tests_properties(plan_editor PROPERTIES TIMEOUT 60)
+
+# ── Layer 4 RE / Recognizer tests ─────────────────────────────
+add_executable(recognizer_test re/recognizer_test.cpp)
+target_link_libraries(recognizer_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_re
+    koo_process
+    koo_skills
+    koo_engine
+)
+target_include_directories(recognizer_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(recognizer_test)
+add_test(NAME recognizer COMMAND recognizer_test)
+set_tests_properties(recognizer PROPERTIES TIMEOUT 60)
+
 # ── Phone parametric build test (M2-phase-1) ──────────────────
 add_executable(phone_test phone/phone_test.cpp)
 target_link_libraries(phone_test PRIVATE

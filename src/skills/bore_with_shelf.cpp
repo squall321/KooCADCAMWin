@@ -18,6 +18,7 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Pln.hxx>
 
 #include <limits>
 
@@ -228,6 +229,34 @@ struct CylInfo {
     gp_Pnt bottomCenter;    // circle center toward material interior
 };
 
+// Geometric matcher: locate `af` in the workpiece's face enumeration by
+// matching its plane (parallel normal + coincident point) — NOT by IsSame()
+// TShape identity, which breaks after STEP round-trip.
+int findPlanarFaceIndex(const Workpiece& wp, const TopoDS_Face& af)
+{
+    BRepAdaptor_Surface as(af);
+    if (as.GetType() != GeomAbs_Plane) return -1;
+    const gp_Pln plnA = as.Plane();
+    const gp_Dir nA   = plnA.Axis().Direction();
+    const gp_Pnt pA   = plnA.Location();
+
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        BRepAdaptor_Surface bs(wp.face(i));
+        const gp_Pln plnB = bs.Plane();
+        const gp_Dir nB   = plnB.Axis().Direction();
+        if (std::abs(std::abs(nA.Dot(nB)) - 1.0) > 1e-4) continue;
+        const gp_Pnt pB = plnB.Location();
+        const double dx = pA.X() - pB.X();
+        const double dy = pA.Y() - pB.Y();
+        const double dz = pA.Z() - pB.Z();
+        const double dist = std::abs(dx * nB.X() + dy * nB.Y() + dz * nB.Z());
+        if (dist > 1e-3) continue;
+        return i;
+    }
+    return -1;
+}
+
 }  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
@@ -364,14 +393,14 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                         const TopoDS_Face& af = TopoDS::Face(it.Value());
                         if (af.IsSame(faceA)) continue;
                         if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
-                        // Find this same face in WP enumeration
-                        for (int k = 0; k < wp.faceCount(); ++k) {
-                            if (wp.face(k).IsSame(af)) {
-                                annularShelfFaceId = k;
-                                break;
-                            }
+                        // Geometric match — robust to STEP round-trip
+                        // (which preserves geometry but invalidates IsSame
+                        // TShape identity).
+                        const int k = findPlanarFaceIndex(wp, af);
+                        if (k >= 0) {
+                            annularShelfFaceId = k;
+                            break;
                         }
-                        if (annularShelfFaceId >= 0) break;
                     }
                     if (annularShelfFaceId >= 0) break;
                 }

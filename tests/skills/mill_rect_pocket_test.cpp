@@ -72,13 +72,13 @@ TEST(SkillMillRectPocket, RecognizeFinds)
     EXPECT_NEAR(cands[0].recovered_params["depth_mm"].get<double>(),     3.0, 0.1);
 }
 
-// TODO(slice-3 recognize hardening): the 4-corner-fillet pattern recognizer
-// requires `IsSame()` face identity between MapShapesAndAncestors output and
-// the workpiece's MapShapes enumeration.  STEP round-trip re-creates faces
-// with different OCCT TShape handles, breaking the identity match and
-// returning zero candidates.  Re-enable after the recognizer is rewritten
-// to match by geometric attributes (face normal + Z range + cylinder axis)
-// rather than face-handle identity.
+// TODO(slice-5 deeper RE): the planar-face matcher was hardened to use plane
+// normal + point coincidence instead of TShape IsSame(), but STEP export/
+// import also reshuffles the 4 corner-cylinder face decomposition (some
+// implementations merge cylindrical micro-faces into the adjacent planar
+// walls).  The recognizer needs CYLINDRICAL-face geometric matching too,
+// and possibly tolerance widening for plane-coincidence.  Re-enable after
+// that improvement.
 TEST(SkillMillRectPocket, DISABLED_RoundTripViaStep)
 {
     auto stock = skill::createCuboidStock(60.0, 40.0, 10.0);

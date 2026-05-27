@@ -14,6 +14,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <gp_Pln.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -216,6 +217,33 @@ double angleBetweenDir(const gp_Dir& a, const gp_Dir& b)
     return std::acos(dot) * 180.0 / M_PI;
 }
 
+// Geometric matcher for planar faces.  STEP round-trip safe — relies on
+// plane normal + point coincidence instead of IsSame() TShape identity.
+int findPlanarFaceIndex(const Workpiece& wp, const TopoDS_Face& af)
+{
+    BRepAdaptor_Surface as(af);
+    if (as.GetType() != GeomAbs_Plane) return -1;
+    const gp_Pln plnA = as.Plane();
+    const gp_Dir nA   = plnA.Axis().Direction();
+    const gp_Pnt pA   = plnA.Location();
+
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        BRepAdaptor_Surface bs(wp.face(i));
+        const gp_Pln plnB = bs.Plane();
+        const gp_Dir nB   = plnB.Axis().Direction();
+        if (std::abs(std::abs(nA.Dot(nB)) - 1.0) > 1e-4) continue;
+        const gp_Pnt pB = plnB.Location();
+        const double dx = pA.X() - pB.X();
+        const double dy = pA.Y() - pB.Y();
+        const double dz = pA.Z() - pB.Z();
+        const double dist = std::abs(dx * nB.X() + dy * nB.Y() + dz * nB.Z());
+        if (dist > 1e-3) continue;
+        return i;
+    }
+    return -1;
+}
+
 }  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
@@ -240,11 +268,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         }
     }
 
-    // Build face-index → TopoDS_Face map (for matching against edgeFaces values).
+    // Build face-index lookup via geometric attribute matching (STEP round-
+    // trip safe — IsSame TShape identity breaks after STEP export/import).
     auto faceIndex = [&](const TopoDS_Face& f) -> int {
-        for (int i = 0; i < wp.faceCount(); ++i)
-            if (wp.face(i).IsSame(f)) return i;
-        return -1;
+        return findPlanarFaceIndex(wp, f);
     };
 
     std::vector<int> chamferCandidates;

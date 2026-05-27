@@ -1,0 +1,82 @@
+#pragma once
+// @lat: [[engine/skills#Layer 3 Executor]]
+//
+// Executor — runs a ProcessPlan against an initial Workpiece.
+//
+// Slice-1 semantics:
+//   - Strictly sequential.  steps[i] sees the Workpiece produced by
+//     steps[i-1]; the depends_on field is recorded but not enforced.
+//   - Errors short-circuit.  On any thrown SkillError (or unknown skill_id,
+//     or JSON-parse failure), execution stops and ExecutionResult.workpiece
+//     points at the partial result *just before* the failing step (i.e.
+//     the output of the last successful step, or the initial workpiece if
+//     step 0 failed).
+//   - ExecutionResult.signatures collects the FeatureSignature produced by
+//     each successful step (in order).
+//
+// Skill dispatch:
+//   Each slice-1 skill_id is registered in a static unordered_map keyed by
+//   the skill_id string.  Each entry's value is a lambda that parses the
+//   JSON params into the skill's Input struct and calls the skill's
+//   apply().  See registerDefaultSkills() in Executor.cpp for the table.
+//
+// Adding a new skill:
+//   1. Implement the JSON→Input parser (see parsers in Executor.cpp).
+//   2. Add one line to registerDefaultSkills() linking the skill_id to a
+//      lambda that does { Input in = parseFoo(j); return foo::apply(wp, in); }.
+
+#include "ProcessPlan.hpp"
+#include "skills/Skill.hpp"
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace koocadcam::skill { class Workpiece; }
+
+namespace koocadcam::process {
+
+struct ExecutionResult
+{
+    // The workpiece after the last successfully applied step.  If the very
+    // first step failed, this is the initial workpiece passed in.
+    std::shared_ptr<skill::Workpiece>     workpiece;
+
+    // FeatureSignatures from successful steps (size == failedAtStep if any
+    // step failed, else == plan.size()).
+    std::vector<skill::FeatureSignature>  signatures;
+
+    // Empty on full success.  On failure, contains one message per error
+    // encountered (typically just one — execution short-circuits).
+    std::vector<std::string>              errors;
+
+    // -1 if all steps succeeded; otherwise the zero-based index of the
+    // step at which execution stopped.
+    int                                   failedAtStep = -1;
+
+    bool ok() const { return errors.empty() && failedAtStep == -1; }
+};
+
+class Executor
+{
+public:
+    // Run `plan` starting from `initial_workpiece` and return the result.
+    //
+    // initial_workpiece must be non-null.  If a skill_id is not in the
+    // dispatch table, the step fails immediately and the partial result
+    // (last good workpiece) is returned.
+    static ExecutionResult execute(const ProcessPlan& plan,
+                                   std::shared_ptr<skill::Workpiece> initial_workpiece);
+
+    // Dispatcher type: parses params JSON and applies the skill.
+    using SkillFn = std::function<skill::SkillOutput(const skill::Workpiece&,
+                                                     const nlohmann::json&)>;
+
+    // Returns the (singleton) dispatch table, populated lazily.
+    // Exposed for tests / introspection.
+    static const std::unordered_map<std::string, SkillFn>& dispatchTable();
+};
+
+}  // namespace koocadcam::process

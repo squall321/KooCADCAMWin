@@ -95,6 +95,8 @@ add_subdirectory(src/engine)
 add_subdirectory(src/skills)
 add_subdirectory(src/io)
 add_subdirectory(src/dfm)
+add_subdirectory(src/process)
+add_subdirectory(src/adapt)
 add_subdirectory(src/re)
 add_subdirectory(src/cam)
 
@@ -106,7 +108,10 @@ target_link_libraries(KooCADCAM PRIVATE
     koo_engine
     koo_io
     koo_dfm
+    koo_process
+    koo_adapt
     koo_re
+    koo_skills
     koo_cam
     Qt6::Core
     Qt6::Widgets

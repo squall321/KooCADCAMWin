@@ -19,8 +19,10 @@
 #include <TopoDS.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Torus.hxx>
 #include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
@@ -171,6 +173,86 @@ double angleBetweenDir(const gp_Dir& a, const gp_Dir& b)
     return std::acos(dot) * 180.0 / M_PI;
 }
 
+// Geometric face matcher: locate the workpiece face whose surface coincides
+// with `af`'s (plane / cylinder / torus).  STEP round-trip safe — does not
+// rely on IsSame() TShape identity.
+int findFaceIndexGeom(const Workpiece& wp, const TopoDS_Face& af)
+{
+    BRepAdaptor_Surface as(af);
+    const GeomAbs_SurfaceType ta = as.GetType();
+
+    if (ta == GeomAbs_Plane) {
+        const gp_Pln plnA = as.Plane();
+        const gp_Dir nA   = plnA.Axis().Direction();
+        const gp_Pnt pA   = plnA.Location();
+        for (int i = 0; i < wp.faceCount(); ++i) {
+            if (!wp.isFacePlanar(i)) continue;
+            BRepAdaptor_Surface bs(wp.face(i));
+            const gp_Pln plnB = bs.Plane();
+            const gp_Dir nB   = plnB.Axis().Direction();
+            if (std::abs(std::abs(nA.Dot(nB)) - 1.0) > 1e-4) continue;
+            const gp_Pnt pB = plnB.Location();
+            const double dx = pA.X() - pB.X();
+            const double dy = pA.Y() - pB.Y();
+            const double dz = pA.Z() - pB.Z();
+            const double dist = std::abs(dx * nB.X() + dy * nB.Y() + dz * nB.Z());
+            if (dist > 1e-3) continue;
+            return i;
+        }
+        return -1;
+    }
+    if (ta == GeomAbs_Cylinder) {
+        const gp_Cylinder cA = as.Cylinder();
+        const gp_Ax1 axA     = cA.Axis();
+        const gp_Pnt pA      = axA.Location();
+        const gp_Dir dA      = axA.Direction();
+        const double rA      = cA.Radius();
+        for (int i = 0; i < wp.faceCount(); ++i) {
+            if (!wp.isFaceCylinder(i)) continue;
+            BRepAdaptor_Surface bs(wp.face(i));
+            const gp_Cylinder cB = bs.Cylinder();
+            const gp_Ax1 axB     = cB.Axis();
+            if (std::abs(cB.Radius() - rA) > 1e-3) continue;
+            if (std::abs(std::abs(dA.Dot(axB.Direction())) - 1.0) > 1e-4) continue;
+            // Distance from pA to line axB must be ~ 0 (concentric axes).
+            const gp_Pnt pB = axB.Location();
+            const gp_Vec v(pB, pA);
+            const gp_Vec axDir(axB.Direction());
+            const gp_Vec perp = v - axDir * v.Dot(axDir);
+            if (perp.Magnitude() > 1e-3) continue;
+            return i;
+        }
+        return -1;
+    }
+    if (ta == GeomAbs_Torus) {
+        const gp_Torus tA = as.Torus();
+        const gp_Ax1 axA  = tA.Axis();
+        const gp_Pnt pA   = axA.Location();
+        const gp_Dir dA   = axA.Direction();
+        const double majA = tA.MajorRadius();
+        const double minA = tA.MinorRadius();
+        for (int i = 0; i < wp.faceCount(); ++i) {
+            BRepAdaptor_Surface bs(wp.face(i));
+            if (bs.GetType() != GeomAbs_Torus) continue;
+            const gp_Torus tB = bs.Torus();
+            if (std::abs(tB.MajorRadius() - majA) > 1e-3) continue;
+            if (std::abs(tB.MinorRadius() - minA) > 1e-3) continue;
+            const gp_Ax1 axB = tB.Axis();
+            if (std::abs(std::abs(dA.Dot(axB.Direction())) - 1.0) > 1e-4) continue;
+            const gp_Pnt pB = axB.Location();
+            if (pA.Distance(pB) > 1e-3) continue;
+            return i;
+        }
+        return -1;
+    }
+    // Other surface types (sphere/cone/bspline) — not currently needed by
+    // any skill's recognizer.  Fall back to IsSame as a best-effort.
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (wp.face(i).IsSame(af)) return i;
+    }
+    return -1;
+}
+
 }  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
@@ -183,9 +265,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     // feature is actually mill_slot / mill_rect_pocket.
 
     auto faceIndex = [&](const TopoDS_Face& f) -> int {
-        for (int i = 0; i < wp.faceCount(); ++i)
-            if (wp.face(i).IsSame(f)) return i;
-        return -1;
+        return findFaceIndexGeom(wp, f);
     };
 
     // For each candidate "bottom" (horizontal-normal planar face that is NOT

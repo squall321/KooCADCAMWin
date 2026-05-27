@@ -18,6 +18,7 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Pln.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -165,6 +166,38 @@ EdgeFaceMap buildEdgeFaceMap(const TopoDS_Shape& shape)
 
 }  // namespace
 
+// Geometric-attribute matcher: find the workpiece-face index whose plane
+// matches `af`'s plane (parallel normal + coincident point) within tolerance.
+// Robust against STEP round-trip, which preserves geometry but breaks the
+// TShape handle identity that IsSame() relies on.
+static int findPlanarFaceIndex(const Workpiece& wp, const TopoDS_Face& af)
+{
+    BRepAdaptor_Surface as(af);
+    if (as.GetType() != GeomAbs_Plane) return -1;
+    const gp_Pln plnA = as.Plane();
+    const gp_Dir nA   = plnA.Axis().Direction();
+    const gp_Pnt pA   = plnA.Location();
+
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        BRepAdaptor_Surface bs(wp.face(i));
+        const gp_Pln plnB = bs.Plane();
+        const gp_Dir nB   = plnB.Axis().Direction();
+        // Normals parallel (allow either orientation — the underlying plane
+        // is the same regardless of face orientation).
+        if (std::abs(std::abs(nA.Dot(nB)) - 1.0) > 1e-4) continue;
+        // The candidate point pA must lie on plane B.
+        const gp_Pnt pB = plnB.Location();
+        const double dx = pA.X() - pB.X();
+        const double dy = pA.Y() - pB.Y();
+        const double dz = pA.Z() - pB.Z();
+        const double dist = std::abs(dx * nB.X() + dy * nB.Y() + dz * nB.Z());
+        if (dist > 1e-3) continue;
+        return i;
+    }
+    return -1;
+}
+
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
@@ -211,10 +244,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                 const TopoDS_Face& af = TopoDS::Face(it.Value());
                 if (af.IsSame(cf)) continue;
                 if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
-                // Find this face's index in the workpiece
-                for (int i = 0; i < wp.faceCount(); ++i) {
-                    if (wp.face(i).IsSame(af)) { bottomFaceIdx = i; break; }
-                }
+                // Match `af` to a workpiece face by geometric attributes,
+                // not by IsSame() (STEP round-trip preserves geometry but
+                // creates fresh TShape handles → IsSame fails).
+                const int idx = findPlanarFaceIndex(wp, af);
+                if (idx >= 0) { bottomFaceIdx = idx; }
             }
         }
         if (bottomFaceIdx < 0) continue;
