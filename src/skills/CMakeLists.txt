@@ -5,6 +5,17 @@ add_library(koo_skills STATIC
     Workpiece.cpp
     Stock.cpp
     drill_hole.cpp
+    counterbore.cpp
+    countersink.cpp
+    mill_circular_pocket.cpp
+    mill_rect_pocket.cpp
+    mill_slot.cpp
+    fillet_edge.cpp
+    chamfer_edge.cpp
+    face_milling.cpp
+    bore_cylindrical.cpp
+    bore_with_shelf.cpp
+    hollow_cavity.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)

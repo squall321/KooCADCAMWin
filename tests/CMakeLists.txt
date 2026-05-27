@@ -73,18 +73,30 @@ set_tests_properties(watch_features PROPERTIES
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
 
-# ── Skill drill_hole round-trip test (slice 1) ────────────────
-add_executable(skill_drill_hole_test skills/drill_hole_test.cpp)
-target_link_libraries(skill_drill_hole_test PRIVATE
-    GTest::gtest GTest::gtest_main
-    koo_skills
-    koo_engine
-    koo_io
-)
-target_include_directories(skill_drill_hole_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-koo_apply_compiler_flags(skill_drill_hole_test)
-add_test(NAME skill_drill_hole COMMAND skill_drill_hole_test)
-set_tests_properties(skill_drill_hole PROPERTIES TIMEOUT 60)
+# ── Skill round-trip tests (slice 1 + slice 2) ────────────────
+# Helper macro to keep entries terse.
+macro(koo_add_skill_test name)
+    add_executable(skill_${name}_test skills/${name}_test.cpp)
+    target_link_libraries(skill_${name}_test PRIVATE
+        GTest::gtest GTest::gtest_main koo_skills koo_engine koo_io)
+    target_include_directories(skill_${name}_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+    koo_apply_compiler_flags(skill_${name}_test)
+    add_test(NAME skill_${name} COMMAND skill_${name}_test)
+    set_tests_properties(skill_${name} PROPERTIES TIMEOUT 60)
+endmacro()
+
+koo_add_skill_test(drill_hole)
+koo_add_skill_test(counterbore)
+koo_add_skill_test(countersink)
+koo_add_skill_test(mill_circular_pocket)
+koo_add_skill_test(mill_rect_pocket)
+koo_add_skill_test(mill_slot)
+koo_add_skill_test(fillet_edge)
+koo_add_skill_test(chamfer_edge)
+koo_add_skill_test(face_milling)
+koo_add_skill_test(bore_cylindrical)
+koo_add_skill_test(bore_with_shelf)
+koo_add_skill_test(hollow_cavity)
 
 # ── Phone parametric build test (M2-phase-1) ──────────────────
 add_executable(phone_test phone/phone_test.cpp)
