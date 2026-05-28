@@ -1026,6 +1026,101 @@ DFMReport WatchFrontModel::runDFM(const TopoDS_Shape& shape,
         checkSpan("thickness_mm");
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    //  M1.5 expansion: bbox / topology summary rules (see [[engine/dfm-rules]])
+    // ══════════════════════════════════════════════════════════════════
+
+    // ── DFM-005: max bbox aspect ratio ≤ 10 (fixture-impossible parts) ─
+    try {
+        const auto bb = pr::optimalBbox(shape);
+        const double dx = bb.dx(), dy = bb.dy(), dz = bb.dz();
+        const double maxExt = std::max({ dx, dy, dz });
+        const double minExt = std::min({ dx, dy, dz });
+        if (minExt > 1e-9) {
+            const double aspect = maxExt / minExt;
+            if (aspect > 10.0) {
+                addFinding("DFM-005", "warning",
+                    "bbox aspect ratio " + std::to_string(aspect) +
+                    " > 10 (max/min = " + std::to_string(maxExt) + "/" +
+                    std::to_string(minExt) + ") — fixture-impossible");
+            } else {
+                addFinding("DFM-005", "info",
+                    "bbox aspect ratio " + std::to_string(aspect) +
+                    " within limit (10)");
+            }
+        }
+    } catch (...) { /* skip on bbox failure */ }
+
+    // ── DFM-007: max single-face area ≤ 5 × bbox-min-extent² ───────────
+    try {
+        const auto bb = pr::optimalBbox(shape);
+        const double minExt = std::min({ bb.dx(), bb.dy(), bb.dz() });
+        const double areaLimit = 5.0 * minExt * minExt;
+        double maxArea = 0.0;
+        for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+            try {
+                GProp_GProps props;
+                BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+                const double a = props.Mass();
+                if (a > maxArea) maxArea = a;
+            } catch (...) { /* skip degenerate face */ }
+        }
+        if (maxArea > areaLimit && areaLimit > 0.0) {
+            addFinding("DFM-007", "error",
+                "max face area " + std::to_string(maxArea) +
+                " mm² > limit " + std::to_string(areaLimit) +
+                " mm² (5 × min-extent²) — likely broken boolean");
+        }
+    } catch (...) { /* skip */ }
+
+    // ── DFM-012: face count ≤ 200 (info only; high counts are suspicious) ─
+    try {
+        std::size_t faceCount = 0;
+        for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next())
+            ++faceCount;
+        addFinding("DFM-012", "info",
+            "face count = " + std::to_string(faceCount) +
+            (faceCount > 200
+                ? " (> 200 — suspicious for a watch frame)"
+                : " (within typical range)"));
+    } catch (...) { /* skip */ }
+
+    // ── DFM-016: volume fill ratio (excessively solid → wrong file?) ───
+    try {
+        const auto bb = pr::optimalBbox(shape);
+        const double bboxVol = bb.dx() * bb.dy() * bb.dz();
+        GProp_GProps vp;
+        BRepGProp::VolumeProperties(shape, vp);
+        const double solidVol = vp.Mass();
+        if (bboxVol > 1e-9) {
+            const double ratio = solidVol / bboxVol;
+            if (ratio > 0.95) {
+                addFinding("DFM-016", "warning",
+                    "solid volume / bbox volume = " + std::to_string(ratio) +
+                    " > 0.95 — insufficiently hollowed (wrong file?)");
+            } else if (ratio < 0.05) {
+                addFinding("DFM-016", "warning",
+                    "solid volume / bbox volume = " + std::to_string(ratio) +
+                    " < 0.05 — excessively hollow (CAD error?)");
+            } else {
+                addFinding("DFM-016", "info",
+                    "volume fill ratio = " + std::to_string(ratio));
+            }
+        }
+    } catch (...) { /* skip */ }
+
+    // ── DFM-021: distinct closed shells > 1 (unintended compound) ──────
+    try {
+        std::size_t shellCount = 0;
+        for (TopExp_Explorer ex(shape, TopAbs_SHELL); ex.More(); ex.Next())
+            ++shellCount;
+        if (shellCount > 1) {
+            addFinding("DFM-021", "warning",
+                "distinct closed shells = " + std::to_string(shellCount) +
+                " — unintended compound (expected 1)");
+        }
+    } catch (...) { /* skip */ }
+
     return report;
 }
 

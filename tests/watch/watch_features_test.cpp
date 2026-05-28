@@ -345,6 +345,25 @@ TEST(WatchFeaturesM15, RunDFMCatchesDFM002UnderSizedHole)
     EXPECT_TRUE(foundDfm002) << "expected DFM-002 finding for 0.5 mm shaft";
 }
 
+// 15. runDFM emits many findings (existing rules + new M1.5 expansion rules)
+TEST(WatchFeaturesM15, RunDFMReturnsManyFindings)
+{
+    using namespace koocadcam;
+    nlohmann::json spec = engine::WatchFrontModel::defaultSpec();
+
+    std::vector<engine::BuildWarning> warnings;
+    TopoDS_Shape shape = engine::WatchFrontModel::buildAll(spec, warnings);
+    ASSERT_FALSE(shape.IsNull());
+
+    auto report = engine::WatchFrontModel::runDFM(shape, spec);
+    // Existing-rule firings (DFM-003/015/017 typically) + new M1.5
+    // info-emitting rules (DFM-005/012/016) on a default-spec watch
+    // should yield at least 8 findings total.
+    EXPECT_GE(report.findings.size(), 8u)
+        << "expected >= 8 findings on default spec; got "
+        << report.findings.size();
+}
+
 // 14. runDFM catches DFM-009 violation (bezel too narrow)
 TEST(WatchFeaturesM15, RunDFMCatchesDFM009ThinBezel)
 {
