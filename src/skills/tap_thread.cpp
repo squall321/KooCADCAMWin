@@ -182,10 +182,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     TopoDS_Shape threadCutter;
     bool         geomSwept = true;
+    koocadcam::engine::HelicalSweepProfile profileUsed =
+        koocadcam::engine::HelicalSweepProfile::AnnularFallback;
     try {
         if (gotAxis && pilotRad > 0.0 && threadDepthV > 0.0) {
             threadCutter = pr::helicalSweep(helixAxis, pitch, helixLength,
-                                            pilotRad, threadDepthV);
+                                            pilotRad, threadDepthV,
+                                            &profileUsed);
         }
     }
     catch (const std::exception& e) {
@@ -224,6 +227,9 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "thread_depth_mm",   in.thread_depth_mm },
         { "pilot_diameter_mm", pilotDia },
         { "geometry",          geomSwept ? "helical_swept" : "metadata_only" },
+        { "profile",           geomSwept
+                                  ? koocadcam::engine::helicalSweepProfileTag(profileUsed)
+                                  : "metadata_only" },
     };
     ToolingMeta tooling;
     tooling.tool_type         = "tap";

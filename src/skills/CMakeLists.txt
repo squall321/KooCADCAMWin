@@ -45,6 +45,66 @@ add_library(koo_skills STATIC
     sinker_edm.cpp
     spot_face.cpp
     face_milling_5ax.cpp
+    # slice 6 — Lathe ops
+    turn_external.cpp
+    turn_internal.cpp
+    face_turn.cpp
+    groove_turn.cpp
+    parting.cpp
+    # slice 6 — Sheet metal
+    sheet_punch.cpp
+    bend.cpp
+    flange.cpp
+    hem.cpp
+    emboss.cpp
+    # slice 6 — Separation cutting
+    saw_cut.cpp
+    waterjet_cut.cpp
+    laser_cut.cpp
+    plasma_cut.cpp
+    oxyfuel_cut.cpp
+    # slice 6 — Advanced milling strategies
+    trochoidal_mill.cpp
+    adaptive_clearing.cpp
+    rest_milling.cpp
+    plunge_roughing.cpp
+    contour_3ax.cpp
+    # slice 6 — Drill/bore variants
+    gun_drill.cpp
+    deep_hole_peck.cpp
+    micro_drill.cpp
+    line_boring.cpp
+    multi_step_bore.cpp
+    # slice 6 — Grinding / honing
+    surface_grind.cpp
+    cylindrical_grind.cpp
+    internal_grind.cpp
+    honing_op.cpp
+    lapping_op.cpp
+    # slice 6 — Mold features
+    mold_rib.cpp
+    mold_boss.cpp
+    snap_fit.cpp
+    mold_gate.cpp
+    parting_surface.cpp
+    # slice 6 — Joining + finishing
+    spot_weld.cpp
+    seam_weld.cpp
+    rivet_hole.cpp
+    polish_op.cpp
+    sandblast_op.cpp
+    # slice 6 — Threading variants
+    rigid_tap.cpp
+    form_tap.cpp
+    thread_mill_external.cpp
+    thread_grind.cpp
+    thread_chase.cpp
+    # slice 6 — 5-axis + inspection
+    swarf_5ax.cpp
+    contour_5ax.cpp
+    indexed_5ax_setup.cpp
+    probe_point.cpp
+    scan_pattern.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)

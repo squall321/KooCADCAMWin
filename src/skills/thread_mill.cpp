@@ -116,10 +116,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     TopoDS_Shape thread;
     bool         geomSwept = true;
+    koocadcam::engine::HelicalSweepProfile profileUsed =
+        koocadcam::engine::HelicalSweepProfile::AnnularFallback;
     try {
         if (gotAxis && datumRad > 0.0 && threadDepthV > 0.0) {
             thread = pr::helicalSweep(helixAxis, pitch, helixLength,
-                                      datumRad, threadDepthV);
+                                      datumRad, threadDepthV,
+                                      &profileUsed);
         }
     }
     catch (const std::exception& e) {
@@ -162,6 +165,9 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "is_external",       in.is_external },
         { "datum_diameter_mm", datumDia },
         { "geometry",          geomSwept ? "helical_swept" : "metadata_only" },
+        { "profile",           geomSwept
+                                  ? koocadcam::engine::helicalSweepProfileTag(profileUsed)
+                                  : "metadata_only" },
     };
     ToolingMeta tooling;
     tooling.tool_type         = "thread_mill";

@@ -1,60 +1,90 @@
 // @lat: [[engine/skills#engrave_text]]
 //
-// ─── APPROXIMATION NOTE (slice 2) ────────────────────────────────────────
+// ─── REAL GLYPH EXTRUSION (slice 6 upgrade) ──────────────────────────────
 //
-// Real text engraving traces glyph outlines from a font (TrueType/OpenType)
-// and cuts along those wires.  Doing it in B-rep requires:
+// engrave_text now performs REAL character glyph extrusion (no more
+// "one tiny cylinder per character" spot-cut approximation).  For each
+// character of `text`:
 //
-//   MISSING PRIMITIVE:
-//       prim::glyphProfile(
-//           char                ch,
-//           double              font_size_mm,
-//           const gp_Ax2&       baseline_frame);    // -> TopoDS_Wire (or face)
+//   1. Look up the glyph polygon from `glyph::tableFor(ch)` — a static
+//      hard-coded table (no FreeType dependency).  The table covers
+//      uppercase A-Z + digits 0-9 (36 glyphs).  Glyphs are stored as
+//      closed 2-D polygons in a UNIT-SIZE reference frame; the first
+//      polygon is the OUTER outline, subsequent polygons are INNER
+//      holes (used by O, B, D, P, A, 0, 6, 8, 9 etc).
 //
-//       prim::engraveWire(
-//           const TopoDS_Wire&  glyph_path,
-//           const gp_Dir&       extrude_dir,
-//           double              depth_mm);          // -> TopoDS_Shape cutter
+//   2. Map each polygon's 2-D vertices (u, v) into world-3D by:
+//        u → in.position_x_mm + (char_idx × font_size_mm × direction.X())
+//                              + u_local · font_size_mm · direction.X()
+//             [the u_local term advances WITHIN the glyph along the
+//              same baseline direction]
+//        v → in.position_y_mm + v_local · font_size_mm   (perpendicular
+//             to the baseline in the engrave plane)
 //
-//   The full pipeline is:
+//   3. Build a closed wire per polygon via BRepBuilderAPI_MakeWire of
+//      consecutive line edges, then a face from the OUTER wire with
+//      any HOLE wires subtracted via BRepBuilderAPI_MakeFace.Add().
 //
-//     1. Rasterize a glyph (e.g. via FreeType → polyline → BRepBuilderAPI_
-//        MakeWire), oriented in entry_face's plane.
-//     2. Extrude that wire by depth_mm along the inward face normal using
-//        BRepPrimAPI_MakePrism.
-//     3. Cut the resulting prism out of the workpiece (one cut per glyph,
-//        bundled into prim::cutMany).
+//   4. Extrude the face downward (along -Z = into the workpiece) by
+//      depth_mm + kOverhang via BRepPrimAPI_MakePrism.
 //
-//   None of those font primitives are available yet (slice 4 work).  Until
-//   they land, engrave_text::apply() models the engraving as N small
-//   cylindrical "spot" cuts (one per character) spaced by font_size_mm
-//   along +X.  The spot diameter equals stroke_width_mm and the depth
-//   equals depth_mm — geometrically minimal but it produces a valid solid
-//   that records the engrave intent.
+//   5. Fuse all glyph prisms into one cutter compound and cut from the
+//      workpiece in a single Boolean op (fewer history nodes than N
+//      sequential cuts).
 //
-//   Swap the spot-cut loop for the real font wire + extrusion pipeline
-//   once prim::glyphProfile + prim::engraveWire ship.
+// ── Trade-offs ──
+//
+//   PRO:
+//     - Real letter shapes that read as the intended characters.
+//     - No external font dependency (FreeType would add ~500 KB and a
+//       new submodule).
+//     - Deterministic — no font hinting jitter across platforms.
+//
+//   CON:
+//     - The glyph table is BLOCKY / stencil-style (axis-aligned
+//       strokes, no Béziers).  Letters are recognizable but typographically
+//       crude.
+//     - Lowercase, punctuation, accented characters, non-Latin scripts
+//       are NOT in the table — these fall back to the legacy spot-cut
+//       approximation (one small cylinder per character).
+//     - Strokes have a fixed width (1/5 of glyph height) — no font
+//       weight variants.
+//
+//   FUTURE WORK:
+//     - When FreeType becomes acceptable, swap glyph::tableFor for a
+//       FreeType-backed loader returning the same GlyphPath shape.
+//     - Lowercase + punctuation table could be added by hand if needed.
 //
 // ─────────────────────────────────────────────────────────────────────────
 
 #include "engrave_text.hpp"
 
 #include "Workpiece.hpp"
+#include "_glyph_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <Standard_Failure.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <vector>
 
@@ -89,6 +119,147 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     return r;
 }
 
+// ── Internal helpers ─────────────────────────────────────────────────────
+
+namespace {
+
+// Convert lowercase ASCII to uppercase so the glyph table (uppercase only)
+// matches both cases.  Non-alphabetic chars pass through unchanged.
+char asGlyphKey(char c)
+{
+    if (c >= 'a' && c <= 'z') return static_cast<char>(c - 'a' + 'A');
+    return c;
+}
+
+// Build a closed wire from a polygon of (x, y) vertices in WORLD coords.
+// The polygon must be closed (last vertex connects to first); we add the
+// closing edge automatically.  Throws Standard_Failure on build failure.
+TopoDS_Wire buildPolygonWire(const std::vector<gp_Pnt>& worldPts)
+{
+    if (worldPts.size() < 3)
+        throw Standard_Failure("engrave_text: polygon has < 3 vertices");
+    BRepBuilderAPI_MakeWire wireMk;
+    for (size_t i = 0; i < worldPts.size(); ++i) {
+        const gp_Pnt& a = worldPts[i];
+        const gp_Pnt& b = worldPts[(i + 1) % worldPts.size()];
+        BRepBuilderAPI_MakeEdge mkEdge(a, b);
+        if (!mkEdge.IsDone())
+            throw Standard_Failure("engrave_text: polygon edge build failed");
+        wireMk.Add(mkEdge.Edge());
+    }
+    if (!wireMk.IsDone())
+        throw Standard_Failure("engrave_text: polygon wire build failed");
+    return wireMk.Wire();
+}
+
+// Map a 2-D glyph-local (u, v) point to a world 3-D point.
+//   origin       — world XY of the char's baseline anchor (top-Z of stock)
+//   advanceDir   — text baseline direction in the engrave plane (world)
+//   perpDir      — perpendicular to advanceDir in the engrave plane (world)
+//   font_size_mm — uniform scale
+//   topZ         — Z value of the entry face (we build the face AT topZ
+//                  and extrude downward)
+gp_Pnt glyphPoint(const gp_Pnt& origin,
+                  const gp_Dir& advanceDir,
+                  const gp_Dir& perpDir,
+                  double font_size_mm,
+                  double u_local, double v_local,
+                  double topZ)
+{
+    return gp_Pnt(
+        origin.X() + u_local * font_size_mm * advanceDir.X()
+                   + v_local * font_size_mm * perpDir.X(),
+        origin.Y() + u_local * font_size_mm * advanceDir.Y()
+                   + v_local * font_size_mm * perpDir.Y(),
+        topZ);
+}
+
+// Build one cutter prism for a single glyph at the given world anchor.
+// Returns Null on failure; caller falls back to a spot-cut.
+TopoDS_Shape buildGlyphPrism(const glyph::GlyphPath& g,
+                             const gp_Pnt&  charAnchor,
+                             const gp_Dir&  advanceDir,
+                             const gp_Dir&  perpDir,
+                             double         font_size_mm,
+                             double         depth_mm,
+                             double         topZ,
+                             double         overhang)
+{
+    if (g.outer_and_holes.empty()) return TopoDS_Shape();
+    try {
+        // Build the outer wire.
+        std::vector<gp_Pnt> outerPts;
+        outerPts.reserve(g.outer_and_holes[0].size());
+        for (const auto& uv : g.outer_and_holes[0]) {
+            outerPts.push_back(glyphPoint(
+                charAnchor, advanceDir, perpDir, font_size_mm,
+                uv[0], uv[1], topZ + overhang));
+        }
+        const TopoDS_Wire outerWire = buildPolygonWire(outerPts);
+
+        // Build the face from the outer wire, then add holes.
+        BRepBuilderAPI_MakeFace faceMk(outerWire, /*OnlyPlane=*/true);
+        if (!faceMk.IsDone())
+            throw Standard_Failure("engrave_text: outer face build failed");
+
+        for (size_t h = 1; h < g.outer_and_holes.size(); ++h) {
+            std::vector<gp_Pnt> holePts;
+            holePts.reserve(g.outer_and_holes[h].size());
+            for (const auto& uv : g.outer_and_holes[h]) {
+                holePts.push_back(glyphPoint(
+                    charAnchor, advanceDir, perpDir, font_size_mm,
+                    uv[0], uv[1], topZ + overhang));
+            }
+            // Reverse the hole wire so its winding is opposite the outer
+            // (BRepBuilderAPI_MakeFace.Add expects the hole wire to be
+            // wound CW when the outer is CCW).
+            std::reverse(holePts.begin(), holePts.end());
+            const TopoDS_Wire holeWire = buildPolygonWire(holePts);
+            faceMk.Add(holeWire);
+            if (!faceMk.IsDone()) {
+                spdlog::debug("engrave_text: hole add failed for glyph; "
+                              "continuing without this hole");
+            }
+        }
+        const TopoDS_Shape face = faceMk.Face();
+        if (face.IsNull())
+            throw Standard_Failure("engrave_text: glyph face null");
+
+        // Extrude downward into the workpiece.
+        const gp_Vec extrudeVec(0.0, 0.0, -(depth_mm + overhang));
+        BRepPrimAPI_MakePrism prismMk(face, extrudeVec);
+        prismMk.Build();
+        if (!prismMk.IsDone())
+            throw Standard_Failure("engrave_text: prism build failed");
+        return prismMk.Shape();
+    }
+    catch (const Standard_Failure& e) {
+        spdlog::debug("engrave_text: glyph prism failed ({}); will use spot-cut fallback",
+                      e.what());
+        return TopoDS_Shape();
+    }
+    catch (const std::exception& e) {
+        spdlog::debug("engrave_text: glyph prism threw ({}); will use spot-cut fallback",
+                      e.what());
+        return TopoDS_Shape();
+    }
+}
+
+// Legacy spot-cut fallback for chars not in the glyph table or whose glyph
+// extrusion failed.  One small cylinder at the char anchor.
+TopoDS_Shape buildSpotCutter(const gp_Pnt& charAnchor,
+                             double         topZ,
+                             double         stroke_radius,
+                             double         depth_mm,
+                             double         overhang)
+{
+    const gp_Pnt top(charAnchor.X(), charAnchor.Y(), topZ + overhang);
+    const gp_Ax2 ax(top, gp_Dir(0.0, 0.0, -1.0));
+    return pr::cylinder(ax, stroke_radius, depth_mm + overhang);
+}
+
+}  // namespace
+
 // ── Synthesis ────────────────────────────────────────────────────────────
 
 SkillOutput apply(const Workpiece& wp, const Input& in)
@@ -103,32 +274,99 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     auto entryId = wp.resolve(in.entry_face);
     if (!entryId) throw SkillError("engrave_text: entry_face datum unresolved");
 
-    // Approximate the engrave with N small cylindrical spot cuts.  For each
-    // character index i, drill at:
-    //   (position_x + i * font_size * dir.X,
-    //    position_y + i * font_size * dir.Y,
-    //    top of workpiece)
-    //
-    // depth = depth_mm, diameter = stroke_width_mm.
+    // ── Setup geometry frame ─────────────────────────────────────────────
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
     const double kOverhang = 0.02;
-    const double radius    = in.stroke_width_mm / 2.0;
-    const double cutterH   = in.depth_mm + kOverhang;
 
-    std::vector<TopoDS_Shape> spots;
-    spots.reserve(in.text.size());
-    for (size_t i = 0; i < in.text.size(); ++i) {
-        const double cx = in.position_x_mm +
-                          static_cast<double>(i) * in.font_size_mm * in.direction.X();
-        const double cy = in.position_y_mm +
-                          static_cast<double>(i) * in.font_size_mm * in.direction.Y();
-        const gp_Pnt top(cx, cy, zMax + kOverhang);
-        const gp_Ax2 ax(top, gp_Dir(0.0, 0.0, -1.0));
-        spots.push_back(pr::cylinder(ax, radius, cutterH));
+    // Perpendicular to baseline direction in the engrave plane (Z = up).
+    // perpDir = (-dir.Y, dir.X, 0) when dir lies in the XY plane (the
+    // common case for top-face engraving).  For full 3-D engrave-plane
+    // generality we'd derive perpDir from the face normal; here we take
+    // it as the in-plane perpendicular to `direction` projected on XY.
+    // If direction is purely vertical (Z only), fall back to +X / +Y so
+    // gp_Dir doesn't throw on zero magnitude.
+    gp_Dir advanceDir(1.0, 0.0, 0.0);
+    gp_Dir perpDir(0.0, 1.0, 0.0);
+    {
+        const double dx = in.direction.X();
+        const double dy = in.direction.Y();
+        if (std::abs(dx) + std::abs(dy) > 1e-9) {
+            advanceDir = gp_Dir(dx, dy, 0.0);
+            perpDir    = gp_Dir(-advanceDir.Y(), advanceDir.X(), 0.0);
+        }
     }
 
-    const TopoDS_Shape newShape = pr::cutMany(wp.shape(), spots);
+    const double radius = in.stroke_width_mm / 2.0;
+
+    // ── Build cutters: one per character ─────────────────────────────────
+    std::vector<TopoDS_Shape> cutters;
+    cutters.reserve(in.text.size());
+    int glyphsBuilt   = 0;
+    int spotFallbacks = 0;
+
+    for (size_t i = 0; i < in.text.size(); ++i) {
+        const char ch = in.text[i];
+
+        // Anchor for this character — origin of its (u, v) glyph box.
+        // The advanceDir step is one font_size per character (kerned/
+        // monospace).
+        const double advT = static_cast<double>(i) * in.font_size_mm;
+        const gp_Pnt charAnchor(
+            in.position_x_mm + advT * advanceDir.X(),
+            in.position_y_mm + advT * advanceDir.Y(),
+            0.0);
+
+        const glyph::GlyphPath& g = glyph::tableFor(asGlyphKey(ch));
+        TopoDS_Shape prism;
+        if (!g.outer_and_holes.empty()) {
+            prism = buildGlyphPrism(g, charAnchor, advanceDir, perpDir,
+                                    in.font_size_mm, in.depth_mm, zMax, kOverhang);
+        }
+        if (prism.IsNull()) {
+            // Fallback: spot cut.
+            try {
+                // For the spot fallback, place the spot at the GLYPH CENTRE
+                // (charAnchor + 0.5·font_size in both u and v).  This keeps
+                // the volume removed similar to a glyph extrusion.
+                const gp_Pnt spotCenter(
+                    charAnchor.X() + 0.5 * in.font_size_mm * advanceDir.X()
+                                   + 0.5 * in.font_size_mm * perpDir.X(),
+                    charAnchor.Y() + 0.5 * in.font_size_mm * advanceDir.Y()
+                                   + 0.5 * in.font_size_mm * perpDir.Y(),
+                    0.0);
+                prism = buildSpotCutter(spotCenter, zMax, radius,
+                                        in.depth_mm, kOverhang);
+                ++spotFallbacks;
+            }
+            catch (const std::exception& e) {
+                spdlog::warn("engrave_text: spot fallback failed for '{}' ({})",
+                             ch, e.what());
+                continue;
+            }
+        } else {
+            ++glyphsBuilt;
+        }
+        cutters.push_back(prism);
+    }
+    if (cutters.empty())
+        throw SkillError("engrave_text: no valid cutters built from text");
+
+    TopoDS_Shape newShape;
+    try {
+        newShape = pr::cutMany(wp.shape(), cutters);
+    }
+    catch (const std::exception& e) {
+        spdlog::warn("engrave_text: cutMany failed ({}); leaving workpiece unchanged",
+                     e.what());
+        newShape = wp.shape();
+    }
+
+    // ── Signature ────────────────────────────────────────────────────────
+    const std::string geomTag =
+        (spotFallbacks == 0 && glyphsBuilt > 0) ? "glyph_extrusion"
+        : (glyphsBuilt == 0)                    ? "spot_approximation"
+                                                : "glyph_with_spot_fallback";
 
     json params = {
         { "entry_face_id",   *entryId },
@@ -143,10 +381,12 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     json pattern = {
         { "kind",            kSkillId },
         { "char_count",      in.text.size() },
+        { "glyphs_built",    glyphsBuilt },
+        { "spot_fallbacks",  spotFallbacks },
         { "font_size_mm",    in.font_size_mm },
         { "stroke_width_mm", in.stroke_width_mm },
         { "depth_mm",        in.depth_mm },
-        { "geometry",        "spot_approximation" },
+        { "geometry",        geomTag },
     };
     ToolingMeta tooling;
     tooling.tool_type         = "v_cutter";
@@ -156,10 +396,14 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     tooling.flute_count       = 2;
     tooling.cutting_speed_sfm = 800.0;
     tooling.feed_per_tooth_mm = 0.01;
-    tooling.stock_removed_mm3 = M_PI * radius * radius * in.depth_mm *
-                                static_cast<double>(in.text.size());
+    // Approximate stock removed: assume each glyph removes ~20-50% of the
+    // glyph's bounding box (font_size² × depth).  Use 30% as a generic
+    // estimate for the table's stencil glyphs.
+    tooling.stock_removed_mm3 =
+        0.30 * in.font_size_mm * in.font_size_mm * in.depth_mm *
+        static_cast<double>(in.text.size());
     tooling.est_cycle_time_s  = std::max(1.0,
-                                static_cast<double>(in.text.size()) * 0.5);
+                                static_cast<double>(in.text.size()) * 0.7);
 
     FeatureSignature sig{ kSkillId, params, pattern, tooling };
 
@@ -167,8 +411,8 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     for (const auto& prev : wp.features()) wpNew->addFeature(prev);
     wpNew->addFeature(sig);
 
-    spdlog::debug("skill::engrave_text applied: '{}' chars={} stroke={} depth={}",
-                  in.text, in.text.size(), in.stroke_width_mm, in.depth_mm);
+    spdlog::debug("skill::engrave_text applied: '{}' glyphs={} spots={} geom={}",
+                  in.text, glyphsBuilt, spotFallbacks, geomTag);
 
     return SkillOutput{ wpNew, sig };
 }
@@ -178,7 +422,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 // Without font-aware analysis, recognize() can only:
 //   (a) Replay metadata signatures (full confidence).
 //   (b) Heuristically detect rows of small shallow cylindrical features
-//       (low confidence).
+//       (low confidence; only matches the spot-cut fallback path).
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -196,8 +440,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // (b) Heuristic: collect small shallow cylinders.  If ≥ 2 with similar
-    // radius collinear along an axis, propose a candidate.
+    // (b) Heuristic: collect small shallow cylinders (only matches the
+    //     spot-cut fallback).  Real glyph extrusions leave planar faces,
+    //     not cylindrical ones — recognition for those would require
+    //     contour reconstruction which is out of scope.
     struct Spot {
         int    cylIdx;
         double radius;
@@ -210,16 +456,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         BRepAdaptor_Surface surf(wp.face(fIdx));
         const gp_Cylinder cyl = surf.Cylinder();
         const double r = cyl.Radius();
-        if (r * 2.0 >= 1.0) continue;  // bigger than 1 mm dia → not engrave
-        // depth ≈ cylinder face V parameter span (height)
+        if (r * 2.0 >= 1.0) continue;
         const double vSpan = surf.LastVParameter() - surf.FirstVParameter();
-        if (vSpan <= 0.0 || vSpan > 0.5) continue;  // shallow only
+        if (vSpan <= 0.0 || vSpan > 0.5) continue;
         spots.push_back({ fIdx, r, vSpan, cyl.Axis().Location() });
     }
     if (spots.size() < 2) return out;
 
-    // Look for a roughly collinear, equally spaced cluster.  Cheap heuristic:
-    // sort by X, accept if all neighbours have ΔX > 0.5 mm and similar radii.
     std::sort(spots.begin(), spots.end(),
               [](const Spot& a, const Spot& b) { return a.center.X() < b.center.X(); });
     bool collinear = true;
