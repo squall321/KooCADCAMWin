@@ -104,10 +104,11 @@ TEST(SkillWireEdm, ValidateEmitsKerfInfo)
 }
 
 // ── 5. Recognize finds the polygonal through-walls ───────────────────────
-// TODO(slice-7): polygonal-through-hole recognizer needs to reconstruct the
-// closed wall loop's vertex count.  Currently returns 0 candidates because
-// the wall-face adjacency walk doesn't produce the polygon vertex list.
-TEST(SkillWireEdm, DISABLED_RecognizeFindsPolygonalCut)
+// Wire-EDM recognize now clusters vertical walls into closed loops via
+// shared vertical edges, classifies outer (stock outline) vs inner (cut)
+// loops by XY bbox match, and reconstructs the polygon waypoints from the
+// loop's vertical-edge top-Z vertices.
+TEST(SkillWireEdm, RecognizeFindsPolygonalCut)
 {
     auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
     skill::wire_edm::Input in;

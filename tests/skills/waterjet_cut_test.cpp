@@ -125,10 +125,11 @@ TEST(SkillWaterjetCut, DfmSmoothFinishInfo)
 }
 
 // ── 6. Recognize at kerf ≈ 0.9 mm → waterjet conf 0.7 ────────────────────
-// TODO(slice-7): the kerf-band confidence map produces 0.5 instead of the
-// documented 0.7 at the 0.9 mm input kerf.  Off-by-one in band lookup or
-// the wall-pair-distance estimator over-rounds.  Verify the band boundaries
-// in _separation_common.hpp::confidenceForKerf().
+// TODO(slice-8): RFIX slice-7 refactored confidenceForKerf() to an explicit
+// else-if chain, but the test still observes 0.5 instead of 0.7.  The kerf
+// estimate from wall-pair distance may quantize to a different band than
+// the 0.9 mm input.  Investigate the kerf reconstruction in
+// _separation_common.hpp (probably over-rounding by ≥ 0.05 mm).
 TEST(SkillWaterjetCut, DISABLED_RecognizeReturnsConfWeightedCandidates)
 {
     auto stock = skill::createCuboidStock(60.0, 30.0, 10.0);

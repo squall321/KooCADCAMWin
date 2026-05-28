@@ -105,6 +105,48 @@ add_library(koo_skills STATIC
     indexed_5ax_setup.cpp
     probe_point.cpp
     scan_pattern.cpp
+    # slice 7 — Casting + additive (5)
+    sand_cast.cpp
+    investment_cast.cpp
+    3d_print.cpp
+    weld_buildup.cpp
+    fused_dep_model.cpp
+    # slice 7 — Forming (5)
+    deep_draw.cpp
+    rolling.cpp
+    stretching.cpp
+    ironing.cpp
+    hydroforming.cpp
+    # slice 7 — Heat treatment (5, metadata-only)
+    anneal.cpp
+    harden.cpp
+    temper.cpp
+    normalize.cpp
+    quench.cpp
+    # slice 7 — Coating + surface (5, metadata-only)
+    anodize.cpp
+    electroplate.cpp
+    paint_op.cpp
+    powder_coat.cpp
+    pvd_coat.cpp
+    # slice 7 — Welding variants (5)
+    tig_weld.cpp
+    mig_weld.cpp
+    laser_weld.cpp
+    friction_stir.cpp
+    ultrasonic_weld.cpp
+    # slice 7 — Marking (5)
+    laser_mark.cpp
+    dot_peen_mark.cpp
+    electrochemical_etch.cpp
+    inkjet_mark.cpp
+    label_apply.cpp
+    # slice 7 — Fastening (5)
+    press_fit.cpp
+    threaded_insert.cpp
+    heli_coil.cpp
+    clinch_nut.cpp
+    blind_fastener.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)

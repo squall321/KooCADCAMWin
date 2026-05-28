@@ -190,21 +190,31 @@ inline TopoDS_Shape buildCircularCutter(double cx, double cy,
     const gp_Pnt pInnerStart = cornerPt(rInner, a0);
     const gp_Pnt pInnerEnd   = cornerPt(rInner, a1);
 
-    // Wire: outer-arc (a0 → a1) → radial in (a1) → inner-arc back (a1 → a0)
-    //       → radial out (a0).  The inner arc is built with reversed
-    //       parameters (a1, a0) so OCCT directly creates a reversed edge
-    //       that traverses from pInnerEnd to pInnerStart.
+    // Wire (CCW around the sector boundary):
+    //   outer-arc (a0 → a1) → radial-in (pOuterEnd → pInnerEnd)
+    //   → inner-arc reversed (pInnerEnd → pInnerStart) → radial-out (pInnerStart → pOuterStart)
+    //
+    // OCCT pitfall (BT-arc-orientation): MakeEdge(Geom_Circle, p1, p2) with
+    // p2 < p1 does NOT produce a reversed edge — OCCT internally normalises
+    // the parameter range so the resulting edge still traverses CCW from
+    // min(p1,p2) to max(p1,p2).  Pass parameters in CCW order (a0, a1) and
+    // explicitly flip the edge orientation with TopoDS_Edge::Reversed() to
+    // get the desired CW traversal for the inner arc.
     BRepBuilderAPI_MakeEdge eOuter(outerCirc, a0, a1);
     BRepBuilderAPI_MakeEdge eRadIn(pOuterEnd, pInnerEnd);
-    BRepBuilderAPI_MakeEdge eInner(innerCirc, a1, a0);
+    BRepBuilderAPI_MakeEdge eInnerFwd(innerCirc, a0, a1);  // CCW
     BRepBuilderAPI_MakeEdge eRadOut(pInnerStart, pOuterStart);
-    if (!eOuter.IsDone() || !eRadIn.IsDone() || !eInner.IsDone() || !eRadOut.IsDone())
+    if (!eOuter.IsDone() || !eRadIn.IsDone() || !eInnerFwd.IsDone() || !eRadOut.IsDone())
         throw Standard_Failure("buildCircularCutter: arc edge build failed");
+
+    // Flip inner arc to traverse CW (pInnerEnd → pInnerStart) to close the
+    // sector boundary in a consistent direction.
+    const TopoDS_Edge innerEdgeReversed = TopoDS::Edge(eInnerFwd.Edge().Reversed());
 
     BRepBuilderAPI_MakeWire wireMaker;
     wireMaker.Add(eOuter.Edge());
     wireMaker.Add(eRadIn.Edge());
-    wireMaker.Add(eInner.Edge());
+    wireMaker.Add(innerEdgeReversed);
     wireMaker.Add(eRadOut.Edge());
     if (!wireMaker.IsDone())
         throw Standard_Failure("buildCircularCutter: wire build failed");
@@ -668,47 +678,47 @@ inline std::vector<ChannelCandidate> scanThroughChannels(const Workpiece& wp)
 
 // Confidence table per the design spec.  For a given (kerf, target_skill_id)
 // return the recognise confidence in [0, 1] (0 = "don't emit").
+//
+// Bands (mutually exclusive — else-if chain so each kerf falls into exactly
+// one band and the function returns deterministically):
+//   kerf < 0.5  → laser primary (0.70), waterjet secondary (0.50)
+//   0.5 ≤ kerf < 1.2 → waterjet primary (0.70), laser fallback (0.30)
+//   1.2 ≤ kerf < 3.0 → saw primary (0.60), waterjet (0.50), plasma (0.30)
+//   3.0 ≤ kerf ≤ 6.0 → plasma primary (0.60), saw (0.40)
+//   kerf > 6.0 → oxyfuel primary (0.70), plasma (0.30)
 inline double confidenceForKerf(double kerf_mm, const std::string& skill)
 {
-    // kerf < 0.5 → laser_cut (0.7) > waterjet (0.5) > saw (0.0)
+    // kerf < 0.5
     if (kerf_mm < 0.5) {
         if (skill == "laser_cut")    return 0.70;
         if (skill == "waterjet_cut") return 0.50;
-        if (skill == "saw_cut")      return 0.00;
-        if (skill == "plasma_cut")   return 0.00;
-        if (skill == "oxyfuel_cut")  return 0.00;
+        return 0.0;
     }
-    // kerf 0.5–1.2 → waterjet (0.7), laser (0.3)
-    if (kerf_mm < 1.2) {
+    // 0.5 ≤ kerf < 1.2
+    else if (kerf_mm < 1.2) {
         if (skill == "waterjet_cut") return 0.70;
         if (skill == "laser_cut")    return 0.30;
-        if (skill == "saw_cut")      return 0.00;
-        if (skill == "plasma_cut")   return 0.00;
-        if (skill == "oxyfuel_cut")  return 0.00;
+        return 0.0;
     }
-    // kerf 1.2–3.0 → saw (0.6), waterjet (0.5), plasma (0.3)
-    if (kerf_mm < 3.0) {
+    // 1.2 ≤ kerf < 3.0
+    else if (kerf_mm < 3.0) {
         if (skill == "saw_cut")      return 0.60;
         if (skill == "waterjet_cut") return 0.50;
         if (skill == "plasma_cut")   return 0.30;
-        if (skill == "laser_cut")    return 0.00;
-        if (skill == "oxyfuel_cut")  return 0.00;
+        return 0.0;
     }
-    // kerf 3.0–6.0 → plasma (0.6), saw (0.4)
-    if (kerf_mm <= 6.0) {
+    // 3.0 ≤ kerf ≤ 6.0
+    else if (kerf_mm <= 6.0) {
         if (skill == "plasma_cut")   return 0.60;
         if (skill == "saw_cut")      return 0.40;
-        if (skill == "waterjet_cut") return 0.00;
-        if (skill == "laser_cut")    return 0.00;
-        if (skill == "oxyfuel_cut")  return 0.00;
+        return 0.0;
     }
-    // kerf > 6.0 → oxyfuel (0.7), plasma (0.3)
-    if (skill == "oxyfuel_cut")  return 0.70;
-    if (skill == "plasma_cut")   return 0.30;
-    if (skill == "saw_cut")      return 0.00;
-    if (skill == "waterjet_cut") return 0.00;
-    if (skill == "laser_cut")    return 0.00;
-    return 0.0;
+    // kerf > 6.0
+    else {
+        if (skill == "oxyfuel_cut")  return 0.70;
+        if (skill == "plasma_cut")   return 0.30;
+        return 0.0;
+    }
 }
 
 // Build the RecognizedFeature list for a given target skill_id by scanning

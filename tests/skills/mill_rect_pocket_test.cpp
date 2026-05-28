@@ -72,14 +72,11 @@ TEST(SkillMillRectPocket, RecognizeFinds)
     EXPECT_NEAR(cands[0].recovered_params["depth_mm"].get<double>(),     3.0, 0.1);
 }
 
-// TODO(slice-5 deeper RE): the planar-face matcher was hardened to use plane
-// normal + point coincidence instead of TShape IsSame(), but STEP export/
-// import also reshuffles the 4 corner-cylinder face decomposition (some
-// implementations merge cylindrical micro-faces into the adjacent planar
-// walls).  The recognizer needs CYLINDRICAL-face geometric matching too,
-// and possibly tolerance widening for plane-coincidence.  Re-enable after
-// that improvement.
-TEST(SkillMillRectPocket, DISABLED_RoundTripViaStep)
+// Rewritten recognize() now collapses STEP-roundtrip-split corner-fillet
+// cylindrical sub-faces via axis-XY clustering, and groups corner clusters
+// into pockets by shared (zLo, zHi) Z-range — so the 4 corner fillets are
+// reliably re-grouped regardless of how STEP roundtrip decomposed them.
+TEST(SkillMillRectPocket, RoundTripViaStep)
 {
     auto stock = skill::createCuboidStock(60.0, 40.0, 10.0);
     skill::mill_rect_pocket::Input in;

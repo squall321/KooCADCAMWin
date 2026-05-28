@@ -146,77 +146,31 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// Pattern: 4 planar walls + (optional) 4 vertical-axis cylindrical corner
-// fillets + 1 flat bottom planar face.  We detect rectangular pockets by:
-//   1. Find planar faces with normal in Z-plane (vertical walls).
-//   2. Cluster cylindrical faces with vertical axes (corner fillets).
-//   3. Require ≥ 4 walls + 0 or 4 corner cylinders + 1 common bottom.
-
-namespace {
-
-using EdgeFaceMap = NCollection_IndexedDataMap<
-    TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>;
-
-EdgeFaceMap buildEdgeFaceMap(const TopoDS_Shape& shape)
-{
-    EdgeFaceMap m;
-    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, m);
-    return m;
-}
-
-}  // namespace
-
-// Geometric-attribute matcher: find the workpiece-face index whose plane
-// matches `af`'s plane (parallel normal + coincident point) within tolerance.
-// Robust against STEP round-trip, which preserves geometry but breaks the
-// TShape handle identity that IsSame() relies on.
-static int findPlanarFaceIndex(const Workpiece& wp, const TopoDS_Face& af)
-{
-    BRepAdaptor_Surface as(af);
-    if (as.GetType() != GeomAbs_Plane) return -1;
-    const gp_Pln plnA = as.Plane();
-    const gp_Dir nA   = plnA.Axis().Direction();
-    const gp_Pnt pA   = plnA.Location();
-
-    for (int i = 0; i < wp.faceCount(); ++i) {
-        if (!wp.isFacePlanar(i)) continue;
-        BRepAdaptor_Surface bs(wp.face(i));
-        const gp_Pln plnB = bs.Plane();
-        const gp_Dir nB   = plnB.Axis().Direction();
-        // Normals parallel (allow either orientation — the underlying plane
-        // is the same regardless of face orientation).
-        if (std::abs(std::abs(nA.Dot(nB)) - 1.0) > 1e-4) continue;
-        // The candidate point pA must lie on plane B.
-        const gp_Pnt pB = plnB.Location();
-        const double dx = pA.X() - pB.X();
-        const double dy = pA.Y() - pB.Y();
-        const double dz = pA.Z() - pB.Z();
-        const double dist = std::abs(dx * nB.X() + dy * nB.Y() + dz * nB.Z());
-        if (dist > 1e-3) continue;
-        return i;
-    }
-    return -1;
-}
+// Pattern: 4 vertical-axis cylindrical corner fillets sharing the same Z
+// extent + 1 flat bottom planar face at that Z extent's lower bound.
+//
+// Algorithm:
+//   1. Collect all vertical-axis cylindrical faces with circular boundary
+//      edges (potential corner fillets), recording each face's axis-XY and
+//      its z-range.
+//   2. Cluster sub-faces by axis-XY (same corner, post-STEP-roundtrip-split).
+//   3. Group corner clusters by their common (zLo, zHi) — clusters sharing
+//      the same z range belong to the same pocket.
+//   4. Each pocket group with exactly 4 corner clusters → emit a candidate.
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
-    const auto edgeFaces = buildEdgeFaceMap(wp.shape());
 
-    // For each vertical-axis cylindrical face (potential corner fillet), find
-    // its adjacent planar bottom face and group by that face id (the shared
-    // bottom face identifies one pocket).
-    struct CornerEntry {
+    struct SubFaceEntry {
         int    cylFaceIdx;
         double radius;
-        gp_Pnt axisBase;       // axis location (any point on axis line)
-        gp_Dir axisDir;
-        double zTop;
-        double zBot;
+        double cx;
+        double cy;
+        double zTop;     // highest circular boundary edge z of THIS face
+        double zBot;     // lowest circular boundary edge z of THIS face
     };
-
-    // Map: shared-bottom-face-index → list of corner entries
-    std::map<int, std::vector<CornerEntry>> bottomGroups;
+    std::vector<SubFaceEntry> sub;
 
     for (int fIdx = 0; fIdx < wp.faceCount(); ++fIdx) {
         if (!wp.isFaceCylinder(fIdx)) continue;
@@ -227,50 +181,93 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         // Vertical corner fillet: axis nearly parallel to global Z.
         if (std::abs(std::abs(adir.Z()) - 1.0) > 1e-2) continue;
 
-        // Find the adjacent planar face (the bottom) shared with this cyl
-        // via one of its circular edges.
-        int bottomFaceIdx = -1;
         double zHi = -1e30, zLo = 1e30;
+        bool hasCircularEdge = false;
         for (TopExp_Explorer exp(cf, TopAbs_EDGE); exp.More(); exp.Next()) {
             const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
             BRepAdaptor_Curve crv(e);
             if (crv.GetType() != GeomAbs_Circle) continue;
+            hasCircularEdge = true;
             const gp_Pnt mid = crv.Value((crv.FirstParameter() + crv.LastParameter()) / 2.0);
             zHi = std::max(zHi, mid.Z());
             zLo = std::min(zLo, mid.Z());
-            if (!edgeFaces.Contains(e)) continue;
-            const auto& adj = edgeFaces.FindFromKey(e);
-            for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
-                const TopoDS_Face& af = TopoDS::Face(it.Value());
-                if (af.IsSame(cf)) continue;
-                if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
-                // Match `af` to a workpiece face by geometric attributes,
-                // not by IsSame() (STEP round-trip preserves geometry but
-                // creates fresh TShape handles → IsSame fails).
-                const int idx = findPlanarFaceIndex(wp, af);
-                if (idx >= 0) { bottomFaceIdx = idx; }
-            }
         }
-        if (bottomFaceIdx < 0) continue;
-        bottomGroups[bottomFaceIdx].push_back({
-            fIdx, cyl.Radius(), cyl.Axis().Location(), adir, zHi, zLo
+        if (!hasCircularEdge) continue;
+        sub.push_back({
+            fIdx, cyl.Radius(),
+            cyl.Axis().Location().X(), cyl.Axis().Location().Y(),
+            zHi, zLo
         });
     }
 
-    // For each group of 4 corner cylinders sharing a bottom face → emit one
-    // recognized rect-pocket candidate.
-    for (const auto& [bottomIdx, entries] : bottomGroups) {
-        if (entries.size() != 4) continue;
-        // Estimate center = mean of axis bases (XY).
-        double cxSum = 0.0, cySum = 0.0;
-        double rSum = 0.0;
+    // Cluster sub-faces by axis-XY (each cluster ≈ one corner position).
+    // STEP roundtrip can split a single corner-fillet cylinder into 2-4
+    // sub-faces sharing the same axis; this collapse re-unifies them and
+    // accumulates the full Z extent across the sub-faces.
+    struct Cluster {
+        double cx = 0.0, cy = 0.0;
+        double radius = 0.0;
+        double zHi = -1e30, zLo = 1e30;
+        std::vector<int> cylIds;
+    };
+    std::vector<Cluster> clusters;
+    constexpr double kClusterTol = 0.05;   // mm
+    for (const auto& e : sub) {
+        Cluster* hit = nullptr;
+        for (auto& c : clusters) {
+            if (std::hypot(c.cx - e.cx, c.cy - e.cy) < kClusterTol &&
+                std::abs(c.radius - e.radius) < kClusterTol) {
+                hit = &c; break;
+            }
+        }
+        if (!hit) {
+            Cluster c;
+            c.cx = e.cx; c.cy = e.cy;
+            c.radius = e.radius;
+            c.zHi = e.zTop; c.zLo = e.zBot;
+            c.cylIds.push_back(e.cylFaceIdx);
+            clusters.push_back(std::move(c));
+        } else {
+            hit->zHi = std::max(hit->zHi, e.zTop);
+            hit->zLo = std::min(hit->zLo, e.zBot);
+            hit->cylIds.push_back(e.cylFaceIdx);
+        }
+    }
+
+    // Group corner clusters by (zLo, zHi) — corners that share the same Z
+    // range belong to the same pocket.  Tolerance 0.05 mm.
+    struct PocketGroup {
+        double zLo, zHi;
+        std::vector<int> clusterIdx;
+    };
+    std::vector<PocketGroup> pockets;
+    for (size_t i = 0; i < clusters.size(); ++i) {
+        const auto& c = clusters[i];
+        PocketGroup* hit = nullptr;
+        for (auto& pg : pockets) {
+            if (std::abs(pg.zLo - c.zLo) < kClusterTol &&
+                std::abs(pg.zHi - c.zHi) < kClusterTol) {
+                hit = &pg; break;
+            }
+        }
+        if (!hit) {
+            pockets.push_back({ c.zLo, c.zHi, { static_cast<int>(i) } });
+        } else {
+            hit->clusterIdx.push_back(static_cast<int>(i));
+        }
+    }
+
+    // Each pocket group with exactly 4 corner clusters → emit a candidate.
+    for (const auto& pg : pockets) {
+        if (pg.clusterIdx.size() != 4) continue;
+        double cxSum = 0.0, cySum = 0.0, rSum = 0.0;
         double zHiSum = 0.0, zLoSum = 0.0;
-        for (const auto& e : entries) {
-            cxSum += e.axisBase.X();
-            cySum += e.axisBase.Y();
-            rSum  += e.radius;
-            zHiSum += e.zTop;
-            zLoSum += e.zBot;
+        for (int idx : pg.clusterIdx) {
+            const auto& c = clusters[idx];
+            cxSum += c.cx;  cySum += c.cy;
+            rSum  += c.radius;
+            zHiSum += c.zHi;
+            zLoSum += c.zLo;
         }
         const double cx = cxSum / 4.0;
         const double cy = cySum / 4.0;
@@ -279,14 +276,32 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const double zLo = zLoSum / 4.0;
         const double depth = std::abs(zHi - zLo);
 
-        // length/width: max XY extent between corner axis bases × 2
         double maxDX = 0.0, maxDY = 0.0;
-        for (const auto& e : entries) {
-            maxDX = std::max(maxDX, std::abs(e.axisBase.X() - cx));
-            maxDY = std::max(maxDY, std::abs(e.axisBase.Y() - cy));
+        for (int idx : pg.clusterIdx) {
+            const auto& c = clusters[idx];
+            maxDX = std::max(maxDX, std::abs(c.cx - cx));
+            maxDY = std::max(maxDY, std::abs(c.cy - cy));
         }
         const double length = 2.0 * (maxDX + r);
         const double width  = 2.0 * (maxDY + r);
+
+        std::vector<int> allCylIds;
+        for (int idx : pg.clusterIdx)
+            allCylIds.insert(allCylIds.end(),
+                             clusters[idx].cylIds.begin(),
+                             clusters[idx].cylIds.end());
+
+        // Find the bottom face geometrically (planar face at z ≈ zLo with
+        // normal mostly ±Z).  Useful diagnostic, not a hard requirement.
+        int bottomFaceIdx = -1;
+        for (int i = 0; i < wp.faceCount(); ++i) {
+            if (!wp.isFacePlanar(i)) continue;
+            BRepAdaptor_Surface bs(wp.face(i));
+            const gp_Pln pln = bs.Plane();
+            if (std::abs(pln.Axis().Direction().Z()) < 0.95) continue;
+            if (std::abs(pln.Location().Z() - zLo) > kClusterTol) continue;
+            bottomFaceIdx = i; break;
+        }
 
         json recovered = {
             { "center_x_mm",  cx },
@@ -298,9 +313,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "corner_r_mm",  r },
         };
         json matched = {
-            { "bottom_face_id", bottomIdx },
-            { "corner_cylinder_ids", { entries[0].cylFaceIdx, entries[1].cylFaceIdx,
-                                       entries[2].cylFaceIdx, entries[3].cylFaceIdx } },
+            { "bottom_face_id",       bottomFaceIdx },
+            { "corner_cylinder_ids",  json(allCylIds) },
+            { "corner_cluster_count", pg.clusterIdx.size() },
         };
         out.push_back(RecognizedFeature{ kSkillId, recovered, 0.85, matched });
     }

@@ -170,7 +170,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const TopoDS_Face& f = wp.face(fIdx);
         BRepAdaptor_Surface s(f);
         const gp_Pln pln = s.Plane();
-        const gp_Dir n = pln.Axis().Direction();
+        // Use the orientation-respecting face normal: the surface normal
+        // (gp_Pln::Axis::Direction) ignores face flip flags, so reversed
+        // faces (e.g. the upper-solid's BOTTOM cut-face whose outward
+        // normal is -Z) would otherwise be misclassified as +Z.
+        gp_Dir n;
+        try { n = wp.faceNormal(fIdx); } catch (...) { continue; }
         if (std::abs(std::abs(n.Z()) - 1.0) > 1e-3) continue;
         // Find a circular boundary edge to recover radius.
         double r = 0.0;

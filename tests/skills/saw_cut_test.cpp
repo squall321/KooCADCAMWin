@@ -51,13 +51,13 @@ TEST(SkillSawCut, ApplyLinearThroughCut)
 }
 
 // ── 2. Circular through-cut emits an annular sector ──────────────────────
-// TODO(slice-7): the buildCircularCutter helper in _separation_common.hpp
-// produces a full disc (or wedge with full annular footprint) instead of
-// the intended annular SECTOR bounded by start/end angles.  Observed:
-// ~9000 mm³ removed for a configuration expecting ~500 mm³ (18× too much).
-// Fix needs the inner-arc orientation correction documented in the agent's
-// own report (orientation-flag-vs-vertex-identity wire pitfall).
-TEST(SkillSawCut, DISABLED_ApplyCircularThroughCut)
+// Bug fix: buildCircularCutter() was passing the inner-arc parameters in
+// reversed order (a1, a0) on the assumption that OCCT would produce a
+// reversed edge — but OCCT silently normalises the parameter range, so the
+// inner arc traversed CCW like the outer arc, producing a degenerate/full-
+// disc footprint instead of an annular sector.  Fix builds the inner arc
+// CCW (a0, a1) and applies TopoDS_Edge::Reversed() explicitly.
+TEST(SkillSawCut, ApplyCircularThroughCut)
 {
     auto stock = skill::createCuboidStock(80.0, 80.0, 8.0);
 

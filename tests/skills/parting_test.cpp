@@ -93,13 +93,16 @@ TEST(SkillParting, ValidateRejectsThinBlade)
 }
 
 // ─── 3. Recognize finds the two cut surfaces ──────────────────────────────
-// TODO(slice-7): the parting recognizer expects to find an opposing-normal
-// planar pair within the resulting TopoDS_Compound's two sub-solids, but
-// `Workpiece::resolve` / face enumeration on a multi-solid Compound doesn't
-// expose those faces the way the recognize() heuristic expects.  Re-enable
-// after Workpiece adds Compound-aware face enumeration that walks all
-// sub-solids' faces.
-TEST(SkillParting, DISABLED_RecognizeFindsCutPlanes)
+// `Workpiece::enumerate()` (using TopExp::MapShapes recursively) already
+// walks all sub-shapes of a Compound — so the parted workpiece's 6 faces
+// from both sub-solids are visible to wp.faceCount().  The actual bug was
+// that parting::recognize() used `gp_Pln::Axis::Direction()` (surface
+// normal — orientation-agnostic) instead of `wp.faceNormal()` (which
+// respects TopAbs_REVERSED face flips).  After cutting, the upper solid's
+// bottom face is a REVERSED face on a +Z surface plane; the geometric
+// outward normal is -Z, which the orientation-aware accessor now reports
+// correctly.
+TEST(SkillParting, RecognizeFindsCutPlanes)
 {
     auto stock = skill::createCylindricalStock(40.0, 30.0);
 
@@ -123,9 +126,7 @@ TEST(SkillParting, DISABLED_RecognizeFindsCutPlanes)
 }
 
 // ─── 4. STEP round-trip preserves recognition ─────────────────────────────
-// TODO(slice-7): blocked on the same Compound-aware face enumeration as
-// the previous DISABLED test.
-TEST(SkillParting, DISABLED_RoundTripViaStep)
+TEST(SkillParting, RoundTripViaStep)
 {
     auto stock = skill::createCylindricalStock(40.0, 30.0);
 

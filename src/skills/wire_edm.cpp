@@ -29,8 +29,11 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <map>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace koocadcam::skill::wire_edm {
@@ -221,8 +224,16 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 // is a polygonal loop (≥ 3 distinct planar walls all sharing the same wire
 // axis ±Z, with NO bottom face).
 //
-// Heuristic: count planar faces whose normal is purely horizontal (|nz| ≈ 0)
-// that share top + bottom edges with the workpiece's top and bottom faces.
+// Algorithm:
+//   1. Find planar faces whose normal is purely horizontal (|nz| ≈ 0) and
+//      that share edges with both the workpiece TOP and BOTTOM faces.
+//   2. Cluster these walls by VERTICAL-edge connectivity (two walls that
+//      share a vertical edge are adjacent in the polygon).
+//   3. Each closed loop = one polygon.  The OUTER loop (whose XY bbox
+//      matches the workpiece XY bbox) is the stock outline — skip it.
+//      The remaining loops are wire-EDM through-cuts.
+//   4. Reconstruct the polygon waypoints by walking each loop's vertical
+//      edges and collecting their TOP-Z endpoints in order.
 
 namespace {
 
@@ -234,6 +245,21 @@ EdgeFaceMap buildEdgeFaceMap(const TopoDS_Shape& shape)
     EdgeFaceMap m;
     TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, m);
     return m;
+}
+
+// Return true if `e` is a straight line edge with direction parallel to ±Z
+// (a vertical wall-to-wall edge in a through-cut polygon).
+bool isVerticalLineEdge(const TopoDS_Edge& e, double zMin, double zMax)
+{
+    BRepAdaptor_Curve crv(e);
+    if (crv.GetType() != GeomAbs_Line) return false;
+    const gp_Pnt p1 = crv.Value(crv.FirstParameter());
+    const gp_Pnt p2 = crv.Value(crv.LastParameter());
+    // XY-coincident (so it's vertical) and Z spans the full thickness.
+    if (std::hypot(p1.X() - p2.X(), p1.Y() - p2.Y()) > 1e-3) return false;
+    const double zLo = std::min(p1.Z(), p2.Z());
+    const double zHi = std::max(p1.Z(), p2.Z());
+    return (std::abs(zLo - zMin) < 1e-2) && (std::abs(zHi - zMax) < 1e-2);
 }
 
 }  // namespace
@@ -260,8 +286,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
 
     // Now find vertical planar walls that share edges with BOTH a top face
-    // and a bottom face — those are wire-EDM through-cut walls.
-    std::vector<int> wireWalls;
+    // and a bottom face — those are vertical through-cut walls (slot walls
+    // OR the workpiece's outer side walls).
+    std::vector<int> verticalWalls;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFacePlanar(i)) continue;
         gp_Dir n;
@@ -277,44 +304,116 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
                 const TopoDS_Face& af = TopoDS::Face(it.Value());
                 if (af.IsSame(wp.face(i))) continue;
-                // Find the workpiece face index of `af` via IsSame in our
-                // top/bot sets.  STEP-roundtrip robustness is intentionally
-                // limited here; that's acceptable for this approximation.
                 for (int t : topFaces)
                     if (wp.face(t).IsSame(af)) { touchesTop = true; break; }
                 for (int b : botFaces)
                     if (wp.face(b).IsSame(af)) { touchesBot = true; break; }
             }
         }
-        if (touchesTop && touchesBot) wireWalls.push_back(i);
+        if (touchesTop && touchesBot) verticalWalls.push_back(i);
     }
-    if (wireWalls.size() < 3) return out;   // not a polygon
+    if (verticalWalls.size() < 3) return out;   // no polygons possible
 
-    // Reconstruct the polygon footprint: take the center XY of each wall.
-    std::vector<std::array<double, 2>> wpJson;
-    wpJson.reserve(wireWalls.size());
-    for (int w : wireWalls) {
-        const gp_Pnt c = wp.faceCenter(w);
-        wpJson.push_back({ c.X(), c.Y() });
+    // ── Cluster walls into closed loops via shared vertical edges ────────
+    // Build an adjacency map: wall idx → list of (otherWall, sharedTopVertex
+    // XY) pairs.  A shared vertical edge is a line edge spanning zMin..zMax
+    // that both walls own.
+    std::map<int, std::vector<std::pair<int, std::array<double, 2>>>> walkAdj;
+    for (int wi : verticalWalls) {
+        for (TopExp_Explorer exp(wp.face(wi), TopAbs_EDGE); exp.More(); exp.Next()) {
+            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
+            if (!isVerticalLineEdge(e, zMin, zMax)) continue;
+            // Top-Z endpoint = a polygon corner.
+            BRepAdaptor_Curve crv(e);
+            const gp_Pnt pA = crv.Value(crv.FirstParameter());
+            const gp_Pnt pB = crv.Value(crv.LastParameter());
+            const gp_Pnt top = (pA.Z() > pB.Z()) ? pA : pB;
+            // Find the OTHER wall sharing this edge.
+            if (!edgeFaces.Contains(e)) continue;
+            const auto& adj = edgeFaces.FindFromKey(e);
+            for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
+                const TopoDS_Face& af = TopoDS::Face(it.Value());
+                if (af.IsSame(wp.face(wi))) continue;
+                for (int wj : verticalWalls) {
+                    if (wj == wi) continue;
+                    if (!wp.face(wj).IsSame(af)) continue;
+                    walkAdj[wi].push_back({ wj, { top.X(), top.Y() } });
+                    break;
+                }
+            }
+        }
     }
-    // Note: ordering is topological (face index order), not necessarily a
-    // CCW polygon traversal.  For RE round-trips the caller should re-sort
-    // by polar angle around the centroid.  We provide the raw points here.
 
-    json contour = json::array();
-    for (const auto& p : wpJson) contour.push_back({ p[0], p[1] });
+    // Find connected components (loops) via DFS on walkAdj.
+    std::set<int> visited;
+    std::vector<std::vector<int>> loops;
+    for (int seed : verticalWalls) {
+        if (visited.count(seed)) continue;
+        std::vector<int> loop;
+        std::vector<int> stack { seed };
+        while (!stack.empty()) {
+            const int w = stack.back(); stack.pop_back();
+            if (visited.count(w)) continue;
+            visited.insert(w);
+            loop.push_back(w);
+            auto it = walkAdj.find(w);
+            if (it == walkAdj.end()) continue;
+            for (const auto& adj : it->second) {
+                if (!visited.count(adj.first)) stack.push_back(adj.first);
+            }
+        }
+        if (loop.size() >= 3) loops.push_back(std::move(loop));
+    }
 
-    json recovered = {
-        { "contour_waypoints", contour },
-        { "axis_dir",          { 0.0, 0.0, -1.0 } },
-    };
-    json matched = {
-        { "wall_face_ids",    json(wireWalls) },
-        { "polygon_size",     wireWalls.size() },
-    };
-    out.push_back(RecognizedFeature{
-        kSkillId, recovered, /*confidence*/ 0.70, matched
-    });
+    // For each loop, classify outer vs inner by comparing its XY bbox to
+    // the workpiece XY bbox.  Outer loop ≈ workpiece bbox → SKIP.
+    for (const auto& loop : loops) {
+        double lxMin =  1e30, lyMin =  1e30;
+        double lxMax = -1e30, lyMax = -1e30;
+        std::vector<std::array<double, 2>> corners;   // top-z vertices
+        for (int wi : loop) {
+            auto it = walkAdj.find(wi);
+            if (it == walkAdj.end()) continue;
+            for (const auto& adj : it->second) {
+                const auto& xy = adj.second;
+                corners.push_back(xy);
+                lxMin = std::min(lxMin, xy[0]);
+                lyMin = std::min(lyMin, xy[1]);
+                lxMax = std::max(lxMax, xy[0]);
+                lyMax = std::max(lyMax, xy[1]);
+            }
+        }
+        // Outer loop?  Same XY extent as workpiece → skip.
+        const bool isOuter =
+            std::abs(lxMin - xMin) < 1e-2 && std::abs(lxMax - xMax) < 1e-2 &&
+            std::abs(lyMin - yMin) < 1e-2 && std::abs(lyMax - yMax) < 1e-2;
+        if (isOuter) continue;
+
+        // Dedupe waypoint corners — each top-Z vertex is visited twice
+        // (once per adjacent wall).  Keep one entry per unique XY (tol 1e-3).
+        std::vector<std::array<double, 2>> waypoints;
+        for (const auto& c : corners) {
+            bool dup = false;
+            for (const auto& w : waypoints)
+                if (std::hypot(c[0] - w[0], c[1] - w[1]) < 1e-3) { dup = true; break; }
+            if (!dup) waypoints.push_back(c);
+        }
+
+        json contour = json::array();
+        for (const auto& p : waypoints) contour.push_back({ p[0], p[1] });
+
+        json recovered = {
+            { "contour_waypoints", contour },
+            { "axis_dir",          { 0.0, 0.0, -1.0 } },
+        };
+        json matched = {
+            { "wall_face_ids",  json(loop) },
+            { "polygon_size",   loop.size() },
+        };
+        out.push_back(RecognizedFeature{
+            kSkillId, recovered, /*confidence*/ 0.70, matched
+        });
+    }
     return out;
 }
 
