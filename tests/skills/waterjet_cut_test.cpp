@@ -125,12 +125,16 @@ TEST(SkillWaterjetCut, DfmSmoothFinishInfo)
 }
 
 // ── 6. Recognize at kerf ≈ 0.9 mm → waterjet conf 0.7 ────────────────────
-// TODO(slice-8): RFIX slice-7 refactored confidenceForKerf() to an explicit
-// else-if chain, but the test still observes 0.5 instead of 0.7.  The kerf
-// estimate from wall-pair distance may quantize to a different band than
-// the 0.9 mm input.  Investigate the kerf reconstruction in
-// _separation_common.hpp (probably over-rounding by ≥ 0.05 mm).
-TEST(SkillWaterjetCut, DISABLED_RecognizeReturnsConfWeightedCandidates)
+// Fixed: BRepPrimAPI_MakeCylinder's seam (at local +X) survives the
+// stadium-cutter boolean on the END (forward-from-start) cap because that
+// half of the cylinder is OUTSIDE the connecting box, so OCCT splits the
+// surviving half-cyl into two quarter-cyl faces with identical axis/radius.
+// scanThroughChannels() then mis-paired them as a concentric annular sector
+// (kerf = |r-r| = 0), which dropped into the `kerf < 0.5` band → waterjet
+// confidence 0.5.  The fix adds a seam-split guard in the concentric pair
+// scan (skip when kerf < 1e-3) so the fragments fall through to the lone
+// emitter and report kerf = 2 × radius = 0.9 mm → conf 0.7.
+TEST(SkillWaterjetCut, RecognizeReturnsConfWeightedCandidates)
 {
     auto stock = skill::createCuboidStock(60.0, 30.0, 10.0);
 

@@ -112,7 +112,7 @@ TEST(SkillHydroforming, AllowsHigherDrawingRatioThanDeepDraw)
 }
 
 // ── 5. Recognize: same topology as deep_draw but tagged hydroforming ───
-// TODO(slice-8): shares findCupWall logic with deep_draw — same blocker.
+// TODO(slice-9): same findCupWall issue as deep_draw::RecognizeFindsCup.
 TEST(SkillHydroforming, DISABLED_RecognizeFindsCup)
 {
     auto stock = skill::createCuboidStock(100.0, 80.0, 1.5);

@@ -41,6 +41,8 @@
 #include "Skill.hpp"
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -67,6 +69,28 @@ struct Input
 {
     EdgeSelector edge_selector;   // single edge OR Z-band
     double       radius_mm = 0.0;
+
+    // ── Optional coarser fallback selector ─────────────────────────────────
+    //
+    // When `edge_selector` fails to match any surviving edge — typically
+    // because preceding Boolean ops in a multi-step process plan
+    // re-fingerprint the topology (TopoDS_Edge identities and face_ids
+    // change) — the skill re-tries with a Z-band built from these fields.
+    // The retry ignores face IDs entirely.  If still no edges match, the
+    // skill throws SkillError as before.
+    //
+    //   z_min_mm / z_max_mm : explicit Z range (mm).  When both are unset
+    //                         and the primary selector is an EdgesAtZBand,
+    //                         the retry widens its tolerance ×100.
+    //   edge_filter_dir     : "" | "all" | "horizontal" | "vertical" — hint
+    //                         to drop edges that don't run in the requested
+    //                         direction.  "horizontal" keeps edges whose
+    //                         curve direction is approximately (1,0,0) or
+    //                         (0,1,0) (i.e., Z-component small).  "vertical"
+    //                         keeps Z-running edges.  Empty = no filter.
+    std::optional<double> z_min_mm;
+    std::optional<double> z_max_mm;
+    std::string           edge_filter_dir;
 };
 
 // Synthesis: apply this skill to a workpiece.

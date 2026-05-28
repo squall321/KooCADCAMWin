@@ -419,6 +419,11 @@ process::StepInvocation liftEdgeSelector(const process::StepInvocation& step)
 // doesn't match any edge after preceding boolean ops re-fingerprint edges.
 // Need a coarser selector (face_id + z-band) or post-build edge resolver
 // in skill::fillet_edge::apply().
+// TODO(slice-9): FIX_FILLET's z-band fallback (`auto-widen Z-band ×100`)
+// still doesn't match any edge — the primary selector here isn't
+// EdgesAtZBand so the fallback branch never engages.  Need a different
+// fallback strategy or update the watch plan to emit an explicit
+// EdgesAtZBand selector with widened bounds.
 TEST(WatchComplete, DISABLED_PlanBuildsAndExecutes)
 {
     // Initial stock: 44 mm Ø × 10 mm thick cylindrical puck.

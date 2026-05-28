@@ -76,8 +76,20 @@ std::optional<CupWall> findCupWall(const Workpiece& wp,
     }
     if (verts.empty()) return std::nullopt;
 
-    // Group by approximate axis location (within 1 mm).  For each group,
-    // identify outer (= larger radius) and inner (= smaller radius).
+    // Group by approximate axis-XY location (within 0.5 mm).  Use XY-only
+    // comparison because the cup outer and cup inner cylinders are coaxial
+    // (same vertical axis line) but their gp_Cylinder reference points sit
+    // at different Z values — the outer is constructed at the cup floor
+    // (sheetBotZ - cup_depth) while the inner is offset upward by the
+    // sheet thickness.  A 3D distance check would falsely reject the pair
+    // by their Z offset (= sheet_thickness, typically 1–2 mm).  Boolean
+    // operations can also nudge axis reference Z slightly, so XY-only with
+    // a small lateral tolerance is the robust grouping criterion.
+    // For each group, identify outer (= larger radius) and inner (= smaller radius).
+    constexpr double kAxisXYTolMm = 0.5;
+    auto axisXYDist = [](const gp_Pnt& a, const gp_Pnt& b) {
+        return std::hypot(a.X() - b.X(), a.Y() - b.Y());
+    };
     std::vector<bool> used(verts.size(), false);
     int bestGroupOuter = -1;
     int bestGroupInner = -1;
@@ -97,7 +109,7 @@ std::optional<CupWall> findCupWall(const Workpiece& wp,
         for (size_t j = i + 1; j < verts.size(); ++j) {
             if (used[j]) continue;
             const auto& vj = verts[j];
-            if (vi.loc.Distance(vj.loc) > 1.0) continue;
+            if (axisXYDist(vi.loc, vj.loc) > kAxisXYTolMm) continue;
             used[j] = true;
             if (vj.radius > maxR) { maxR = vj.radius; maxIdx = (int)j; }
             if (vj.radius < minR) { minR = vj.radius; minIdx = (int)j; }

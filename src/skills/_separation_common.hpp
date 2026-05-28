@@ -611,7 +611,18 @@ inline std::vector<ChannelCandidate> scanThroughChannels(const Workpiece& wp)
                                               cylWalls[a].cy - cylWalls[b].cy);
             if (dCenter > 1e-3) continue;   // not concentric
             // Concentric pair → annular sector cut.
+            // SAME-CYL SEAM-SPLIT GUARD: BRepPrimAPI_MakeCylinder builds the
+            // full lateral surface with a seam edge at angle 0 (local +X).
+            // When a boolean cut leaves the seam INSIDE the surviving half-cyl
+            // (e.g. linear-stadium end-cap whose box covers the inner half),
+            // OCCT splits that half into two quarter-cyl faces sharing the
+            // same axis and radius.  These fragments are NOT a concentric
+            // annular-sector pair — kerf = |r-r| = 0 mis-classifies them and
+            // contaminates the kerf-band confidence lookup.  Skip the pair so
+            // both fragments fall through to the lone-cylinder emitter, which
+            // correctly reports kerf = 2 × radius.
             const double kerf = std::abs(cylWalls[a].r - cylWalls[b].r);
+            if (kerf < 1e-3) continue;
             const double rMid = (cylWalls[a].r + cylWalls[b].r) / 2.0;
             ChannelCandidate cc;
             cc.kerf_mm        = kerf;

@@ -8,6 +8,10 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <string>
+#include <tuple>
+#include <vector>
+
 namespace koocadcam::skill::quench {
 
 namespace htc = koocadcam::skill::heat_treatment_common;
@@ -23,9 +27,47 @@ bool isKnownMedium(const std::string& m)
 // Estimate the retained-solid-solution percentage from the medium
 // compatibility.  Adequate medium → ~95%; an info-level incompat reduces
 // the estimate to ~70% (precipitation reaction starts during the cool).
+//
+// Note: the htc::MaterialHTData.quench_incompat list mixes two distinct
+// concerns:
+//   (a) "wrong medium" — cooling rate inadequate to retain the high-temp
+//       phase (e.g. aluminum_6061 + oil: oil cools too slowly → ss drops),
+//   (b) "right medium with caveats" — adequate cooling rate but with a
+//       process-control warning (e.g. aluminum_6061 + water: ss still ~95%
+//       but watch fixturing on thick sections).
+// The incompat list cannot distinguish them on its own.  We therefore look
+// up the (material, medium) pair in an explicit, hand-curated solid-solution
+// table FIRST; only if no entry is found do we fall back to the generic
+// incompat-as-downgrade heuristic.
 double estimateSolidSolutionPct(const std::string& material,
                                 const std::string& medium)
 {
+    // Explicit (material, medium) → solid_solution_pct table.  Entries here
+    // override the generic "any incompat → 70%" fallback below.  Add a row
+    // here whenever a medium is known to give a specific retained-ss% that
+    // differs from the default — including "in the incompat list but still
+    // adequate" pairs (e.g. aluminum_6061 + water).
+    //
+    // NOTE: aluminum_6061 + oil is intentionally OMITTED from this table so
+    // the generic "incompat → 70%" path still applies to that pair (matching
+    // the canonical "Al6061 + oil drops ss% below the textbook nominal"
+    // contract exercised by SkillQuench.IncompatibleMediumDowngradesSSPct).
+    static const std::vector<std::tuple<std::string, std::string, double>>
+        kSolidSolutionTable = {
+            // Aluminum precipitation-hardening alloys
+            { "aluminum_6061",     "water", 95.0 },
+            { "aluminum_7075",     "water", 95.0 },
+            // Stainless solution-anneal: water restores corrosion resistance
+            { "stainless_316",     "water", 80.0 },
+            // Carbon / alloy steels — quench from austenitize temp
+            { "carbon_steel_1045", "water", 90.0 },
+            { "alloy_steel_4140",  "oil",   92.0 },
+        };
+
+    for (const auto& [mat, med, pct] : kSolidSolutionTable) {
+        if (mat == material && med == medium) return pct;
+    }
+
     const auto* m = htc::lookupMaterial(material);
     if (!m) return 90.0;                 // unknown — assume nominal
     for (const auto& tup : m->quench_incompat) {

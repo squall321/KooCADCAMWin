@@ -147,6 +147,150 @@ add_library(koo_skills STATIC
     heli_coil.cpp
     clinch_nut.cpp
     blind_fastener.cpp
+    # slice 8 wave 1 — Assembly (5)
+    bolted_joint.cpp
+    glued_joint.cpp
+    riveted_joint.cpp
+    snap_assembly.cpp
+    press_assembly.cpp
+    # slice 8 wave 1 — Surfacing (5)
+    nurbs_patch.cpp
+    blend_surface.cpp
+    offset_surface.cpp
+    sweep_surface.cpp
+    loft_surface.cpp
+    # slice 8 wave 1 — Sheet variants (5)
+    notch.cpp
+    lance.cpp
+    beading.cpp
+    coining.cpp
+    draw_bead.cpp
+    # slice 8 wave 1 — Lathe variants (5)
+    form_turn.cpp
+    taper_turn.cpp
+    knurl.cpp
+    contour_turn.cpp
+    drill_lathe.cpp
+    # slice 8 wave 1 — Special machining (5)
+    ecm.cpp
+    edm_drill.cpp
+    ultrasonic_machine.cpp
+    laser_engrave_deep.cpp
+    abrasive_flow.cpp
+    # slice 8 wave 1 — Inspection (5)
+    cmm_scan.cpp
+    white_light_scan.cpp
+    photogrammetry_scan.cpp
+    ct_scan.cpp
+    surface_roughness_test.cpp
+    # slice 8 wave 1 — Composite + ceramic (5)
+    composite_layup.cpp
+    composite_cure.cpp
+    ceramic_sinter.cpp
+    resin_transfer_mold.cpp
+    abrasive_water_jet_drill.cpp
+    # slice 8 wave 1 — Plastic injection (5)
+    runner_system.cpp
+    ejector_pin_hole.cpp
+    cooling_channel.cpp
+    draft_angle_apply.cpp
+    undercut_relief.cpp
+    # slice 8 wave 1 — NDT inspection (5, metadata-only)
+    ultrasonic_test.cpp
+    magnetic_particle_test.cpp
+    dye_penetrant_test.cpp
+    radiographic_test.cpp
+    hardness_test.cpp
+    # slice 8 wave 1 — Gear + cam features (5)
+    gear_tooth_cut.cpp
+    rack_tooth_cut.cpp
+    cam_lobe.cpp
+    bearing_seat.cpp
+    keyway_external.cpp
+    # slice 8 wave 1 — Multi-material molding (5)
+    insert_molding.cpp
+    two_shot_molding.cpp
+    overmolding.cpp
+    co_extrusion.cpp
+    multi_material_3d_print.cpp
+    # slice 8 wave 1 — Stock prep + setup (5)
+    squaring.cpp
+    datum_face_establish.cpp
+    fixture_setup.cpp
+    rough_stock_cut.cpp
+    chuck_grip_zone.cpp
+    # slice 8 wave 1 — Stamping (5)
+    blanking.cpp
+    piercing.cpp
+    lance_n_form.cpp
+    progressive_die_stage.cpp
+    deep_emboss.cpp
+    # slice 8 wave 1 — Spinning / flow / wire / spring (5)
+    metal_spin.cpp
+    flow_form.cpp
+    peen_form.cpp
+    spring_form.cpp
+    wire_form.cpp
+    # slice 8 wave 2 — Tube / pipe fab (5)
+    tube_swage.cpp
+    tube_flare.cpp
+    tube_bend.cpp
+    tube_hydroform.cpp
+    tube_end_form.cpp
+    # slice 8 wave 2 — Powder metallurgy (5)
+    metal_injection_mold.cpp
+    hot_isostatic_press.cpp
+    sinter_press.cpp
+    powder_atomization.cpp
+    powder_blend.cpp
+    # slice 8 wave 2 — QC + statistical (5, metadata-only)
+    first_article_inspect.cpp
+    in_process_inspect.cpp
+    statistical_process_ctl.cpp
+    batch_release.cpp
+    calibration_check.cpp
+    # slice 8 wave 2 — Robotic + automation (5, metadata-only)
+    robot_pick_place.cpp
+    robot_path_program.cpp
+    conveyor_transport.cpp
+    vibratory_sortation.cpp
+    palletize.cpp
+    # slice 8 wave 2 — Semiconductor + microfab (5, metadata-only)
+    wafer_dice.cpp
+    photomask_pattern.cpp
+    thin_film_deposit.cpp
+    etch_silicon.cpp
+    ion_implant.cpp
+    # slice 8 wave 3 — Surface engineering (5, metadata-only)
+    carburize.cpp
+    nitride.cpp
+    shot_peen_surface.cpp
+    burnish.cpp
+    anti_wear_treatment.cpp
+    # slice 8 wave 3 — Specialty machining (5)
+    micro_milling.cpp
+    hard_turning.cpp
+    ultra_precision_diamond_turn.cpp
+    cryogenic_machining.cpp
+    high_speed_machining.cpp
+    # slice 8 wave 4 — Optics (5, metadata-only)
+    lens_grind.cpp
+    lens_polish.cpp
+    antireflective_coat.cpp
+    dichroic_coat.cpp
+    mirror_finish.cpp
+    # slice 8 wave 4 — Electronics assembly (5, metadata-only)
+    smt_place.cpp
+    wave_solder.cpp
+    conformal_coat.cpp
+    ic_bond.cpp
+    flex_attach.cpp
+    # slice 8 wave 4 — 3D scanning variants (5, metadata-only)
+    structured_light_scan.cpp
+    lidar_scan.cpp
+    contact_probe_array_scan.cpp
+    optical_3d_scan.cpp
+    force_feedback_scan.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)

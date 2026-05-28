@@ -62,11 +62,11 @@ TEST(SkillQuench, ApplyDoesNotChangeGeometry)
 }
 
 // ─── 2. Signature carries solid_solution_pct estimate ───────────────────
-// TODO(slice-8): expected 95% for Al6061 water quench, actual 70 — the
-// ss% lookup table doesn't recognize the (Al6061, water) compatible pair
-// and falls back to the default 70.  Fix ssPctForMaterialMedium() in
-// _heat_treatment_common.hpp.
-TEST(SkillQuench, DISABLED_SignatureRecordsSolidSolutionPct)
+// Fixed: added an explicit (material, medium) → ss% override table inside
+// quench.cpp's estimateSolidSolutionPct(); the (Al6061, water) row returns
+// 95.0 even though the htc::MaterialHTData incompat list flags water (the
+// flag is a fixturing caveat, not a cooling-rate inadequacy).
+TEST(SkillQuench, SignatureRecordsSolidSolutionPct)
 {
     auto stock = skill::createCuboidStock(40.0, 40.0, 10.0, "aluminum_6061");
 

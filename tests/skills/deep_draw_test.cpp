@@ -107,10 +107,10 @@ TEST(SkillDeepDraw, ValidateRejectsOffSheet)
 }
 
 // ── 5. Recognize finds the cup protrusion ─────────────────────────────
-// TODO(slice-8): cup-protrusion recognizer fails to identify the outer +
-// inner cylinder pair after apply().  The vertical-cylinder grouping by
-// shared-axis XY may not handle the sheet's central hole + cup-wall
-// topology cleanly.  Verify findCupWall() axis tolerance.
+// TODO(slice-9): FIX_FORM tolerance widening still doesn't match the
+// outer+inner cylinder pair after deep_draw::apply().  Likely a
+// span filter mismatch (the outer cup wall span may not exceed 1.5×t
+// after Boolean tolerance).  Re-investigate findCupWall geometry.
 TEST(SkillDeepDraw, DISABLED_RecognizeFindsCup)
 {
     auto stock = skill::createCuboidStock(100.0, 80.0, 1.5);

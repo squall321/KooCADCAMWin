@@ -11,13 +11,19 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 #include <gp_Torus.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <string>
+#include <utility>
 
 namespace koocadcam::skill::fillet_edge {
 
@@ -86,6 +92,115 @@ pr::EdgePredicate buildPredicate(const Workpiece& wp,
     }, sel);
 }
 
+// Compute the average tangent direction at the mid-parameter of an edge.
+// Returns false if the curve has no usable tangent (degenerate edge).
+bool edgeMidDirection(const TopoDS_Edge& edge, gp_Dir& outDir)
+{
+    try {
+        BRepAdaptor_Curve curve(edge);
+        const double mid = (curve.FirstParameter() + curve.LastParameter()) / 2.0;
+        gp_Pnt   p;
+        gp_Vec   v;
+        curve.D1(mid, p, v);
+        if (v.Magnitude() < 1e-9) return false;
+        outDir = gp_Dir(v);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// Filter an existing predicate by an `edge_filter_dir` keyword.
+//   "horizontal" : keep edges whose tangent is roughly parallel to the XY
+//                  plane (|Z component of unit tangent| < 0.2)
+//   "vertical"   : keep edges whose tangent is roughly along Z
+//                  (|Z component of unit tangent| > 0.8)
+//   ""/"all"     : pass-through
+pr::EdgePredicate withDirectionFilter(pr::EdgePredicate base,
+                                      const std::string& dir)
+{
+    if (dir.empty() || dir == "all") return base;
+    const bool wantHorizontal = (dir == "horizontal");
+    const bool wantVertical   = (dir == "vertical");
+    if (!wantHorizontal && !wantVertical) return base;
+
+    return [base, wantHorizontal](const TopoDS_Edge& e, const gp_Pnt& mp) -> bool {
+        if (!base(e, mp)) return false;
+        gp_Dir d;
+        if (!edgeMidDirection(e, d)) return false;
+        const double zComp = std::abs(d.Z());
+        if (wantHorizontal) return zComp < 0.2;
+        return zComp > 0.8;   // wantVertical
+    };
+}
+
+// Build a fallback (coarser) predicate when the primary one matches zero
+// edges.  The fallback ignores face identities entirely and selects every
+// edge whose mid-Z falls within a configured band.
+//
+//   - If `z_min_mm` / `z_max_mm` are provided, the band is [z_min, z_max].
+//   - Otherwise, if the primary selector was an EdgesAtZBand, the band is
+//     widened around its z_mm by a factor of 100×tolerance (typically
+//     1e-3 mm → 0.1 mm, generous enough to absorb Boolean re-fingerprint
+//     drift while staying away from neighbouring edge clusters).
+//   - Otherwise, returns std::nullopt — no coarser retry possible.
+//
+// Returned predicate is further refined by `edge_filter_dir` (if set).
+std::optional<pr::EdgePredicate> buildFallbackPredicate(const Input& in,
+                                                        double& outBandZMin,
+                                                        double& outBandZMax)
+{
+    double zLo = 0.0, zHi = 0.0;
+    bool haveBand = false;
+
+    if (in.z_min_mm.has_value() && in.z_max_mm.has_value()) {
+        zLo = *in.z_min_mm;
+        zHi = *in.z_max_mm;
+        if (zHi < zLo) std::swap(zLo, zHi);
+        haveBand = true;
+    } else if (in.z_min_mm.has_value() || in.z_max_mm.has_value()) {
+        // Only one endpoint specified — pair it with the primary z if it was
+        // a band.  Otherwise fall through.
+        if (const auto* band = std::get_if<EdgesAtZBand>(&in.edge_selector)) {
+            const double z0 = band->z_mm;
+            zLo = std::min(in.z_min_mm.value_or(z0), in.z_max_mm.value_or(z0));
+            zHi = std::max(in.z_min_mm.value_or(z0), in.z_max_mm.value_or(z0));
+            haveBand = true;
+        }
+    } else if (const auto* band = std::get_if<EdgesAtZBand>(&in.edge_selector)) {
+        // Widen tolerance ×100 (≥ 0.1 mm) around z_mm.
+        const double widened = std::max(band->tolerance_mm * 100.0, 0.1);
+        zLo = band->z_mm - widened;
+        zHi = band->z_mm + widened;
+        haveBand = true;
+    }
+
+    if (!haveBand) return std::nullopt;
+
+    outBandZMin = zLo;
+    outBandZMax = zHi;
+
+    pr::EdgePredicate band = [zLo, zHi](const TopoDS_Edge&, const gp_Pnt& mp) {
+        return (mp.Z() >= zLo) && (mp.Z() <= zHi);
+    };
+    return withDirectionFilter(std::move(band), in.edge_filter_dir);
+}
+
+// Count how many edges of `shape` satisfy `pred`.  Pure TopExp_Explorer
+// re-enumeration — no deprecated TopTools_* helpers, no caching.
+int countMatchingEdges(const TopoDS_Shape& shape, const pr::EdgePredicate& pred)
+{
+    int n = 0;
+    for (TopExp_Explorer e(shape, TopAbs_EDGE); e.More(); e.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
+        BRepAdaptor_Curve curve(edge);
+        const double mid = (curve.FirstParameter() + curve.LastParameter()) / 2.0;
+        const gp_Pnt midPt = curve.Value(mid);
+        if (pred(edge, midPt)) ++n;
+    }
+    return n;
+}
+
 }  // namespace
 
 SkillOutput apply(const Workpiece& wp, const Input& in)
@@ -101,26 +216,49 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         throw SkillError(msg);
     }
 
-    // 2) Build predicate + count selected edges (signature accounting)
+    // 2) Build primary predicate + count selected edges
     int resolvedEdgeId = -1;
-    pr::EdgePredicate pred = buildPredicate(wp, in.edge_selector, resolvedEdgeId);
+    pr::EdgePredicate primary = buildPredicate(wp, in.edge_selector, resolvedEdgeId);
 
-    int selectedCount = 0;
-    for (TopExp_Explorer e(wp.shape(), TopAbs_EDGE); e.More(); e.Next()) {
-        const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
-        BRepAdaptor_Curve curve(edge);
-        const double mid = (curve.FirstParameter() + curve.LastParameter()) / 2.0;
-        const gp_Pnt midPt = curve.Value(mid);
-        if (pred(edge, midPt)) ++selectedCount;
+    int selectedCount = countMatchingEdges(wp.shape(), primary);
+
+    // 3) Fallback path — when preceding Boolean ops have re-fingerprinted the
+    //    topology (TopoDS_Edge identities and face_ids change), a narrow
+    //    selector can match zero surviving edges.  Retry with a coarser
+    //    Z-band predicate built from optional Input fields.  This is purely
+    //    additive: the existing fillet_edge_test cases keep their behaviour
+    //    because none of them populate the fallback fields and the primary
+    //    selector resolves cleanly on a fresh stock.
+    pr::EdgePredicate effective = primary;
+    bool usedFallback = false;
+    double fallbackZMin = 0.0, fallbackZMax = 0.0;
+
+    if (selectedCount == 0) {
+        double zLo = 0.0, zHi = 0.0;
+        if (auto fb = buildFallbackPredicate(in, zLo, zHi)) {
+            const int fbCount = countMatchingEdges(wp.shape(), *fb);
+            if (fbCount > 0) {
+                effective       = *fb;
+                selectedCount   = fbCount;
+                usedFallback    = true;
+                fallbackZMin    = zLo;
+                fallbackZMax    = zHi;
+                spdlog::debug("fillet_edge: primary selector matched 0 edges; "
+                              "fallback Z-band [{}, {}] matched {} edge(s)",
+                              zLo, zHi, fbCount);
+            }
+        }
     }
+
     if (selectedCount == 0) {
         throw SkillError("fillet_edge: edge_selector matched no edges");
     }
 
-    // 3) Apply the fillet (single-pass build)
-    const TopoDS_Shape newShape = pr::filletEdges(wp.shape(), in.radius_mm, pred);
+    // 4) Apply the fillet (single-pass build)
+    const TopoDS_Shape newShape =
+        pr::filletEdges(wp.shape(), in.radius_mm, effective);
 
-    // 4) Signature
+    // 5) Signature
     json selJson;
     std::visit([&](const auto& s) {
         using T = std::decay_t<decltype(s)>;
@@ -135,6 +273,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
             selJson = { { "kind", "unknown" } };
         }
     }, in.edge_selector);
+    if (usedFallback) {
+        selJson["fallback"] = {
+            { "z_min_mm",        fallbackZMin },
+            { "z_max_mm",        fallbackZMax },
+            { "edge_filter_dir", in.edge_filter_dir },
+        };
+    }
 
     json params = {
         { "edge_selector", selJson },

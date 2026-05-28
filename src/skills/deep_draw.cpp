@@ -296,8 +296,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         cands.push_back({ fIdx, radius, axis.Location(), adir, zLow, zHigh });
     }
 
-    // Group by axis XY (within 1 mm); choose the LARGEST radius per group as
+    // Group by axis XY (within 0.5 mm — XY-only because coaxial cylinders
+    // can have gp_Cylinder reference points at different Z, e.g. the cup
+    // outer constructed at the cup floor vs. the cup inner offset upward
+    // by the sheet thickness).  Choose the LARGEST radius per group as
     // the cup outer wall (= reported cup_dia).
+    constexpr double kAxisXYTolMm = 0.5;
     std::vector<bool> used(cands.size(), false);
     for (size_t i = 0; i < cands.size(); ++i) {
         if (used[i]) continue;
@@ -306,7 +310,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         for (size_t j = i + 1; j < cands.size(); ++j) {
             if (used[j]) continue;
             if (std::hypot(best.axisLoc.X() - cands[j].axisLoc.X(),
-                           best.axisLoc.Y() - cands[j].axisLoc.Y()) > 1.0)
+                           best.axisLoc.Y() - cands[j].axisLoc.Y()) > kAxisXYTolMm)
                 continue;
             used[j] = true;
             if (cands[j].radius > best.radius) best = cands[j];

@@ -38,10 +38,7 @@ std::shared_ptr<skill::Workpiece> drawnCup()
 }  // namespace
 
 // ── 1. Apply: 30% wall reduction on a drawn cup ────────────────────────
-// TODO(slice-8): findCupWall() on a deep_draw output cup doesn't locate
-// the outer+inner cylinder pair → apply fails or produces wrong geometry.
-// Coordinate fix with deep_draw recognize (same axis-XY grouping logic).
-TEST(SkillIroning, DISABLED_ApplyReducesWall)
+TEST(SkillIroning, ApplyReducesWall)
 {
     auto cup = drawnCup();
 
@@ -80,7 +77,8 @@ TEST(SkillIroning, ValidateRejectsExcessiveReduction)
 }
 
 // ── 3. DFM-IR-MIN-WALL: too-thin resulting wall rejected ───────────────
-// TODO(slice-8): depends on ApplyReducesWall path; blocked on findCupWall.
+// TODO(slice-9): chained apply path produces a workpiece where
+// findCupWall returns wrong wall thickness for the second iteration.
 TEST(SkillIroning, DISABLED_ValidateRejectsTooThinResult)
 {
     auto cup = drawnCup();
@@ -115,9 +113,7 @@ TEST(SkillIroning, ValidateRejectsNonCupStock)
 }
 
 // ── 5. Recognize finds the ironed cup ──────────────────────────────────
-// TODO(slice-8): depends on apply producing a recognizable cup; blocked
-// on findCupWall.
-TEST(SkillIroning, DISABLED_RecognizeAfterApply)
+TEST(SkillIroning, RecognizeAfterApply)
 {
     auto cup = drawnCup();
     skill::ironing::Input in;
