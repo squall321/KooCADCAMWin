@@ -147,6 +147,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "reduction_pct",              in.target_thickness_reduction_pct },
     };
     ToolingMeta tooling;
+    // Geometric pocket volume removed = π R² × depression_depth.  This is the
+    // bbox-delta the cut leaves on the workpiece; the physical forming process
+    // displaces (not removes) this material, but the geometric model records
+    // the cut volume.
+    const double pocketVolume =
+        3.14159265358979323846 * in.stretch_radius_mm * in.stretch_radius_mm
+        * depressionDepth;
     tooling.tool_type         = "stretch_form_die";
     tooling.tool_dia_mm       = 2.0 * in.stretch_radius_mm;
     tooling.tool_length_mm    = depressionDepth + 2.0;
@@ -154,7 +161,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     tooling.flute_count       = 0;
     tooling.cutting_speed_sfm = 0.0;
     tooling.feed_per_tooth_mm = 0.0;
-    tooling.stock_removed_mm3 = 0.0;     // forming, not removal
+    tooling.stock_removed_mm3 = pocketVolume;  // geometric pocket volume (mm³)
     tooling.est_cycle_time_s  = 1.0 + depressionDepth * 0.2;
     tooling.extra["machining_constraint"] =
         "Stretching — sheet held by clamps then drawn over a form block; "

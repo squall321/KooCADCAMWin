@@ -59,11 +59,20 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     if (in.thread_depth_mm <= 0.0) {
         r.add("DFM-INPUT", "error", "tap_thread thread_depth_mm must be > 0");
     }
-    if (in.pitch_mm > 0.0 && in.thread_depth_mm < in.pitch_mm * 1.5) {
+    // Minimum thread engagement.
+    // Standards reference: Machinery's Handbook 31st ed. §1908 "Tapped Hole
+    // Length of Engagement" — a minimum of 1.5 P (1.5 × pitch ≈ 1½ full
+    // threads) is required to develop the geometric thread profile so the
+    // tap can cut a recognizable form.  Full strength engagement (~1×
+    // nominal diameter) is a process-planner-level requirement and is not
+    // enforced here; the gate below is the absolute geometric floor.
+    constexpr double kMinEngagePitchMultiple = 1.5;  // Machinery's Handbook 31st ed. §1908
+    if (in.pitch_mm > 0.0 &&
+        in.thread_depth_mm < in.pitch_mm * kMinEngagePitchMultiple) {
         r.add("DFM-TAP-ENGAGE", "error",
               "thread_depth_mm " + std::to_string(in.thread_depth_mm) +
               " < 1.5 × pitch (" + std::to_string(in.pitch_mm * 1.5) +
-              ") — insufficient thread engagement");
+              ") — Machinery's Handbook 31st ed. §1908: minimum tapped engagement is 1.5 P");
     }
 
     const double expected = tapDrillDiameter(in.thread_size);

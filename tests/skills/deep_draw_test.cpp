@@ -107,11 +107,10 @@ TEST(SkillDeepDraw, ValidateRejectsOffSheet)
 }
 
 // ── 5. Recognize finds the cup protrusion ─────────────────────────────
-// TODO(slice-9): FIX_FORM tolerance widening still doesn't match the
-// outer+inner cylinder pair after deep_draw::apply().  Likely a
-// span filter mismatch (the outer cup wall span may not exceed 1.5×t
-// after Boolean tolerance).  Re-investigate findCupWall geometry.
-TEST(SkillDeepDraw, DISABLED_RecognizeFindsCup)
+// Fixed in slice-9: recognize() now falls back to the face's geometric Z
+// bbox when fewer than two circular bounding edges survive the Boolean
+// fuse, and the span filter was relaxed from 1.5*t to 1.05*t.
+TEST(SkillDeepDraw, RecognizeFindsCup)
 {
     auto stock = skill::createCuboidStock(100.0, 80.0, 1.5);
 

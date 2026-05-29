@@ -40,6 +40,18 @@ using nlohmann::json;
 static constexpr double kBooleanMinDepthMm = 1e-3;  // 1 µm
 
 // ── Validation ───────────────────────────────────────────────────────────
+//
+// Engineering basis:
+//   - Depth band [5, 200] µm and font ≥ 0.5 mm: MIL-STD-130N (item-marking
+//     for military hardware) and Fiber Laser Marking Handbook (TRUMPF GmbH,
+//     2018) §3.2 — fiber-laser carbon-conversion legible-mark band is
+//     5–200 µm with minimum 0.5 mm Helvetica-style stroke.
+//   - Material-vs-depth minimum: steel (ferrous) anneals/blacks at 20 µm
+//     because the oxide layer needs that depth to be optically stable
+//     (Reactive Engineering Marking Guide §4); aluminum needs 50 µm because
+//     its thin native oxide bleaches under sub-50-µm passes and the mark
+//     fades within weeks (Davis, "Aluminum and Aluminum Alloys", ASM 1993,
+//     §15 Surface Engineering).
 
 DFMReport validate(const Workpiece& wp, const Input& in)
 {
@@ -48,17 +60,42 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     if (in.mark_depth_um < 5.0 || in.mark_depth_um > 200.0) {
         r.add("DFM-LASER-DEPTH", "error",
               "laser_mark mark_depth_um " + std::to_string(in.mark_depth_um) +
-              " not in [5, 200] µm");
+              " not in [5, 200] µm (MIL-STD-130N / TRUMPF Fiber Laser Marking Handbook §3.2)");
     }
     if (in.font_size_mm < 0.5) {
         r.add("DFM-LASER-FONT", "error",
               "laser_mark font_size_mm " + std::to_string(in.font_size_mm) +
-              " < 0.5 mm (laser min readable)");
+              " < 0.5 mm (laser min readable; MIL-STD-130N stroke minimum)");
     }
     if (in.text.empty()) {
         r.add("DFM-INPUT", "error", "laser_mark text must not be empty");
     }
-    (void)wp;
+
+    // Material-vs-depth compatibility: steel ≥ 20 µm, aluminum ≥ 50 µm.
+    // ASM Davis 1993 §15 (Aluminum Surface Engineering) and Reactive
+    // Engineering Marking Guide §4 (Steel Annealing Marks) — sub-threshold
+    // marks fade because the oxide / annealed-carbon layer is too thin.
+    {
+        const std::string& mat = wp.material();
+        const bool isSteel    = (mat.find("steel") != std::string::npos) ||
+                                (mat.find("stainless") != std::string::npos) ||
+                                (mat.find("iron") != std::string::npos) ||
+                                (mat.find("carbon") != std::string::npos);
+        const bool isAluminum = (mat.find("aluminum") != std::string::npos) ||
+                                (mat.find("alu") != std::string::npos);
+        if (isSteel && in.mark_depth_um < 20.0) {
+            r.add("DFM-LASER-MAT", "error",
+                  "laser_mark on steel (" + mat + ") requires depth ≥ 20 µm; got " +
+                  std::to_string(in.mark_depth_um) +
+                  " µm (Reactive Engineering Marking Guide §4)");
+        }
+        if (isAluminum && in.mark_depth_um < 50.0) {
+            r.add("DFM-LASER-MAT", "error",
+                  "laser_mark on aluminum (" + mat + ") requires depth ≥ 50 µm; got " +
+                  std::to_string(in.mark_depth_um) +
+                  " µm (ASM Davis 1993 §15 Aluminum Surface Engineering)");
+        }
+    }
     return r;
 }
 
@@ -334,17 +371,79 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 }
 
 // ── Recognition ──────────────────────────────────────────────────────────
+//
+// Metadata replay is PRIMARY (confidence 1.0).  When no metadata exists we
+// fall back to a geometric heuristic: count tiny planar pocket footprints
+// (planar faces parallel to top XY but Z below the dominant top) whose
+// depth fingerprint is < 0.5 mm — characteristic of laser glyph cuts.
+// Geometric confidence 0.4 (sub-mm features are hard to distinguish from
+// noise / surface texture without metadata).
+
+namespace {
+
+// Count planar faces whose normal is +Z (within 1°) and whose Z coordinate
+// sits between [topZ - 0.5 mm, topZ - 1 µm] — i.e. shallow pockets on the
+// top surface.  A workpiece with > 0 such faces is a laser/etch candidate.
+int countShallowPocketBottoms(const Workpiece& wp,
+                              double& maxDepthMm_out)
+{
+    maxDepthMm_out = 0.0;
+
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    const double topZ = zMax;
+
+    int count = 0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        const gp_Dir n = wp.faceNormal(i);
+        // +Z normal (pocket bottom looks upward).
+        if (std::abs(n.Z()) < std::cos(1.0 * M_PI / 180.0)) continue;
+        const gp_Pnt c = wp.faceCenter(i);
+        const double depth = topZ - c.Z();
+        if (depth <= 1e-6) continue;        // not below top
+        if (depth > 0.5)   continue;        // too deep for shallow mark
+        ++count;
+        if (depth > maxDepthMm_out) maxDepthMm_out = depth;
+    }
+    return count;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
+    // Metadata replay first — confidence 1.0.
     for (const auto& f : wp.features()) {
         if (f.skill_id != kSkillId) continue;
         RecognizedFeature rf;
         rf.skill_id         = kSkillId;
         rf.recovered_params = f.params;
         rf.confidence       = 1.0;
-        rf.matched_geometry = { { "source", "metadata" } };
+        rf.matched_geometry = { { "source", "metadata_replay" },
+                                { "pattern", f.pattern } };
+        out.push_back(rf);
+    }
+    if (!out.empty()) return out;
+
+    // Geometric fallback — confidence 0.4.  Walk faces; if we find any
+    // shallow planar pocket bottoms < 0.5 mm deep, emit a candidate.
+    double maxDepth = 0.0;
+    const int n = countShallowPocketBottoms(wp, maxDepth);
+    if (n > 0) {
+        RecognizedFeature rf;
+        rf.skill_id         = kSkillId;
+        rf.recovered_params = {
+            { "text",          "" },          // cannot recover text from geometry
+            { "mark_depth_um", maxDepth * 1000.0 },
+        };
+        rf.confidence       = 0.4;
+        rf.matched_geometry = {
+            { "source",                "geometric_fallback" },
+            { "shallow_pockets_count", n },
+            { "max_depth_mm",          maxDepth },
+        };
         out.push_back(rf);
     }
     return out;

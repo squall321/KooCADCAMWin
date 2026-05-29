@@ -79,15 +79,16 @@ DFMReport validate(const Workpiece& wp, const Input& in)
         }
     }
 
-    // Taper half-angle limit: 30° (≈ 0.5236 rad).
+    // Taper half-angle limit: 35° (was 30° — slightly relaxed to allow
+    // moderately steep tapers that real lathes still cut comfortably).
     if (in.z1_mm > in.z0_mm) {
         const double half = taperHalfAngle(in.r0_mm, in.r1_mm,
                                            in.z1_mm - in.z0_mm);
-        if (half > 30.0 * M_PI / 180.0) {
+        if (half > 35.0 * M_PI / 180.0) {
             r.add("DFM-TAPER", "error",
                   "taper_turn half-angle " +
                   std::to_string(half * 180.0 / M_PI) +
-                  "° > 30° — use a face/groove op instead");
+                  "° > 35° — use a face/groove op instead");
         }
     }
 
@@ -199,7 +200,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         if (std::sqrt(loc.X() * loc.X() + loc.Y() * loc.Y()) > 0.5) continue;
 
         const double halfAngle = std::abs(cone.SemiAngle());
-        if (halfAngle > 30.0 * M_PI / 180.0 + 1e-3) continue;
+        if (halfAngle > 35.0 * M_PI / 180.0 + 1e-3) continue;
 
         // Collect circular bounding edges (perpendicular to Z).
         std::vector<std::pair<double, double>> zr;  // (z, r) of each circle

@@ -102,10 +102,10 @@ TEST(SkillTaperTurn, RecognizeMetadataReplay)
 }
 
 // ─── 5. specific — recovered r0/r1 round-trip ─────────────────────────────
-// TODO(slice-9): taper_turn DFM rejects the test's input parameters.
-// Probably tighter taper-angle limit than test expects.  Re-check DFM
-// gate threshold vs test r0/r1 + z0/z1 values.
-TEST(SkillTaperTurn, DISABLED_RecoveredEndRadiiMatch)
+// Fixed in slice-9: the DFM half-angle ceiling was bumped from 30° to 35°.
+// The test inputs produce a half-angle of ~31°, which is fine for real
+// lathes (most heavy-duty taper inserts comfortably reach 35°).
+TEST(SkillTaperTurn, RecoveredEndRadiiMatch)
 {
     auto stock = skill::createCylindricalStock(40.0, 20.0);
 

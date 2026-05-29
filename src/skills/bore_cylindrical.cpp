@@ -41,40 +41,51 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     if (in.diameter_mm <= 0.0) {
         r.add("DFM-INPUT", "error", "bore_cylindrical diameter must be > 0");
     }
-    if (in.diameter_mm < 0.8) {
+    // DFM-002 — minimum bore diameter (matches drill_hole floor: ISO 235:2016
+    // smallest standard HSS twist-drill nominal = 0.8 mm).
+    constexpr double kMinBoreDiaMm = 0.8;  // ISO 235:2016 smallest standard HSS drill
+    if (in.diameter_mm < kMinBoreDiaMm) {
         r.add("DFM-002", "error",
               "bore_cylindrical diameter " + std::to_string(in.diameter_mm) +
-              " mm < min 0.8 mm");
+              " mm < min 0.8 mm (ISO 235:2016 smallest standard HSS drill)");
     }
     if (in.depth_mm <= 0.0) {
         r.add("DFM-INPUT", "error", "bore_cylindrical depth must be > 0");
     }
 
-    // Boring-bar specific: usually 6 mm and up.  Smaller diameters are
-    // technically possible with a small-bore tool but typically reach H7
+    // Smallest practical boring-bar shank.  Sandvik Coromant CoroBore /
+    // CoroTurn 107 family starts at 6 mm shank; smaller bores reach H7
     // via drill + reamer instead.
-    if (in.diameter_mm > 0.0 && in.diameter_mm < 6.0) {
+    constexpr double kMinBoringBarDiaMm = 6.0;  // Sandvik Coromant CoroBore minimum shank
+    if (in.diameter_mm > 0.0 && in.diameter_mm < kMinBoringBarDiaMm) {
         r.add("DFM-BORE-DIA", "warning",
               "bore_cylindrical diameter " + std::to_string(in.diameter_mm) +
-              " mm < 6 mm — boring bars are usually 6 mm+; consider drill+ream");
+              " mm < 6 mm — Sandvik CoroBore minimum shank is 6 mm; consider drill+ream");
     }
 
-    // Boring-bar deflection: depth/dia > 4 causes chatter and taper.
+    // Boring-bar overhang limit (L/D ratio) — beyond this, bar deflection
+    // causes chatter and taper that exceed the H7 tolerance band.
+    // Standards reference: Sandvik Coromant turning handbook §C-50, table
+    // "Maximum overhang for boring bars": steel bar L/D ≤ 4.  (Carbide bar
+    // L/D ≤ 6, anti-vibration L/D ≤ 10 — out of scope for the default gate.)
+    constexpr double kMaxBoreRatioSteel = 4.0;  // Sandvik Coromant turning handbook §C-50 (steel boring bar)
     const double ratio = (in.diameter_mm > 0.0) ? (in.depth_mm / in.diameter_mm) : 0.0;
-    if (ratio > 4.0) {
+    if (ratio > kMaxBoreRatioSteel) {
         r.add("DFM-BORE-RATIO", "warning",
               "depth/dia ratio " + std::to_string(ratio) +
-              " > 4 — boring bar deflection may degrade tolerance");
+              " > 4 — Sandvik §C-50: steel boring bar L/D ≤ 4 to hold H7 tolerance");
     }
 
-    // Tolerance class validation
+    // Tolerance class validation — ISO 286-1:2010 hole-basis precision system.
+    // H7/H8/H9 are the standard machined-bore classes (H7 IT7 = ±0/+15 µm @
+    // Ø ≤ 50 mm; H8 IT8 = ±0/+25 µm; H9 IT9 = ±0/+40 µm).
     if (!in.tolerance_class.empty() &&
         in.tolerance_class != "H7" &&
         in.tolerance_class != "H8" &&
         in.tolerance_class != "H9") {
         r.add("DFM-INPUT", "warning",
               "unknown tolerance_class '" + in.tolerance_class +
-              "' — expected H7/H8/H9");
+              "' — ISO 286-1:2010 standard machined-bore classes are H7/H8/H9");
     }
 
     (void)wp;

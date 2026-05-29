@@ -6,8 +6,10 @@
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
+#include <Bnd_Box.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRep_Tool.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
@@ -62,6 +64,8 @@ std::optional<CupWall> findCupWall(const Workpiece& wp,
         const gp_Dir adir = cyl.Axis().Direction();
         if (std::abs(adir.Z()) < 0.9) continue;
 
+        // Prefer circular-edge Z bounds; if Boolean ops trimmed the rim
+        // circles away, fall back to the face's geometric Z bbox.
         std::vector<double> zCircles;
         for (TopExp_Explorer exp(wp.face(fIdx), TopAbs_EDGE); exp.More(); exp.Next()) {
             const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
@@ -69,9 +73,20 @@ std::optional<CupWall> findCupWall(const Workpiece& wp,
             if (crv.GetType() != GeomAbs_Circle) continue;
             zCircles.push_back(crv.Circle().Location().Z());
         }
-        if (zCircles.size() < 2) continue;
-        const double zLo = *std::min_element(zCircles.begin(), zCircles.end());
-        const double zHi = *std::max_element(zCircles.begin(), zCircles.end());
+        double zLo = 0.0;
+        double zHi = 0.0;
+        if (zCircles.size() >= 2) {
+            zLo = *std::min_element(zCircles.begin(), zCircles.end());
+            zHi = *std::max_element(zCircles.begin(), zCircles.end());
+        } else {
+            Bnd_Box fb;
+            BRepBndLib::Add(wp.face(fIdx), fb, false);
+            if (fb.IsVoid()) continue;
+            double fxMin, fyMin, fzMin, fxMax, fyMax, fzMax;
+            fb.Get(fxMin, fyMin, fzMin, fxMax, fyMax, fzMax);
+            zLo = fzMin;
+            zHi = fzMax;
+        }
         verts.push_back({ fIdx, cyl.Radius(), cyl.Axis().Location(), adir, zLo, zHi });
     }
     if (verts.empty()) return std::nullopt;

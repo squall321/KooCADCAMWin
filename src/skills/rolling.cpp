@@ -160,6 +160,10 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "parallel_planar_face_pair",  true },
     };
     ToolingMeta tooling;
+    // Volume delta: rebuilt as same XY × new t1 → vol = dx · dy · t1.
+    // Original bbox volume = dx · dy · t0.  Net displaced volume = dx·dy·(t0−t1).
+    // Forming preserves true material volume; this is geometric-bbox delta.
+    const double volDeltaBbox = dx * dy * (t0 - t1);
     tooling.tool_type         = "roller_mill";
     tooling.tool_dia_mm       = 0.0;
     tooling.tool_length_mm    = std::max(dx, dy);
@@ -167,7 +171,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     tooling.flute_count       = 0;
     tooling.cutting_speed_sfm = 0.0;
     tooling.feed_per_tooth_mm = 0.0;
-    tooling.stock_removed_mm3 = 0.0;     // forming, not removal
+    tooling.stock_removed_mm3 = volDeltaBbox;  // geometric bbox delta (mm³)
     tooling.est_cycle_time_s  = 5.0 + effectiveRedPct * 0.2;
     tooling.extra["machining_constraint"] =
         "Rolling — paired rollers; cold rolling typical; volume preserved "

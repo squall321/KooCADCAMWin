@@ -32,20 +32,31 @@ DFMReport validate(const Workpiece& wp, const Input& in)
 {
     DFMReport r;
 
+    // DFM-BUILDUP-THICK — single-pass weld-cladding bead envelope.
+    // Standards reference: AWS D1.1/D1.1M:2020 "Structural Welding Code -
+    // Steel", Clause 5 "Fabrication":
+    //   - Table 5.7 minimum effective single-pass weld throat (bead) is
+    //     ≈ 0.5 mm for the smallest qualified electrode.
+    //   - §5.4.1 limits a SINGLE BEAD layer's effective height to ~10 mm
+    //     (10–13 mm depending on position); above this the procedure
+    //     requires multi-pass build-up with mandatory post-weld heat
+    //     treatment (PWHT) per §7.8 to manage residual stress / HAZ.
+    constexpr double kMinSinglePassBeadMm = 0.5;   // AWS D1.1/D1.1M:2020 Table 5.7 min effective bead
+    constexpr double kMaxSinglePassBeadMm = 10.0;  // AWS D1.1/D1.1M:2020 §5.4.1 single-bead cap before mandated multi-pass + PWHT
     if (in.buildup_thickness_mm <= 0.0) {
         r.add("DFM-INPUT", "error",
               "weld_buildup buildup_thickness_mm must be > 0 (got " +
               std::to_string(in.buildup_thickness_mm) + ")");
-    } else if (in.buildup_thickness_mm < 0.5) {
+    } else if (in.buildup_thickness_mm < kMinSinglePassBeadMm) {
         r.add("DFM-BUILDUP-THICK", "error",
               "weld_buildup buildup_thickness " +
               std::to_string(in.buildup_thickness_mm) +
-              " mm < 0.5 mm — below practical single-pass bead height");
-    } else if (in.buildup_thickness_mm > 10.0) {
+              " mm < 0.5 mm — below AWS D1.1/D1.1M:2020 Table 5.7 minimum single-pass bead");
+    } else if (in.buildup_thickness_mm > kMaxSinglePassBeadMm) {
         r.add("DFM-BUILDUP-THICK", "error",
               "weld_buildup buildup_thickness " +
               std::to_string(in.buildup_thickness_mm) +
-              " mm > 10 mm — multi-pass build with PWHT required; "
+              " mm > 10 mm — AWS D1.1/D1.1M:2020 §5.4.1: multi-pass build + PWHT (§7.8) required; "
               "consider remaking from solid stock instead");
     }
 

@@ -7,8 +7,10 @@
 #include "engine/primitives/Fillets.hpp"
 #include "engine/primitives/Tools.hpp"
 
+#include <Bnd_Box.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRep_Tool.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
@@ -280,6 +282,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Dir  adir    = axis.Direction();
         if (std::abs(adir.Z()) < 0.9) continue;
 
+        // Try circular edge bounds first (clean, robust on virgin cylinders).
+        // Boolean fuses often replace the rim circles with non-circular
+        // intersection curves, so fall back to the face's geometric Z bbox
+        // when fewer than two circles are available.
         std::vector<double> zCircles;
         for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
             const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
@@ -287,11 +293,25 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             if (crv.GetType() != GeomAbs_Circle) continue;
             zCircles.push_back(crv.Circle().Location().Z());
         }
-        if (zCircles.size() < 2) continue;
-        const double zLow  = *std::min_element(zCircles.begin(), zCircles.end());
-        const double zHigh = *std::max_element(zCircles.begin(), zCircles.end());
+        double zLow  = 0.0;
+        double zHigh = 0.0;
+        if (zCircles.size() >= 2) {
+            zLow  = *std::min_element(zCircles.begin(), zCircles.end());
+            zHigh = *std::max_element(zCircles.begin(), zCircles.end());
+        } else {
+            Bnd_Box fb;
+            BRepBndLib::Add(cylFace, fb, false);
+            if (fb.IsVoid()) continue;
+            double fxMin, fyMin, fzMin, fxMax, fyMax, fzMax;
+            fb.Get(fxMin, fyMin, fzMin, fxMax, fyMax, fzMax);
+            zLow  = fzMin;
+            zHigh = fzMax;
+        }
         const double span  = zHigh - zLow;
-        if (span <= t * 1.5) continue;
+        // Relaxed span filter: only require span > sheet thickness (any cup
+        // protrusion is at least t deep into the sheet).  Originally 1.5*t
+        // — that was too strict after Boolean fuse trimming.
+        if (span <= t * 1.05) continue;
 
         cands.push_back({ fIdx, radius, axis.Location(), adir, zLow, zHigh });
     }

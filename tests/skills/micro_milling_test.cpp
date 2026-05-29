@@ -108,11 +108,10 @@ TEST(SkillMicroMilling, SignatureRecordsKindAndParams)
 }
 
 // ─── 4. Recognize metadata replay (signature on workpiece) ────────────────
-// TODO(slice-9): recognize returns empty — the geometric heuristic
-// (small-planar-bottom + aspect ratio < 2.0) doesn't fire on the cut
-// produced by apply().  Either the bottom face is too small to detect
-// or the cylinder's aspect is misidentified.  Re-investigate.
-TEST(SkillMicroMilling, DISABLED_RecognizeMetadataReplay)
+// Fixed in slice-9: the aspect-ratio gate was too tight (`ratio >= 2.0`)
+// and rejected ratio = 2.0 exactly.  Loosened to `ratio > 5.0` so it
+// matches the DFM-MICRO-MILL-RATIO ceiling instead.
+TEST(SkillMicroMilling, RecognizeMetadataReplay)
 {
     auto stock = skill::createCuboidStock(20.0, 20.0, 5.0);
 

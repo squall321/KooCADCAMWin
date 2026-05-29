@@ -27,7 +27,7 @@ namespace koocadcam::skill::nurbs_patch {
 namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
-// ── Validation ───────────────────────────────────────────────────────────
+// -- Validation ------------------------------------------------------------
 
 DFMReport validate(const Workpiece& wp, const Input& in)
 {
@@ -37,14 +37,14 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     const int nu = static_cast<int>(in.control_grid.size());
     if (nu < 4) {
         r.add("DFM-INPUT", "error",
-              "nurbs_patch needs ≥ 4 control rows (got " +
+              "nurbs_patch needs >= 4 control rows (got " +
               std::to_string(nu) + ")");
         return r;
     }
     const int nv = static_cast<int>(in.control_grid[0].size());
     if (nv < 4) {
         r.add("DFM-INPUT", "error",
-              "nurbs_patch needs ≥ 4 control cols (got " +
+              "nurbs_patch needs >= 4 control cols (got " +
               std::to_string(nv) + ")");
         return r;
     }
@@ -59,7 +59,7 @@ DFMReport validate(const Workpiece& wp, const Input& in)
 
     if (in.degree_u < 2 || in.degree_v < 2) {
         r.add("DFM-NURBS-DEG", "error",
-              "nurbs_patch effective surface degree must be ≥ 2 (got u=" +
+              "nurbs_patch effective surface degree must be >= 2 (got u=" +
               std::to_string(in.degree_u) + ", v=" +
               std::to_string(in.degree_v) + ")");
     }
@@ -77,7 +77,7 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     return r;
 }
 
-// ── Synthesis ────────────────────────────────────────────────────────────
+// -- Synthesis -------------------------------------------------------------
 
 SkillOutput apply(const Workpiece& wp, const Input& in)
 {
@@ -102,16 +102,26 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     Handle(Geom_BSplineSurface) surf;
     try {
+        // OCCT's GeomAPI_PointsToBSplineSurface drives an
+        // AppDef_BSplineCompute fit whose ConstraintOrder is derived from
+        // the requested continuity.  For GeomAbs_C2 the fit requires
+        // DegMax >= 2*Order + 1 = 5; a lower DegMax raises
+        // "WorkDegree too small for given ConstraintOrder".  Lift DegMax
+        // to 8 (>5) and floor DegMin at 3 (cubic min that supports C2).
+        const int degMinU = std::max(3, in.degree_u);
+        const int degMinV = std::max(3, in.degree_v);
+        const int degMaxU = std::max(degMinU + 1, 8);
+        const int degMaxV = std::max(degMinV + 1, 8);
         GeomAPI_PointsToBSplineSurface fit(
-            arr, in.degree_u, in.degree_u + 1,
-            in.degree_v, in.degree_v + 1,
+            arr, degMinU, degMaxU,
+            degMinV, degMaxV,
             GeomAbs_C2, 1.0e-3);
         if (!fit.IsDone()) {
             throw SkillError("nurbs_patch: surface fit did not converge");
         }
         surf = fit.Surface();
     } catch (const Standard_Failure& ex) {
-        throw SkillError(std::string("nurbs_patch: OCCT failure — ") +
+        throw SkillError(std::string("nurbs_patch: OCCT failure - ") +
                          ex.what());
     }
     if (surf.IsNull()) {
@@ -133,7 +143,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         newShape = pr::fuse(wp.shape(), patchFace);
     } catch (const Standard_Failure&) {
         // If the boolean fails (e.g. the patch is disjoint from the solid),
-        // we still want to surface the face — wrap shape() in a compound.
+        // we still want to surface the face - wrap shape() in a compound.
         BRep_Builder builder;
         TopoDS_Compound comp;
         builder.MakeCompound(comp);
@@ -172,7 +182,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition ──────────────────────────────────────────────────────────
+// -- Recognition -----------------------------------------------------------
 //
 // History replay is the only reliable path for free-form surfaces: a
 // recovered BSpline face's parameter grid is not deterministic across

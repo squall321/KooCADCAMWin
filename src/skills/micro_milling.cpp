@@ -265,9 +265,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         // Bottom must be near π r² (not the workpiece outer face).
         if (smallestAdjPlanarArea > bottomArea * 1.5) continue;
 
-        // Pocket aspect ratio: depth/dia < 2 differentiates from micro_drill.
+        // Pocket aspect ratio: depth/dia < 5 differentiates from micro_drill.
+        // (Originally < 2.0, but legitimate micro-milled blind pockets often
+        // have depth/dia up to the DFM-MICRO-MILL-RATIO ceiling of 5.)
         const double ratio = (diameter > 0.0) ? depth / diameter : 0.0;
-        if (ratio >= 2.0) continue;
+        if (ratio > 5.0) continue;
 
         gp_Vec drillVec(centerHigh, centerLow);
         if (drillVec.Magnitude() < 1e-6) continue;

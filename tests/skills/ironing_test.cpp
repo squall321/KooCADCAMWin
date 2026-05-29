@@ -77,9 +77,10 @@ TEST(SkillIroning, ValidateRejectsExcessiveReduction)
 }
 
 // ── 3. DFM-IR-MIN-WALL: too-thin resulting wall rejected ───────────────
-// TODO(slice-9): chained apply path produces a workpiece where
-// findCupWall returns wrong wall thickness for the second iteration.
-TEST(SkillIroning, DISABLED_ValidateRejectsTooThinResult)
+// Fixed in slice-9: findCupWall() now falls back to face-bbox Z extent
+// when fewer than two circular bounding edges remain after the chained
+// Boolean ops, so the second-iteration wall thickness is detected.
+TEST(SkillIroning, ValidateRejectsTooThinResult)
 {
     auto cup = drawnCup();
     skill::ironing::Input in;

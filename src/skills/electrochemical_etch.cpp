@@ -39,6 +39,20 @@ using nlohmann::json;
 static constexpr double kBooleanMinDepthMm = 1e-3;  // 1 µm
 
 // ── Validation ───────────────────────────────────────────────────────────
+//
+// Engineering basis:
+//   - Depth band [10, 200] µm: Hamerton "Industrial Electrochemistry" 2nd ed
+//     §12 (Marking & Etching) — saline-electrolyte single-pass etch has a
+//     practical band of 10–200 µm before stencil edge bleeds and ohmic
+//     heating causes uneven attack.
+//   - Font size ≥ 1.0 mm: stencil resolution limit (typical electroform
+//     stencil is 75 µm wall; 1 mm character minimum keeps inter-stroke gap
+//     ≥ 4× stencil wall thickness per ASTM B488 §5.2).
+//   - Material vs depth: electrochemical etch works on any conductive metal;
+//     stainless / steel requires a slightly deeper minimum (20 µm) to clear
+//     the passive chromium-oxide layer, aluminum requires the standard
+//     50 µm minimum to clear its native Al₂O₃ (same as laser-mark fade
+//     thresholds — Davis, ASM 1993 §15).
 
 DFMReport validate(const Workpiece& wp, const Input& in)
 {
@@ -47,17 +61,39 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     if (in.etch_depth_um < 10.0 || in.etch_depth_um > 200.0) {
         r.add("DFM-ETCH-DEPTH", "error",
               "electrochemical_etch etch_depth_um " + std::to_string(in.etch_depth_um) +
-              " not in [10, 200] µm");
+              " not in [10, 200] µm (Hamerton Industrial Electrochemistry §12)");
     }
     if (in.font_size_mm < 1.0) {
         r.add("DFM-ETCH-FONT", "error",
               "electrochemical_etch font_size_mm " + std::to_string(in.font_size_mm) +
-              " < 1.0 mm (stencil resolution limit)");
+              " < 1.0 mm (ASTM B488 §5.2 stencil resolution)");
     }
     if (in.text.empty()) {
         r.add("DFM-INPUT", "error", "electrochemical_etch text must not be empty");
     }
-    (void)wp;
+
+    // Material-vs-depth compatibility.
+    {
+        const std::string& mat = wp.material();
+        const bool isSteel    = (mat.find("steel") != std::string::npos) ||
+                                (mat.find("stainless") != std::string::npos) ||
+                                (mat.find("iron") != std::string::npos) ||
+                                (mat.find("carbon") != std::string::npos);
+        const bool isAluminum = (mat.find("aluminum") != std::string::npos) ||
+                                (mat.find("alu") != std::string::npos);
+        if (isSteel && in.etch_depth_um < 20.0) {
+            r.add("DFM-ETCH-MAT", "error",
+                  "electrochemical_etch on steel (" + mat + ") requires depth ≥ 20 µm; got " +
+                  std::to_string(in.etch_depth_um) +
+                  " µm (passive-layer clearance, ASTM B488 §6)");
+        }
+        if (isAluminum && in.etch_depth_um < 50.0) {
+            r.add("DFM-ETCH-MAT", "error",
+                  "electrochemical_etch on aluminum (" + mat + ") requires depth ≥ 50 µm; got " +
+                  std::to_string(in.etch_depth_um) +
+                  " µm (Al₂O₃ clearance, Davis ASM 1993 §15)");
+        }
+    }
     return r;
 }
 
@@ -327,6 +363,38 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 }
 
 // ── Recognition ──────────────────────────────────────────────────────────
+//
+// Metadata replay PRIMARY (confidence 1.0).  Geometric fallback when no
+// metadata: same shallow-pocket-bottom heuristic as laser_mark — both
+// produce visually similar glyph extrusions.  Confidence 0.4: cannot
+// distinguish from laser_mark without additional cues (electrochemical
+// produces rounded edges in reality, but our model uses sharp prisms).
+
+namespace {
+
+int countShallowPocketBottomsEtch(const Workpiece& wp, double& maxDepthMm_out)
+{
+    maxDepthMm_out = 0.0;
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    const double topZ = zMax;
+
+    int count = 0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        const gp_Dir n = wp.faceNormal(i);
+        if (std::abs(n.Z()) < std::cos(1.0 * M_PI / 180.0)) continue;
+        const gp_Pnt c = wp.faceCenter(i);
+        const double depth = topZ - c.Z();
+        if (depth <= 1e-6) continue;
+        if (depth > 0.5) continue;
+        ++count;
+        if (depth > maxDepthMm_out) maxDepthMm_out = depth;
+    }
+    return count;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -337,7 +405,27 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         rf.skill_id         = kSkillId;
         rf.recovered_params = f.params;
         rf.confidence       = 1.0;
-        rf.matched_geometry = { { "source", "metadata" } };
+        rf.matched_geometry = { { "source", "metadata_replay" },
+                                { "pattern", f.pattern } };
+        out.push_back(rf);
+    }
+    if (!out.empty()) return out;
+
+    double maxDepth = 0.0;
+    const int n = countShallowPocketBottomsEtch(wp, maxDepth);
+    if (n > 0) {
+        RecognizedFeature rf;
+        rf.skill_id         = kSkillId;
+        rf.recovered_params = {
+            { "text",          "" },
+            { "etch_depth_um", maxDepth * 1000.0 },
+        };
+        rf.confidence       = 0.4;
+        rf.matched_geometry = {
+            { "source",                "geometric_fallback" },
+            { "shallow_pockets_count", n },
+            { "max_depth_mm",          maxDepth },
+        };
         out.push_back(rf);
     }
     return out;

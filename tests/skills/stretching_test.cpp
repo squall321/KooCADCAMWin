@@ -43,6 +43,12 @@ TEST(SkillStretching, ApplyCreatesDepression)
     const double removed  = volumeOf(stock->shape()) - volumeOf(out.workpiece->shape());
     EXPECT_NEAR(removed, expected, expected * 0.05);
 
+    // Tooling reports the pocket volume.
+    EXPECT_NEAR(out.signature.tooling.stock_removed_mm3, expected, expected * 0.01);
+
+    // Face count grew by ≥ 2 (cylindrical wall + bottom disc).
+    EXPECT_GE(out.workpiece->faceCount(), stock->faceCount() + 2);
+
     EXPECT_EQ(out.signature.skill_id, std::string("stretching"));
     EXPECT_NEAR(out.signature.pattern["depression_depth_mm"].get<double>(),
                 depressionDepth, 1e-6);

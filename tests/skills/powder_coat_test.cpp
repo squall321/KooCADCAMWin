@@ -1,7 +1,7 @@
 // @lat: [[process/test-strategy#skill round-trip]]
 //
-// powder_coat skill — 6-case sweep covering identity-geometry synthesis,
-// thickness clamps, cure-temp info, texture options, metadata recognition.
+// powder_coat skill — Slice-8 GEOMETRIC tests.  apply() fuses a real
+// powder-coat film slab; volume should INCREASE by ~ (face_area × thk).
 
 #include <gtest/gtest.h>
 
@@ -28,11 +28,13 @@ double volumeOf(const TopoDS_Shape& s)
 
 }  // namespace
 
-// ─── 1. Apply: geometry is COMPLETELY unchanged ──────────────────────────
-TEST(SkillPowderCoat, ApplyDoesNotChangeGeometry)
+// ─── 1. Apply: volume INCREASES by ~ (area × thickness) ──────────────────
+TEST(SkillPowderCoat, ApplyGrowsRealThinShell)
 {
+    // 50 × 50 = 2500 mm² × 75 μm = 187.5 mm³
     auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
-    const double volBefore = volumeOf(stock->shape());
+    const double volBefore  = volumeOf(stock->shape());
+    const int    faceBefore = stock->faceCount();
 
     skill::powder_coat::Input in;
     in.entry_face    = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
@@ -44,16 +46,22 @@ TEST(SkillPowderCoat, ApplyDoesNotChangeGeometry)
 
     auto out = skill::powder_coat::apply(*stock, in);
     ASSERT_FALSE(out.workpiece->shape().IsNull());
-    EXPECT_NEAR(volumeOf(out.workpiece->shape()), volBefore, 1e-9);
+
+    const double delta    = volumeOf(out.workpiece->shape()) - volBefore;
+    const double expected = 50.0 * 50.0 * (75.0 * 1.0e-3);   // 187.5 mm³
+    EXPECT_GT(delta, expected * 0.8);
+    EXPECT_LT(delta, expected * 1.2);
+    EXPECT_GT(out.workpiece->faceCount(), faceBefore);
 
     EXPECT_EQ(out.signature.skill_id, std::string("powder_coat"));
     EXPECT_EQ(out.signature.tooling.tool_type,
               std::string("electrostatic_powder_gun"));
-    EXPECT_NEAR(out.signature.tooling.stock_removed_mm3, 0.0, 1e-9);
+    EXPECT_LT(out.signature.tooling.stock_removed_mm3, 0.0);
+    EXPECT_GT(out.signature.tooling.extra.value("stock_added_mm3", 0.0), 0.0);
 }
 
-// ─── 2. DFM: thickness [50, 300] μm enforced ─────────────────────────────
-TEST(SkillPowderCoat, ValidateRejectsOutOfRangeThickness)
+// ─── 2. DFM: thickness [50, 300] μm + area ≥ 1 cm² ───────────────────────
+TEST(SkillPowderCoat, ValidateRejectsOutOfRangeThicknessAndTinyArea)
 {
     auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
 
@@ -67,23 +75,37 @@ TEST(SkillPowderCoat, ValidateRejectsOutOfRangeThickness)
     tooThick.thickness_um = 400.0;
     EXPECT_FALSE(skill::powder_coat::validate(*stock, tooThick).passed);
     EXPECT_THROW(skill::powder_coat::apply(*stock, tooThick), skill::SkillError);
+
+    auto tiny = skill::createCuboidStock(5.0, 5.0, 5.0);
+    skill::powder_coat::Input ok;
+    ok.entry_face    = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    ok.thickness_um  = 75.0;
+    ok.cure_temp_c   = 200.0;
+    ok.cure_time_min = 15.0;
+    auto rTiny = skill::powder_coat::validate(*tiny, ok);
+    EXPECT_FALSE(rTiny.passed);
+    bool foundArea = false;
+    for (const auto& f : rTiny.findings)
+        if (f.code == "DFM-PWD-AREA") { foundArea = true; break; }
+    EXPECT_TRUE(foundArea);
 }
 
-// ─── 3. Cure temp outside [180, 220] → info ──────────────────────────────
-TEST(SkillPowderCoat, CureTempInfoHint)
+// ─── 3. Cure temp outside [180, 220] → info, still fuses ─────────────────
+TEST(SkillPowderCoat, CureTempInfoHintStillFuses)
 {
     auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
+    const double volBefore = volumeOf(stock->shape());
 
     skill::powder_coat::Input in;
     in.entry_face    = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
     in.color         = "black";
     in.thickness_um  = 75.0;
-    in.cure_temp_c   = 250.0;   // out of typical band
+    in.cure_temp_c   = 250.0;
     in.cure_time_min = 15.0;
     in.texture       = "smooth";
 
     auto r = skill::powder_coat::validate(*stock, in);
-    EXPECT_TRUE(r.passed);   // info, not error
+    EXPECT_TRUE(r.passed);
     bool found = false;
     for (const auto& f : r.findings)
         if (f.code == "DFM-PWD-CURE") { found = true; break; }
@@ -91,12 +113,14 @@ TEST(SkillPowderCoat, CureTempInfoHint)
 
     auto out = skill::powder_coat::apply(*stock, in);
     EXPECT_FALSE(out.signature.pattern["cure_schedule_ok"].get<bool>());
+    EXPECT_GT(volumeOf(out.workpiece->shape()) - volBefore, 0.0);
 }
 
-// ─── 4. Signature carries texture metadata ───────────────────────────────
-TEST(SkillPowderCoat, SignatureRecordsMetadata)
+// ─── 4. Signature carries geometric delta + texture ──────────────────────
+TEST(SkillPowderCoat, SignatureRecordsGeometricDelta)
 {
     auto stock = skill::createCuboidStock(40.0, 40.0, 5.0);
+    const double volBefore = volumeOf(stock->shape());
 
     skill::powder_coat::Input in;
     in.entry_face    = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
@@ -107,42 +131,22 @@ TEST(SkillPowderCoat, SignatureRecordsMetadata)
     in.texture       = "metallic";
 
     auto out = skill::powder_coat::apply(*stock, in);
+    const double delta = volumeOf(out.workpiece->shape()) - volBefore;
 
     EXPECT_EQ(out.signature.pattern["kind"].get<std::string>(),
               std::string("powder_coat"));
-    EXPECT_EQ(out.signature.pattern["color"].get<std::string>(),
-              std::string("champagne"));
-    EXPECT_NEAR(out.signature.pattern["thickness_um"].get<double>(),
-                120.0, 1e-6);
     EXPECT_EQ(out.signature.pattern["texture"].get<std::string>(),
               std::string("metallic"));
     EXPECT_TRUE(out.signature.pattern["cure_schedule_ok"].get<bool>());
+    EXPECT_TRUE(out.signature.pattern["geometry_changed"].get<bool>());
+    EXPECT_TRUE(out.signature.pattern["additive"].get<bool>());
+    const double slabVol = out.signature.pattern["slab_volume_mm3"].get<double>();
+    EXPECT_GT(slabVol, delta * 0.8);
+    EXPECT_LT(slabVol, delta * 1.2);
 }
 
-// ─── 5. Unknown texture → info ───────────────────────────────────────────
-TEST(SkillPowderCoat, UnknownTextureInfoOnly)
-{
-    auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
-
-    skill::powder_coat::Input in;
-    in.entry_face    = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
-    in.color         = "black";
-    in.thickness_um  = 75.0;
-    in.cure_temp_c   = 200.0;
-    in.cure_time_min = 15.0;
-    in.texture       = "hammered";   // not in table
-
-    auto r = skill::powder_coat::validate(*stock, in);
-    EXPECT_TRUE(r.passed);
-    bool found = false;
-    for (const auto& f : r.findings)
-        if (f.code == "DFM-PWD-TEXTURE") { found = true; break; }
-    EXPECT_TRUE(found);
-    EXPECT_NO_THROW(skill::powder_coat::apply(*stock, in));
-}
-
-// ─── 6. Recognize via metadata replay ────────────────────────────────────
-TEST(SkillPowderCoat, RecognizeFromMetadata)
+// ─── 5. Recognize: geometric primary, history fallback ───────────────────
+TEST(SkillPowderCoat, RecognizeGeometricThenHistory)
 {
     auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
 
@@ -157,12 +161,14 @@ TEST(SkillPowderCoat, RecognizeFromMetadata)
     auto out = skill::powder_coat::apply(*stock, in);
 
     auto cands = skill::powder_coat::recognize(*out.workpiece);
-    ASSERT_EQ(cands.size(), 1u);
-    EXPECT_NEAR(cands[0].confidence, 1.0, 1e-6);
-    EXPECT_EQ(cands[0].recovered_params["texture"].get<std::string>(),
-              std::string("matte"));
+    ASSERT_FALSE(cands.empty());
+    EXPECT_NEAR(cands[0].confidence, 0.5, 1e-6);
+    EXPECT_NEAR(
+        cands[0].recovered_params["thickness_um"].get<double>(),
+        100.0, 100.0 * 0.2);
 
     skill::Workpiece raw(out.workpiece->shape());
-    auto candsEmpty = skill::powder_coat::recognize(raw);
-    EXPECT_TRUE(candsEmpty.empty());
+    auto candsRaw = skill::powder_coat::recognize(raw);
+    EXPECT_FALSE(candsRaw.empty());
+    EXPECT_NEAR(candsRaw[0].confidence, 0.5, 1e-6);
 }

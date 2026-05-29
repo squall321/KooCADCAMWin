@@ -46,11 +46,10 @@ std::vector<std::vector<gp_Pnt>> makeFlat4x4(double z0)
 }  // namespace
 
 // ─── 1. ApplyProducesNonNull shape ────────────────────────────────────────
-// TODO(slice-9): nurbs_patch apply throws "WorkDegree too small for given
-// ConstraintOrder" — BRepBuilderAPI_MakeFace from GeomAPI_PointsToBSpline
-// requires degree ≥ 3 but agent set 2.  Bump degree or use a different
-// surface builder.  4 tests in this file blocked on this fix.
-TEST(SkillNurbsPatch, DISABLED_ApplyProducesNonNull)
+// Fixed in slice-9: GeomAPI_PointsToBSplineSurface with GeomAbs_C2 needs
+// DegMax >= 2*Order+1 = 5; apply() now floors DegMin at 3 and lifts DegMax
+// to 8 so the fit converges instead of throwing "WorkDegree too small".
+TEST(SkillNurbsPatch, ApplyProducesNonNull)
 {
     auto stock = skill::createCuboidStock(30.0, 30.0, 5.0);
 
@@ -89,7 +88,7 @@ TEST(SkillNurbsPatch, ValidateRejectsBadInput)
 }
 
 // ─── 3. SignatureRecordsKind ──────────────────────────────────────────────
-TEST(SkillNurbsPatch, DISABLED_SignatureRecordsKind)
+TEST(SkillNurbsPatch, SignatureRecordsKind)
 {
     auto stock = skill::createCuboidStock(30.0, 30.0, 5.0);
 
@@ -105,7 +104,7 @@ TEST(SkillNurbsPatch, DISABLED_SignatureRecordsKind)
 }
 
 // ─── 4. RecognizeMetadataReplay (confidence 1.0) ──────────────────────────
-TEST(SkillNurbsPatch, DISABLED_RecognizeMetadataReplay)
+TEST(SkillNurbsPatch, RecognizeMetadataReplay)
 {
     auto stock = skill::createCuboidStock(30.0, 30.0, 5.0);
 
@@ -142,7 +141,7 @@ TEST(SkillNurbsPatch, ValidateRejectsLowDegree)
 }
 
 // ─── 6. ApplyAddsBSplineSurfaceFace ───────────────────────────────────────
-TEST(SkillNurbsPatch, DISABLED_ApplyAddsBSplineSurfaceFace)
+TEST(SkillNurbsPatch, ApplyAddsBSplineSurfaceFace)
 {
     auto stock = skill::createCuboidStock(30.0, 30.0, 5.0);
 

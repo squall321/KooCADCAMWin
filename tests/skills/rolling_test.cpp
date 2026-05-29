@@ -22,11 +22,12 @@ double volumeOf(const TopoDS_Shape& s) {
 }
 }  // namespace
 
-// ── 1. Apply: 2.0 mm → 1.5 mm reduction (25%) ─────────────────────────
+// ── 1. Apply: 2.0 mm → 1.5 mm reduction (25%) — REAL geometric rebuild ─────
 TEST(SkillRolling, ApplyReducesThickness)
 {
     auto stock = skill::createCuboidStock(100.0, 80.0, 2.0);
     EXPECT_NEAR(skill::rolling::currentThickness(*stock), 2.0, 1e-6);
+    const double v0 = volumeOf(stock->shape());
 
     skill::rolling::Input in;
     in.entry_face          = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
@@ -36,7 +37,18 @@ TEST(SkillRolling, ApplyReducesThickness)
     auto out = skill::rolling::apply(*stock, in);
     ASSERT_FALSE(out.workpiece->shape().IsNull());
 
+    // bbox thickness reduced from 2.0 → 1.5 (geometric change verified).
     EXPECT_NEAR(skill::rolling::currentThickness(*out.workpiece), 1.5, 1e-6);
+
+    // Volume reduced by ΔV = dx · dy · (t0 − t1) = 100 · 80 · 0.5 = 4000 mm³.
+    // Output bbox volume = 100·80·1.5 = 12000 mm³ (vs. stock 16000 mm³).
+    const double v1 = volumeOf(out.workpiece->shape());
+    EXPECT_NEAR(v1, 12000.0, 1e-3);
+    EXPECT_NEAR(v0 - v1, 4000.0, 1e-3);
+
+    // Tooling reports the geometric bbox delta.
+    EXPECT_NEAR(out.signature.tooling.stock_removed_mm3, 4000.0, 1e-3);
+
     EXPECT_EQ(out.signature.skill_id, std::string("rolling"));
     EXPECT_NEAR(out.signature.pattern["original_thickness_mm"].get<double>(), 2.0, 1e-6);
     EXPECT_NEAR(out.signature.pattern["target_thickness_mm"].get<double>(), 1.5, 1e-6);

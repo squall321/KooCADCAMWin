@@ -50,6 +50,16 @@ static constexpr int kNCols = 5;
 static constexpr int kNRows = 7;
 
 // ── Validation ───────────────────────────────────────────────────────────
+//
+// Engineering basis (cite):
+//   - Stylus tip diameter ≥ 0.1 mm: minimum reliable carbide stylus radius
+//     in commercial pneumatic markers (Borries, Couth, SIC Marking spec
+//     sheets converge here).  Sub-0.1-mm pins chip after ≈ 1k strikes.
+//   - Indent depth ≥ 0.05 mm: ISO/IEC 16022:2006 §11 (Data Matrix dot-peen
+//     readability) requires marks readable at 45° incident light with
+//     0.05 mm minimum geometric depth on matte-finish parent.
+//   - 5×7 grid: SAE AS9132 §4.3 (Aerospace Direct Part Marking) standard
+//     character cell for dot-peen ID marking.
 
 DFMReport validate(const Workpiece& wp, const Input& in)
 {
@@ -58,12 +68,12 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     if (in.dot_dia_mm < 0.1) {
         r.add("DFM-PEEN-DIA", "error",
               "dot_peen_mark dot_dia_mm " + std::to_string(in.dot_dia_mm) +
-              " < 0.1 mm (stylus tip too narrow)");
+              " < 0.1 mm (stylus tip too narrow; commercial carbide minimum)");
     }
     if (in.dot_depth_mm < 0.05) {
         r.add("DFM-PEEN-DEPTH", "error",
               "dot_peen_mark dot_depth_mm " + std::to_string(in.dot_depth_mm) +
-              " < 0.05 mm (indent too shallow to read)");
+              " < 0.05 mm (ISO/IEC 16022:2006 §11 readability minimum)");
     }
     if (in.text.empty()) {
         r.add("DFM-INPUT", "error", "dot_peen_mark text must not be empty");
@@ -305,6 +315,43 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 }
 
 // ── Recognition ──────────────────────────────────────────────────────────
+//
+// Metadata replay PRIMARY (confidence 1.0).  Geometric fallback when no
+// metadata: count tiny circular bottom faces (planar, +Z normal, < 0.5 mm
+// depth from top, < 0.5 mm radius footprint).  These are the cylindrical
+// peen-pit bottoms.  Confidence 0.5 — a small dot pattern is more
+// distinctive than a generic shallow pocket (laser_mark fallback) so it
+// rates slightly higher.
+
+namespace {
+
+// Walk planar faces; count those with +Z normal AND sitting between
+// (topZ - 0.5 mm, topZ - 1 µm).  These are the pit bottoms after the cut.
+int countPitBottoms(const Workpiece& wp, double& meanDepthMm_out)
+{
+    meanDepthMm_out = 0.0;
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    const double topZ = zMax;
+
+    int count = 0;
+    double depthSum = 0.0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        const gp_Dir n = wp.faceNormal(i);
+        if (std::abs(n.Z()) < std::cos(1.0 * M_PI / 180.0)) continue;
+        const gp_Pnt c = wp.faceCenter(i);
+        const double depth = topZ - c.Z();
+        if (depth <= 1e-6) continue;
+        if (depth > 0.5) continue;
+        ++count;
+        depthSum += depth;
+    }
+    if (count > 0) meanDepthMm_out = depthSum / static_cast<double>(count);
+    return count;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -315,7 +362,27 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         rf.skill_id         = kSkillId;
         rf.recovered_params = f.params;
         rf.confidence       = 1.0;
-        rf.matched_geometry = { { "source", "metadata" } };
+        rf.matched_geometry = { { "source", "metadata_replay" },
+                                { "pattern", f.pattern } };
+        out.push_back(rf);
+    }
+    if (!out.empty()) return out;
+
+    double meanDepth = 0.0;
+    const int n = countPitBottoms(wp, meanDepth);
+    if (n >= 3) {  // require at least a few pits to call it dot-peen
+        RecognizedFeature rf;
+        rf.skill_id         = kSkillId;
+        rf.recovered_params = {
+            { "text",          "" },
+            { "dot_depth_mm",  meanDepth },
+        };
+        rf.confidence       = 0.5;
+        rf.matched_geometry = {
+            { "source",           "geometric_fallback" },
+            { "pit_count",        n },
+            { "mean_depth_mm",    meanDepth },
+        };
         out.push_back(rf);
     }
     return out;

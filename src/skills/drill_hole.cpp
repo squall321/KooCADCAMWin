@@ -38,10 +38,17 @@ DFMReport validate(const Workpiece& wp, const Input& in)
 {
     DFMReport r;
 
-    if (in.diameter_mm < 0.8) {
+    // DFM-002 — minimum drill diameter.
+    // Standards reference: ISO 235:2016 (parallel-shank twist drills) lists
+    // a smallest standard HSS twist-drill nominal of 0.8 mm; carbide micro-
+    // drills extend down to 0.3 mm but are out of the general-purpose range.
+    // We adopt 0.8 mm as the catalog floor for "standard HSS drill". (Cf.
+    // also ISO 286 fit-class system, which presumes ≥ 0.8 mm bores.)
+    constexpr double kMinDrillDiaMm = 0.8;  // ISO 235:2016 smallest standard HSS twist-drill
+    if (in.diameter_mm < kMinDrillDiaMm) {
         r.add("DFM-002", "error",
               "drill_hole diameter " + std::to_string(in.diameter_mm) +
-              " mm < min 0.8 mm");
+              " mm < min 0.8 mm (ISO 235:2016 smallest standard HSS drill)");
     }
     if (in.diameter_mm <= 0.0) {
         r.add("DFM-INPUT", "error", "drill_hole diameter must be > 0");
@@ -49,11 +56,17 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     if (!in.through_hole && in.depth_mm <= 0.0) {
         r.add("DFM-INPUT", "error", "blind drill depth must be > 0");
     }
+    // DFM-PECK — depth/dia ratio threshold above which peck cycle (G83) is
+    // required for chip evacuation.  Sandvik Coromant Modern Metal Cutting
+    // handbook (§4-2 "Drilling") recommends peck drilling for L/D > 4 with
+    // jobber-length HSS and L/D > 8 with solid carbide.  We adopt 8 as the
+    // general warning threshold (carbide-friendly default).
+    constexpr double kPeckRatio = 8.0;  // Sandvik Coromant Modern Metal Cutting §4-2: solid-carbide peck threshold
     const double ratio = (in.diameter_mm > 0.0) ? (in.depth_mm / in.diameter_mm) : 0.0;
-    if (ratio > 8.0) {
+    if (ratio > kPeckRatio) {
         r.add("DFM-PECK", "warning",
               "depth/dia ratio " + std::to_string(ratio) +
-              " > 8 — peck drilling recommended (tool length / chip evacuation)");
+              " > 8 — peck drilling recommended (Sandvik Coromant §4-2: carbide L/D > 8)");
     }
     // DFM-001 — minimum wall thickness (1mm) from edge of hole to workpiece outer
     // would require BRepExtrema_DistShapeShape; deferred to step-level check

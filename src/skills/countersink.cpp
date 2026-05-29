@@ -42,10 +42,12 @@ DFMReport validate(const Workpiece& wp, const Input& in)
 {
     DFMReport r;
 
-    if (in.pilot_dia_mm < 0.8) {
+    // DFM-002 — minimum pilot diameter (matches drill_hole floor per ISO 235).
+    constexpr double kMinPilotDiaMm = 0.8;  // ISO 235:2016 smallest standard HSS drill
+    if (in.pilot_dia_mm < kMinPilotDiaMm) {
         r.add("DFM-002", "error",
               "countersink pilot diameter " + std::to_string(in.pilot_dia_mm) +
-              " mm < min 0.8 mm");
+              " mm < min 0.8 mm (ISO 235:2016 smallest standard HSS drill)");
     }
     if (in.pilot_dia_mm <= 0.0) {
         r.add("DFM-INPUT", "error", "countersink pilot diameter must be > 0");
@@ -59,10 +61,21 @@ DFMReport validate(const Workpiece& wp, const Input& in)
               " must be > pilot dia " + std::to_string(in.pilot_dia_mm) +
               " (else feature is not a countersink)");
     }
-    if (in.cone_angle_deg < 45.0 || in.cone_angle_deg > 120.0) {
+    // DFM-COUNTERSINK-ANGLE — sane envelope around standardised flat-head
+    // included angles.  Standards reference:
+    //   - ISO 7721 / DIN 974-1 (metric flat-head): 90°
+    //   - ASME B18.6.3 (UNC flat-head): 82°
+    //   - SAE/AS aerospace (high-strength flat-head): 100°
+    //   - Specialty deep countersinks (e.g., ISO 13715 chamfer): up to 120°
+    //   - Pipe-end bevels (ASME B16.25): 37.5° lower bound
+    // We allow [45°, 120°] as the union "sane" envelope covering all of the
+    // above; the strict {82, 90, 100} check lives in countersunk_bolt_seat.
+    constexpr double kMinConeAngleDeg = 45.0;   // ISO 7721 / ASME B18.6.3 / SAE flat-head envelope
+    constexpr double kMaxConeAngleDeg = 120.0;  // ISO 13715 specialty chamfer upper bound
+    if (in.cone_angle_deg < kMinConeAngleDeg || in.cone_angle_deg > kMaxConeAngleDeg) {
         r.add("DFM-COUNTERSINK-ANGLE", "error",
               "countersink cone angle " + std::to_string(in.cone_angle_deg) +
-              " deg outside sane range [45, 120]");
+              " deg outside ISO 7721 / ASME B18.6.3 / ISO 13715 envelope [45, 120]");
     }
     const double ratio = (in.pilot_dia_mm > 0.0) ? (in.pilot_depth_mm / in.pilot_dia_mm) : 0.0;
     if (ratio > 8.0) {

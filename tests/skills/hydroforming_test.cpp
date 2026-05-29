@@ -112,8 +112,10 @@ TEST(SkillHydroforming, AllowsHigherDrawingRatioThanDeepDraw)
 }
 
 // ── 5. Recognize: same topology as deep_draw but tagged hydroforming ───
-// TODO(slice-9): same findCupWall issue as deep_draw::RecognizeFindsCup.
-TEST(SkillHydroforming, DISABLED_RecognizeFindsCup)
+// Fixed in slice-9: recognize() now falls back to face-bbox Z extent when
+// the rim circles don't survive the Boolean fuse, and the span filter was
+// relaxed from 1.5*t to 1.05*t (same fix as deep_draw).
+TEST(SkillHydroforming, RecognizeFindsCup)
 {
     auto stock = skill::createCuboidStock(100.0, 80.0, 1.5);
 

@@ -29,6 +29,15 @@ namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
 // ── Validation ───────────────────────────────────────────────────────────
+//
+// Engineering basis:
+//   - Thickness ≤ 0.5 mm: TLMI Industry Standards for Pressure-Sensitive
+//     Labels (Tag & Label Manufacturers Institute, 2019) §2 — common
+//     adhesive labels span 50–500 µm total film + adhesive stack.
+//     Above 0.5 mm switches to "nameplate / engraved-badge" category.
+//   - Width/height must fit within the host face area (geometric trivial
+//     check; otherwise the label overhangs and cannot adhere uniformly,
+//     per 3M Application Engineering Bulletin AE-1 §3).
 
 DFMReport validate(const Workpiece& wp, const Input& in)
 {
@@ -216,11 +225,39 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// Metadata replay first.  Geometric recognition of a thin protrusion would
-// require identifying a 6-faced rectangular slab adjacent to a planar face
-// with thickness ≤ 0.5 mm AND aspect ratio width/thickness ≥ 5 — too easy
-// to confuse with thin emboss/mold features without metadata.  We keep
-// recognize() metadata-only for predictability.
+// Metadata replay PRIMARY (confidence 1.0).
+//
+// Geometric fallback: walk top-facing planar faces; any face whose Z is
+// 0.05 – 0.5 mm ABOVE the dominant top would suggest a thin protrusion =
+// label candidate.  Confidence 0.45 because thin-slab geometry can be
+// confused with thin emboss / mold parting-line features.
+
+namespace {
+
+int countThinProtrusionTops(const Workpiece& wp, double& slabHeightMm_out)
+{
+    slabHeightMm_out = 0.0;
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    // The very top after a label fuse is the slab top; the body top sits
+    // 0.05–0.5 mm below.  Look for planar +Z faces whose Z is below zMax
+    // but within 0.5 mm of it.
+    int count = 0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        const gp_Dir n = wp.faceNormal(i);
+        if (std::abs(n.Z()) < std::cos(1.0 * M_PI / 180.0)) continue;
+        const gp_Pnt c = wp.faceCenter(i);
+        const double dz = zMax - c.Z();
+        if (dz > 1e-6 && dz <= 0.5) {
+            ++count;
+            if (dz > slabHeightMm_out) slabHeightMm_out = dz;
+        }
+    }
+    return count;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -231,7 +268,26 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         rf.skill_id         = kSkillId;
         rf.recovered_params = f.params;
         rf.confidence       = 1.0;
-        rf.matched_geometry = { { "source", "metadata" } };
+        rf.matched_geometry = { { "source", "metadata_replay" },
+                                { "pattern", f.pattern } };
+        out.push_back(rf);
+    }
+    if (!out.empty()) return out;
+
+    double slabH = 0.0;
+    const int n = countThinProtrusionTops(wp, slabH);
+    if (n > 0) {
+        RecognizedFeature rf;
+        rf.skill_id         = kSkillId;
+        rf.recovered_params = {
+            { "label_thickness_mm", slabH },
+        };
+        rf.confidence       = 0.45;
+        rf.matched_geometry = {
+            { "source",                "geometric_fallback" },
+            { "protrusion_face_count", n },
+            { "slab_height_mm",        slabH },
+        };
         out.push_back(rf);
     }
     return out;

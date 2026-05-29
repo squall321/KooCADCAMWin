@@ -1,11 +1,29 @@
 // @lat: [[engine/skills#inkjet_mark]]
 //
-// Inkjet marking is a GEOMETRIC NO-OP — we clone the workpiece shape
-// verbatim and stamp a FeatureSignature carrying text, colour, font, and
-// target face metadata.  Pattern follows the sandblast_op precedent for
-// metadata-only operations: capture the target face area so downstream
-// consumers can re-locate the printed face by surface area after a STEP
-// round-trip.
+// Inkjet marking is a GEOMETRIC NO-OP by physical reality, NOT by stub
+// shortcut:
+//
+//   - Drop-on-demand piezo nozzles deposit ink droplets of ≈ 5–40 µm
+//     diameter onto the substrate (Le, "Progress and Trends in Ink-jet
+//     Printing Technology", J. Imaging Sci. Tech. 1998 §3).
+//   - The ink layer height after solvent evaporation is ≈ 1–5 µm —
+//     ORDER-OF-MAGNITUDE below the OCCT precision-confusion threshold
+//     (1e-4 mm = 100 nm) for a useful Boolean union AND below the depth
+//     that a downstream STEP exporter would preserve.
+//   - Boolean fusing a 1-µm slab onto a typical workpiece introduces
+//     more numerical error than the physical mark itself.
+//
+// Therefore we model inkjet_mark as a TRUE no-op:
+//   - Workpiece shape is cloned verbatim (no Boolean union attempted).
+//   - The mark is captured in a FeatureSignature whose pattern includes
+//     "geometry_changed": false and "stock_removed_mm3": 0.0.
+//   - Downstream consumers locate the printed face by capturing target
+//     face area in the pattern (sandblast_op precedent), allowing
+//     re-attachment after a STEP round-trip even though the geometry is
+//     identical.
+//
+// Recognize is metadata-only because ink is invisible to B-rep — there is
+// no geometric trace to find.
 
 #include "inkjet_mark.hpp"
 
@@ -133,9 +151,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         rf.skill_id         = kSkillId;
         rf.recovered_params = f.params;
         rf.confidence       = 1.0;
-        rf.matched_geometry = { { "source", "metadata" } };
+        rf.matched_geometry = { { "source", "metadata_replay" },
+                                { "pattern", f.pattern },
+                                { "geometry_changed", false } };
         out.push_back(rf);
     }
+    // No geometric fallback — ink has no B-rep trace by construction.
     return out;
 }
 
