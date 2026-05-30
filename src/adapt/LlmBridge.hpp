@@ -122,9 +122,12 @@ public:
     //
     //   - provider == "mock" OR (provider != "mock" AND API key env var is
     //     unset/empty) → call fallbackViaStub.
-    //   - otherwise → return error: "real LLM provider not yet wired
-    //     (slice-1 stub)".  (Real anthropic/openai HTTP comes in a
-    //     follow-up; see provider envelope notes in LlmBridge.cpp.)
+    //   - provider == "anthropic" AND API key present → real HTTP POST to
+    //     https://api.anthropic.com/v1/messages via WinHTTP.  On HTTP
+    //     failure (network, non-2xx) → log a warning to stderr and fall
+    //     back to the stub so the caller still sees a usable EditOp.
+    //   - other provider strings ("openai", custom) → "not yet wired"
+    //     typed error (no silent fallback — visible failure).
     //
     // Does NOT throw on stub fallback errors — they're packaged into
     // `error`/`success=false` so callers see one uniform shape.
@@ -153,6 +156,25 @@ public:
     // returns an `LlmResponse`; the stub's `skill::SkillError` is caught
     // and packaged into `error`/`success=false`.
     static LlmResponse fallbackViaStub(const LlmRequest& req);
+
+    // ── Plain-text HTTP path ─────────────────────────────────────────────
+    //
+    // Low-level entry point used by integration tests and external
+    // callers that just want "send this prompt to Claude, give me the
+    // text reply back".  No EditOp parsing happens here.
+    //
+    // Routing identical to run():
+    //   - If api_key_env_var is unset/empty → returns a deterministic
+    //     **mock** response string (does NOT touch the network).  The
+    //     mock content begins with the marker "[mock]" so callers /
+    //     tests can detect that no real call happened.
+    //   - Otherwise → POSTs to api.anthropic.com/v1/messages via
+    //     WinHTTP, extracts the first text block from the response
+    //     `content[]` array, and returns it.  On any HTTP / parse
+    //     failure logs a warning to stderr and returns the same mock
+    //     string so callers never get an exception.
+    static std::string sendPrompt(const std::string& promptText,
+                                  const LlmConfig&   cfg = LlmConfig{});
 };
 
 }  // namespace koocadcam::adapt

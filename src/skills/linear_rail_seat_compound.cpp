@@ -9,6 +9,14 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Pnt.hxx>
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -246,11 +254,114 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition ──────────────────────────────────────────────────────────
+// ── Recognition (metadata replay + geometric fallback) ──────────────────
 //
+// Geometric signature of a linear rail seat:
+//   - 1 prismatic slot on the top face (planar bottom + 2 vertical walls).
+//   - 2 rows of -Z axis cylindrical pilot holes, regularly spaced along X
+//     (pitch_mm), symmetric about the slot Y centerline.
+//
+// Heuristic: scan for clustered small-diameter (≤ 3 mm radius) -Z
+// cylindrical faces.  If we find ≥ 4 of them with Y values forming exactly
+// TWO clusters and X values evenly spaced by a common pitch — match.
+
+namespace {
+
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    if (wp.shape().IsNull()) return out;
+
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+
+    // Collect -Z cylindrical faces (pilot holes for tapped fasteners).
+    struct CylXY { double x, y, r; };
+    std::vector<CylXY> piloth;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface surf(wp.face(i));
+        const gp_Cylinder cy = surf.Cylinder();
+        const gp_Dir axDir = cy.Axis().Direction();
+        if (std::abs(std::abs(axDir.Z()) - 1.0) > 1e-3) continue;
+        if (cy.Radius() > 3.5) continue;  // M5 pilot = 2.1 mm radius
+        const gp_Pnt p = cy.Axis().Location();
+        piloth.push_back({ p.X(), p.Y(), cy.Radius() });
+    }
+    if (piloth.size() < 4) return out;
+
+    // Bucket the Y values into two rows.
+    std::vector<double> ys;
+    for (const auto& h : piloth) ys.push_back(h.y);
+    std::sort(ys.begin(), ys.end());
+    const double yMid = (ys.front() + ys.back()) / 2.0;
+    int nRow0 = 0, nRow1 = 0;
+    double yRow0 = 0.0, yRow1 = 0.0;
+    int nRow0c = 0, nRow1c = 0;
+    for (const auto& h : piloth) {
+        if (h.y < yMid) { ++nRow0; yRow0 += h.y; ++nRow0c; }
+        else            { ++nRow1; yRow1 += h.y; ++nRow1c; }
+    }
+    if (nRow0 < 2 || nRow1 < 2) return out;
+    if (nRow0 != nRow1) return out;
+    yRow0 /= std::max(1, nRow0c);
+    yRow1 /= std::max(1, nRow1c);
+
+    // Look for a planar slot floor (Z-normal +Z, intermediate Z).
+    bool slotFloorFound = false;
+    double zSlotFloor = zMax;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        gp_Dir n;
+        try { n = wp.faceNormal(i); } catch (...) { continue; }
+        if (std::abs(n.Z() - 1.0) > 1e-3) continue;
+        const gp_Pnt c = wp.faceCenter(i);
+        if (c.Z() < zMax - 1e-3 && c.Z() > zMin + 1e-3) {
+            slotFloorFound = true;
+            zSlotFloor = std::min(zSlotFloor, c.Z());
+        }
+    }
+    if (!slotFloorFound) return out;
+
+    // Pitch from sorted X values of row 0.
+    std::vector<double> xRow0;
+    for (const auto& h : piloth)
+        if (h.y < yMid) xRow0.push_back(h.x);
+    std::sort(xRow0.begin(), xRow0.end());
+    double pitch = 0.0;
+    if (xRow0.size() >= 2) {
+        pitch = xRow0[1] - xRow0[0];
+    }
+
+    const double railCenterline = (yRow0 + yRow1) / 2.0;
+    const double length_estimate = (xRow0.size() >= 2)
+        ? (xRow0.back() - xRow0.front() + pitch)
+        : (xMax - xMin);
+
+    json recovered = {
+        { "length_mm",          length_estimate },
+        { "rail_centerline_mm", railCenterline },
+        { "pitch_mm",           pitch },
+        { "start_x_mm",         xRow0.empty() ? 0.0 : xRow0.front() - pitch * 0.5 },
+    };
+    json matched = {
+        { "source",       "geometric_fallback" },
+        { "pilot_count",  static_cast<int>(piloth.size()) },
+        { "row0_count",   nRow0 },
+        { "row1_count",   nRow1 },
+        { "slot_floor_z", zSlotFloor },
+    };
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.65, matched });
+    return out;
+}
+
+}  // namespace
+
 // Compound recognition: search the workpiece's feature history for a
 // signature whose pattern.kind == kSkillId.  Confidence 1.0 when found
-// via metadata replay (we trust the recorded params verbatim).
+// via metadata replay (we trust the recorded params verbatim).  If no
+// metadata is present (e.g. after STEP roundtrip), fall back to
+// geometric_fallback() which detects the rail-slot + dual-row pattern.
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
@@ -265,6 +376,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "subfeature_count",  f.pattern.value("subfeature_count", 0) },
         };
         out.push_back(r);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

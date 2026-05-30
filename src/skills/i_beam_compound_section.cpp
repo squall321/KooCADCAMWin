@@ -9,11 +9,16 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <BRepAdaptor_Surface.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace koocadcam::skill::i_beam_compound_section {
 
@@ -172,7 +177,145 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition (metadata replay) ────────────────────────────────────────
+// ── Recognition (metadata replay + geometric fallback) ──────────────────
+//
+// Geometric signature for an I-section (after STEP round-trip):
+//   The fused 3-box I-beam exposes planar faces grouped into THREE
+//   distinct Z-bands along its height:
+//     - top flange: planar faces at z ≈ Z_max  AND  z ≈ Z_max − Tf
+//     - web:        2 parallel vertical (±Y normal) faces at |y| = Tw/2
+//                   with axial extent equal to (Hw + 2·Tf − epsilon)
+//                   sandwiched between the two flange planes
+//     - bot flange: planar faces at z ≈ Z_min  AND  z ≈ Z_min + Tf
+//   Net width of the top/bottom flange faces is Bf along Y, length L
+//   along X.  The web is the narrowest portion in Y.
+//
+// Robust recovery: scan the Y-extent of each Z-slice to identify the
+// flange width vs. web width.
+
+namespace {
+
+struct PlanarFaceDesc {
+    int    faceIdx;
+    gp_Dir normal;
+    gp_Pnt center;
+    double area;
+};
+
+std::vector<PlanarFaceDesc> collectPlanar(const Workpiece& wp)
+{
+    std::vector<PlanarFaceDesc> out;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        PlanarFaceDesc d;
+        d.faceIdx = i;
+        try {
+            d.normal = wp.faceNormal(i);
+            d.center = wp.faceCenter(i);
+            d.area   = wp.faceArea(i);
+        } catch (...) { continue; }
+        out.push_back(d);
+    }
+    return out;
+}
+
+// Geometric fallback: detect I-beam by checking that the bbox has the
+// "I" cross-section signature when sliced perpendicular to the length axis.
+// We approximate from the workpiece face set: the cross-section has THREE
+// distinct widths along the height (wide-narrow-wide) — that's an I.
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    if (wp.shape().IsNull()) return out;
+
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    const double L  = xMax - xMin;
+    const double H  = zMax - zMin;
+    const double Bf = yMax - yMin;
+    if (L <= 0.0 || H <= 0.0 || Bf <= 0.0) return out;
+
+    const auto pfaces = collectPlanar(wp);
+    if (pfaces.size() < 8) return out;  // I-beam expects many planar faces
+
+    // Top flange top face must be near z = zMax with +Z normal.
+    // Bottom flange bottom face must be near z = zMin with -Z normal.
+    // Flange-step faces (where web meets flange) appear with ±Z normal at
+    // intermediate Z bands.
+    bool hasTopOuter = false, hasBotOuter = false;
+    std::vector<double> flangeStepZ;      // Z values of step faces between flange/web
+    double maxFlangeWidth = 0.0;
+
+    for (const auto& f : pfaces) {
+        if (std::abs(std::abs(f.normal.Z()) - 1.0) > 1e-3) continue;
+        if (std::abs(f.center.Z() - zMax) < 1e-3 && f.normal.Z() > 0) {
+            hasTopOuter = true;
+            maxFlangeWidth = std::max(maxFlangeWidth, std::sqrt(f.area / L));
+        }
+        if (std::abs(f.center.Z() - zMin) < 1e-3 && f.normal.Z() < 0) {
+            hasBotOuter = true;
+            maxFlangeWidth = std::max(maxFlangeWidth, std::sqrt(f.area / L));
+        }
+        // Intermediate Z-band step faces (flange inner surface adjacent to web)
+        if (f.center.Z() > zMin + 1e-3 && f.center.Z() < zMax - 1e-3) {
+            flangeStepZ.push_back(f.center.Z());
+        }
+    }
+    if (!hasTopOuter || !hasBotOuter) return out;
+
+    // For an I-beam there are 4 step faces (2 per flange × 2 sides of web),
+    // clustered into TWO Z-bands: one near zMax - Tf, one near zMin + Tf.
+    if (flangeStepZ.size() < 4) return out;
+    std::sort(flangeStepZ.begin(), flangeStepZ.end());
+    const double zStepLow  = flangeStepZ.front();
+    const double zStepHigh = flangeStepZ.back();
+    if (zStepHigh - zStepLow < H * 0.1) return out;  // need real separation
+
+    const double Tf_bot = zStepLow  - zMin;
+    const double Tf_top = zMax      - zStepHigh;
+    if (Tf_bot <= 0.0 || Tf_top <= 0.0) return out;
+    const double Tf = (Tf_bot + Tf_top) / 2.0;
+    if (std::abs(Tf_bot - Tf_top) > Tf * 0.5) return out;  // top/bot must match
+
+    // Web thickness: scan the Y-extents of vertical (±Y normal) faces in
+    // the middle Z-band — these are the two web walls.
+    std::vector<double> webWallY;
+    for (const auto& f : pfaces) {
+        if (std::abs(std::abs(f.normal.Y()) - 1.0) > 1e-3) continue;
+        if (f.center.Z() <= zStepLow + 1e-3) continue;
+        if (f.center.Z() >= zStepHigh - 1e-3) continue;
+        webWallY.push_back(f.center.Y());
+    }
+    if (webWallY.size() < 2) return out;
+    std::sort(webWallY.begin(), webWallY.end());
+    const double Tw = webWallY.back() - webWallY.front();
+    if (Tw <= 0.0 || Tw >= Bf) return out;
+
+    // Pythia-check: web thickness must be visibly less than flange width.
+    if (Tw > Bf * 0.5) return out;
+
+    const double Hw = H - 2.0 * Tf;
+    if (Hw <= 0.0) return out;
+
+    json recovered = {
+        { "length_mm",   L  },
+        { "height_mm",   H  },
+        { "flange_w_mm", Bf },
+        { "flange_t_mm", Tf },
+        { "web_t_mm",    Tw },
+    };
+    json matched = {
+        { "source",             "geometric_fallback" },
+        { "z_step_low_mm",      zStepLow  },
+        { "z_step_high_mm",     zStepHigh },
+        { "flange_step_count",  static_cast<int>(flangeStepZ.size()) },
+        { "web_wall_count",     static_cast<int>(webWallY.size()) },
+    };
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.70, matched });
+    return out;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -187,6 +330,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                                 { "is_compound", true },
                                 { "subfeature_count", 3 } };
         out.push_back(rf);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

@@ -162,12 +162,20 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     // ── Sub-feature 2/3: fuse cylindrical standoff outer ───────────────
     //
-    // Build column from Z=0 up to z = height_mm.  axis_dir is +Z by
-    // convention.  We FUSE the outer column then CUT the pilot — per
-    // project rule, for concentric overlapping cylinders we'd fuse both
-    // as a single solid, but in this case the inner is a CUT so the
-    // order is: fuse column → cut pilot from column.
-    const gp_Pnt colBottom(in.position_x_mm, in.position_y_mm, 0.0);
+    // Build column from the TOP of the existing base (or z=0 when we
+    // synthesized our own base) up to z = colTopZ.  Slice-9: previously
+    // the column always started at z=0, so when the stock base extended
+    // up to z=baseTopZ the column's z=[0, baseTopZ] section was inside
+    // the stock and the fuse only added (height − baseTopZ).  This made
+    // the volume delta short by ~ π·r_od²·baseTopZ.
+    double colBaseZ = 0.0;
+    if (hasBase) {
+        double xMin, yMin, zMin, xMax, yMax, zMax;
+        wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+        colBaseZ = zMax;
+    }
+    const double colTopZ = colBaseZ + in.height_mm;
+    const gp_Pnt colBottom(in.position_x_mm, in.position_y_mm, colBaseZ);
     const gp_Ax2 axCol(colBottom, adir);
     const TopoDS_Shape colOuter = pr::cylinder(axCol, r_od, in.height_mm);
     // To "fuse cylindrical standoff + tapped top" per the spec, we
@@ -175,7 +183,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // washer, then fuse it onto the column.  Top seat: OD + 0.5 mm,
     // height 0.5 mm.
     const double rSeat = r_od + 0.5;
-    const gp_Pnt seatBottom(in.position_x_mm, in.position_y_mm, in.height_mm - 0.5);
+    const gp_Pnt seatBottom(in.position_x_mm, in.position_y_mm, colTopZ - 0.5);
     const gp_Ax2 axSeat(seatBottom, adir);
     const TopoDS_Shape topSeat = pr::cylinder(axSeat, rSeat, 0.5);
 
@@ -191,7 +199,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const gp_Pnt pilotTop(
         in.position_x_mm,
         in.position_y_mm,
-        in.height_mm + kOver);
+        colTopZ + kOver);
     const gp_Ax2 axPilot(pilotTop, gp_Dir(0, 0, -1));
     // pilot depth: 3 × pilot_dia OR full height − 0.5 mm, whichever smaller.
     const double pilotDepth = std::min(in.height_mm - 0.5,

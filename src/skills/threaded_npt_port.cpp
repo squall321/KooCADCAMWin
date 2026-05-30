@@ -6,15 +6,24 @@
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cone.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 namespace koocadcam::skill::threaded_npt_port {
 
@@ -276,7 +285,103 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition (metadata replay) ────────────────────────────────────────
+// ── Recognition (metadata replay + geometric fallback) ──────────────────
+//
+// Geometric signature of an NPT port:
+//   - 1 conical face (the NPT taper, half-angle ≈ 1.79°/side).
+//   - 1 cylindrical face concentric with the cone (the counterbore recess).
+//   - Optional 1 conical face at the mouth (45° chamfer, much steeper).
+// All coaxial along the port axis.
+
+namespace {
+
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    if (wp.shape().IsNull()) return out;
+
+    // Scan for cone faces; classify by half-angle (NPT vs. chamfer).
+    int nptConeId = -1;
+    int chamferId = -1;
+    gp_Dir nptAxis(0, 0, 1);
+    gp_Pnt nptAxisLoc(0, 0, 0);
+
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        BRepAdaptor_Surface surf(wp.face(i));
+        if (surf.GetType() != GeomAbs_Cone) continue;
+        const gp_Cone cone = surf.Cone();
+        const double halfAngDeg = std::abs(cone.SemiAngle()) * 180.0 / M_PI;
+        if (halfAngDeg < 5.0 && halfAngDeg > 0.5) {
+            // NPT-like cone (≈ 1.79°/side)
+            nptConeId  = i;
+            nptAxis    = cone.Axis().Direction();
+            nptAxisLoc = cone.Axis().Location();
+        } else if (halfAngDeg > 30.0 && halfAngDeg < 60.0) {
+            // 45° face chamfer
+            chamferId = i;
+        }
+    }
+    if (nptConeId < 0) return out;
+    (void)nptAxisLoc;  // reserved for future axis-based recovery
+
+    // Look for a cylindrical face co-axial with the NPT cone.
+    int recessId = -1;
+    double recessR = 0.0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface surf(wp.face(i));
+        const gp_Cylinder cy = surf.Cylinder();
+        const gp_Dir cyAx = cy.Axis().Direction();
+        if (std::abs(std::abs(cyAx.Dot(nptAxis)) - 1.0) > 1e-2) continue;
+        recessId = i;
+        recessR  = cy.Radius();
+        break;
+    }
+    if (recessId < 0) return out;
+
+    // Determine NPT size by matching nominal OD ≈ 2 × recessR − 1.0 mm
+    // (synthesis: recessR = nomR + 0.5).
+    const double nomOD = 2.0 * (recessR - 0.5);
+    const char* bestSize = "1/4";
+    double bestDiff = 1e9;
+    constexpr std::array<std::pair<const char*, double>, 6> kSizes {{
+        { "1/8", 10.29 }, { "1/4", 13.72 }, { "3/8", 17.15 },
+        { "1/2", 21.34 }, { "3/4", 26.67 }, { "1",   33.40 },
+    }};
+    for (const auto& s : kSizes) {
+        const double d = std::abs(nomOD - s.second);
+        if (d < bestDiff) { bestDiff = d; bestSize = s.first; }
+    }
+
+    // Recover position from cone apex (approx. — apex is where cone narrows
+    // to zero, while NPT cone is truncated; entry point is along axis from
+    // apex by some distance.  We use recess axis location as the entry.
+    BRepAdaptor_Surface recessSurf(wp.face(recessId));
+    const gp_Cylinder recessCyl = recessSurf.Cylinder();
+    const gp_Pnt recessLoc = recessCyl.Axis().Location();
+
+    json recovered = {
+        { "position_x_mm",      recessLoc.X() },
+        { "position_y_mm",      recessLoc.Y() },
+        { "axis_dir",           { -nptAxis.X(), -nptAxis.Y(), -nptAxis.Z() } },
+        { "npt_size",           std::string(bestSize) },
+        { "recess_depth_mm",    1.5 },
+        { "chamfer_leg_mm",     (chamferId >= 0) ? 0.5 : 0.0 },
+        { "part_thickness_mm",  20.0 },
+    };
+    json matched = {
+        { "source",           "geometric_fallback" },
+        { "npt_cone_face_id", nptConeId },
+        { "recess_face_id",   recessId },
+        { "chamfer_face_id",  chamferId },
+        { "matched_size",     std::string(bestSize) },
+        { "diff_mm",          bestDiff },
+    };
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.70, matched });
+    return out;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -289,6 +394,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         r.confidence       = 1.0;
         r.matched_geometry = { { "source", "metadata_replay" } };
         out.push_back(r);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

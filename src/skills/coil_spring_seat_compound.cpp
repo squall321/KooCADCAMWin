@@ -326,9 +326,13 @@ std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
             if (pilot.radius < 0.4)                  continue;
             const double pocketLen = pocket.axialMax - pocket.axialMin;
             const double pilotLen  = pilot.axialMax  - pilot.axialMin;
-            // Pilot extends deeper than the pocket.
-            if (pilot.axialMax <= pocket.axialMax + 0.05) continue;
-            if (pocketLen < 1.0 || pilotLen < pocketLen) continue;
+            // Pilot extends deeper than the pocket on AT LEAST one side
+            // (the cylinder axis direction may be flipped by OCCT, so we
+            // accept either extension).
+            const double extendLo = pocket.axialMin - pilot.axialMin;
+            const double extendHi = pilot.axialMax  - pocket.axialMax;
+            if (std::max(extendLo, extendHi) < 0.05) continue;
+            if (pocketLen < 1.0) continue;
             // Range gate from DFM (synthesis).
             const double sprOD = 2.0 * pocket.radius;
             if (sprOD < 2.0 || sprOD > 200.0) continue;

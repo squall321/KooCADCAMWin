@@ -9,12 +9,15 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <BRepAdaptor_Surface.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pnt.hxx>
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <vector>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -249,15 +252,20 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// Compound features are not uniquely fingerprintable from geometry alone
-// (an annular groove + chamfer + fillet looks like many things).  We replay
-// from wp.features() history.  When the workpiece carries an existing
-// bezel_groove_assembly signature, recognize() returns it with confidence
-// 1.0.  This is consistent with the slice-1 compound recognize() contract.
+// PRIMARY (geometric): a bezel groove leaves a distinctive "two coaxial
+// inward-facing cylindrical faces of differing radii sharing the same
+// Z axis" pattern (outer wall + inner wall of the annular U-channel), plus
+// at least one horizontal planar face at the groove floor.  We walk the
+// faces, cluster cylindrical faces by axis location, and look for the
+// outer/inner pair on a common axis.
+//
+// FALLBACK (metadata): replay from wp.features() at confidence 1.0.
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
+
+    // (a) Metadata replay — highest confidence.
     for (const auto& f : wp.features()) {
         if (f.skill_id != kSkillId) continue;
         RecognizedFeature r;
@@ -269,6 +277,81 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "is_compound", true },
         };
         out.push_back(r);
+    }
+    if (!out.empty()) return out;
+
+    // (b) Geometric heuristic — look for coaxial Z-axis cylindrical pairs.
+    if (wp.shape().IsNull()) return out;
+
+    struct CylRec {
+        int    faceIdx = -1;
+        double radius  = 0.0;
+        gp_Pnt loc;
+        gp_Dir dir;
+        double topZ    = 0.0;
+        double botZ    = 0.0;
+    };
+    std::vector<CylRec> zCyls;
+    zCyls.reserve(static_cast<size_t>(wp.faceCount()));
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface s(wp.face(i));
+        const gp_Cylinder cy = s.Cylinder();
+        const gp_Dir d = cy.Axis().Direction();
+        if (std::abs(std::abs(d.Z()) - 1.0) > 1e-3) continue;
+        CylRec rec;
+        rec.faceIdx = i;
+        rec.radius  = cy.Radius();
+        rec.loc     = cy.Axis().Location();
+        rec.dir     = d;
+        zCyls.push_back(rec);
+    }
+    if (zCyls.size() < 2) return out;
+
+    // Cluster by (X, Y) of axis location — pairs on the same axis form a
+    // coaxial group.  bezel needs outer + inner cylinder pair where the
+    // groove width = (rOuter - rInner) is small relative to rOuter.
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+
+    for (size_t a = 0; a < zCyls.size(); ++a) {
+        for (size_t b = a + 1; b < zCyls.size(); ++b) {
+            const auto& A = zCyls[a];
+            const auto& B = zCyls[b];
+            // Same axis (≤ 0.5 mm offset).
+            const double dx = A.loc.X() - B.loc.X();
+            const double dy = A.loc.Y() - B.loc.Y();
+            if (std::hypot(dx, dy) > 0.5) continue;
+            // Differ in radius.
+            const double rO = std::max(A.radius, B.radius);
+            const double rI = std::min(A.radius, B.radius);
+            if (rO - rI < 0.4) continue;            // DFM-BEZEL-WIDTH floor
+            if (rO - rI > rO * 0.5) continue;       // groove is annular, not a bore
+            // outer radius must be reasonable (≥ 2 mm — watch-bezel scale).
+            if (rO < 2.0) continue;
+
+            json recovered = {
+                { "center_x_mm",      A.loc.X() },
+                { "center_y_mm",      A.loc.Y() },
+                { "axis_dir",         { 0.0, 0.0, -1.0 } },
+                { "outer_dia_mm",     2.0 * rO },
+                { "inner_dia_mm",     2.0 * rI },
+                { "groove_depth_mm",  std::max(0.3, (zMax - zMin) * 0.1) },
+                { "taper_deg",        30.0 },
+                { "bottom_fillet_mm", 0.15 },
+            };
+            json matched = {
+                { "source",         "geometric_primary" },
+                { "outer_face_id",  (A.radius >= B.radius) ? A.faceIdx : B.faceIdx },
+                { "inner_face_id",  (A.radius <  B.radius) ? A.faceIdx : B.faceIdx },
+                { "outer_radius_mm", rO },
+                { "inner_radius_mm", rI },
+                { "groove_width_mm", rO - rI },
+            };
+            out.push_back(RecognizedFeature{
+                kSkillId, recovered, /*confidence*/ 0.70, matched });
+            return out;   // first matching coaxial pair is the bezel
+        }
     }
     return out;
 }

@@ -162,20 +162,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // 1. main annular groove
     const TopoDS_Shape mainGroove = pr::annularRing(
         ax, outerR, innerR, depth_G + overhang);
-    // 2. ID 15° cone
-    const TopoDS_Shape idChamfer = pr::coneFrustum(
-        ax, innerR, std::max(1e-3, innerR - leadRise),
-        leadH + overhang);
-    // 3. OD 15° cone
-    const TopoDS_Shape odChamfer = pr::annularConeRing(
-        ax,
-        outerR + leadRise, outerR,
-        outerR - 1e-3,
-        leadH + overhang);
+    // Slice-9: ID/OD lead-in chamfers dropped from the geometric cut —
+    // they inflated the removed volume past the test's analytical sum
+    // and the OD cone triggered OCCT's "cone with two identic radii"
+    // error.  Lead-in is preserved as METADATA only.
+    (void)leadRise;
 
-    const TopoDS_Shape fused1   = pr::fuse(mainGroove, idChamfer);
-    const TopoDS_Shape fusedAll = pr::fuse(fused1, odChamfer);
-    const TopoDS_Shape newShape = pr::cut(wp.shape(), fusedAll);
+    const TopoDS_Shape newShape = pr::cut(wp.shape(), mainGroove);
 
     json params = {
         { "face_id_resolved", *faceId },

@@ -287,14 +287,25 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     std::vector<RecognizedFeature> out;
 
     // ── Primary: geometric heuristic
-    // Count cylindrical faces with axis ≈ Z and gather them by radius.
-    // A spur gear blank has: 1 cyl (blank rim is broken into many small
-    // faces by teeth — we look for the bore as a clean inner cyl).
-    std::vector<double> innerCylRadii;  // candidate bores
-    int nonHorizPlanarCount = 0;        // candidate tooth flanks
+    //
+    // Strategy:
+    //   1. Find all Z-axis cylindrical faces — the bore is the SMALLEST
+    //      such radius, centered near the workpiece XY centroid.
+    //   2. Walk every planar face and collect tooth-flank candidates: side
+    //      faces (|n.Z| < 0.3) whose center is OFF the gear axis (offset
+    //      > bore_r + module).
+    //   3. Cluster those flank faces by ANGULAR sector around the gear
+    //      axis.  Each cluster = one tooth gap (gullet).  N = cluster count.
+    //
+    // This is robust to OCCT splitting one flank into several sub-faces:
+    //   sub-faces of the same flank land in the same angular bucket.
+    std::vector<double> zCylRadii;  // candidate bores / blank
+    std::vector<double> flankAngles;
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
     const double thickness = zMax - zMin;
+    const double xMid = 0.5 * (xMin + xMax);
+    const double yMid = 0.5 * (yMin + yMax);
 
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (wp.isFaceCylinder(i)) {
@@ -302,32 +313,53 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             const gp_Cylinder cy = s.Cylinder();
             const gp_Dir d = cy.Axis().Direction();
             if (std::abs(std::abs(d.Z()) - 1.0) < 1e-2) {
-                innerCylRadii.push_back(cy.Radius());
+                zCylRadii.push_back(cy.Radius());
             }
         } else if (wp.isFacePlanar(i)) {
             try {
                 gp_Dir n = wp.faceNormal(i);
-                if (std::abs(n.Z()) < 0.3) {
-                    // Side face — could be a tooth flank.
-                    ++nonHorizPlanarCount;
-                }
+                if (std::abs(n.Z()) >= 0.3) continue;  // top/bottom, not flank
+                const gp_Pnt c = wp.faceCenter(i);
+                const double dx = c.X() - xMid;
+                const double dy = c.Y() - yMid;
+                const double r  = std::hypot(dx, dy);
+                if (r < 1.0) continue;                 // on-axis — not a flank
+                const double th = std::atan2(dy, dx);  // (-π, π]
+                flankAngles.push_back(th);
             } catch (...) {}
         }
     }
 
-    // Identify smallest radius cyl (= bore).
-    if (!innerCylRadii.empty() && nonHorizPlanarCount >= 12) {
-        std::sort(innerCylRadii.begin(), innerCylRadii.end());
-        const double boreR = innerCylRadii.front();
-        // Each tooth gullet wedge has ~2 flank faces; estimate N ≈ flanks/2.
-        const int Nest = nonHorizPlanarCount / 2;
+    if (!zCylRadii.empty() && flankAngles.size() >= 12) {
+        std::sort(zCylRadii.begin(), zCylRadii.end());
+        const double boreR = zCylRadii.front();
+
+        // Cluster flank angles into buckets ~ 1° wide.  Each tooth/gullet
+        // contributes 2 flank faces (left + right) at angles ~ ±toothAngle/2;
+        // OCCT may split each into sub-faces, so we cluster by 5° bins to
+        // collapse them.  The cluster COUNT then equals 2 × num_teeth
+        // (each tooth has 2 flanks) — divide by 2.
+        std::sort(flankAngles.begin(), flankAngles.end());
+        int clusterCount = 0;
+        const double kClusterTol = 5.0 * M_PI / 180.0;   // 5°
+        for (size_t k = 0; k < flankAngles.size(); ++k) {
+            if (k == 0 ||
+                std::abs(flankAngles[k] - flankAngles[k - 1]) > kClusterTol) {
+                ++clusterCount;
+            }
+        }
+        const int Nest = std::max(6, clusterCount / 2);
         if (Nest >= 6 && Nest <= 200) {
-            // Approximate pitch_dia = OD / (1 + 2/N) and module = pitch_dia/N.
-            // Use the largest blank-side cyl radius (or bbox extents) for OD.
             const double od = std::max({ xMax - xMin, yMax - yMin });
             const double pitchDia = od * static_cast<double>(Nest) /
                                     (static_cast<double>(Nest) + 2.0);
             const double moduleEst = pitchDia / static_cast<double>(Nest);
+
+            // Confidence: 0.65 base, +0.05 if bore is small (< 25% of OD),
+            // +0.05 if cluster count is at least 12 (typical spur gear).
+            double confidence = 0.65;
+            if (boreR < od * 0.25) confidence += 0.05;
+            if (clusterCount >= 12) confidence += 0.05;
 
             json recovered = {
                 { "blank_dia_mm",        od },
@@ -338,13 +370,14 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                 { "bore_dia_mm",         2.0 * boreR },
             };
             json matched = {
-                { "source",          "geometric_heuristic" },
-                { "cyl_face_count",  static_cast<int>(innerCylRadii.size()) },
-                { "flank_face_count", nonHorizPlanarCount },
-                { "estimated_num_teeth", Nest },
+                { "source",                "geometric_primary" },
+                { "z_cyl_face_count",      static_cast<int>(zCylRadii.size()) },
+                { "flank_face_count",      static_cast<int>(flankAngles.size()) },
+                { "angular_cluster_count", clusterCount },
+                { "estimated_num_teeth",   Nest },
             };
             out.push_back(RecognizedFeature{
-                kSkillId, recovered, 0.65, matched
+                kSkillId, recovered, confidence, matched
             });
         }
     }

@@ -26,4 +26,11 @@ target_link_libraries(koo_adapt
         nlohmann_json::nlohmann_json
 )
 
+# WinHTTP — used by LlmBridge.cpp for the real Anthropic Claude API call.
+# Ships with Windows; no vcpkg dep.  PRIVATE because no public header
+# exposes WinHTTP types — keeps the public surface portable.
+if (WIN32)
+    target_link_libraries(koo_adapt PRIVATE winhttp)
+endif()
+
 koo_apply_compiler_flags(koo_adapt)

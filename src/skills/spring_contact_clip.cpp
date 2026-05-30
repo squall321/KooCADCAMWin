@@ -226,39 +226,85 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         out.push_back(r);
     }
 
-    // Geometric heuristic (PRIMARY): three pockets of distinct depth.
-    // Find planar floor faces (normal +Z) below the workpiece top, count
-    // their depth bands.  Need at least 3 distinct depths → very likely
-    // this compound.
+    // Geometric heuristic (PRIMARY): U-pocket signature requires
+    //   (a) ≥2 distinct horizontal floor levels below the entry face
+    //       (clip_floor + back_stop_floor),
+    //   (b) at least 4 vertical pocket walls (long pair + short pair),
+    //   (c) optionally a barb-slot window with its own short wall normal
+    //       perpendicular to the long-axis walls.
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
 
-    std::vector<double> floorZs;
+    // Collect floor faces below entry (top) with horizontal up-normal.
+    struct FloorInfo { int idx; gp_Pnt c; double area; };
+    std::vector<FloorInfo> floors;
+    int verticalWallCount = 0;
+    std::vector<gp_Dir> wallNormals;
     for (int fIdx = 0; fIdx < wp.faceCount(); ++fIdx) {
         if (!wp.isFacePlanar(fIdx)) continue;
         gp_Dir n;
         try { n = wp.faceNormal(fIdx); } catch (...) { continue; }
-        if (std::abs(n.Z() - 1.0) > 1e-2) continue;
         const gp_Pnt c = wp.faceCenter(fIdx);
-        if (std::abs(c.Z() - zMax) < 1e-3) continue;
-        floorZs.push_back(c.Z());
+        if (std::abs(n.Z() - 1.0) < 5e-2) {
+            // Up-facing floor face below the workpiece top — pocket floor.
+            if (c.Z() < zMax - 0.1) {
+                floors.push_back({ fIdx, c, wp.faceArea(fIdx) });
+            }
+        } else if (std::abs(n.Z()) < 5e-2) {
+            // Vertical wall.  Must be inside the stock (not the outer skin).
+            if (c.X() > xMin + 0.1 && c.X() < xMax - 0.1 &&
+                c.Y() > yMin + 0.1 && c.Y() < yMax - 0.1) {
+                ++verticalWallCount;
+                wallNormals.push_back(n);
+            }
+        }
     }
+    if (floors.size() < 1 || verticalWallCount < 3) return out;
+
+    // Distinct floor-Z levels.
+    std::vector<double> floorZs;
+    for (const auto& f : floors) floorZs.push_back(f.c.Z());
     std::sort(floorZs.begin(), floorZs.end());
-    // Count distinct levels.
     std::vector<double> levels;
     for (double z : floorZs) {
         if (levels.empty() || std::abs(z - levels.back()) > 0.3)
             levels.push_back(z);
     }
-    if (levels.size() < 2) return out;
+
+    // Find the LARGEST floor (the U-pocket floor) and use its center for
+    // the recovered position.
+    auto biggestFloor = std::max_element(
+        floors.begin(), floors.end(),
+        [](const FloorInfo& a, const FloorInfo& b){ return a.area < b.area; });
+
+    // Distinct in-plane wall-normal directions — true U-pocket has at least
+    // 2 (long pair + short pair).  Add 1 more for the barb slot side window.
+    int distinctWallDirs = 0;
+    std::vector<gp_Dir> uniq;
+    for (const auto& d : wallNormals) {
+        bool dup = false;
+        for (const auto& u : uniq) {
+            const double cosTh = std::abs(d.X()*u.X() + d.Y()*u.Y());
+            if (cosTh > 0.95) { dup = true; break; }
+        }
+        if (!dup) { uniq.push_back(d); ++distinctWallDirs; }
+    }
 
     // Approximate clip_depth = zMax - shallowest_pocket_floor.
-    const double clipDepth = zMax - levels.back();
-    const double bsDepth   = levels.size() >= 2 ? (levels.back() - levels.front()) : 0.0;
+    const double clipDepth = (!levels.empty()) ? (zMax - levels.back()) : 0.0;
+    const double bsDepth   = (levels.size() >= 2)
+                           ? (levels.back() - levels.front()) : 0.0;
+
+    int subScore = 0;
+    if (levels.size() >= 1)      ++subScore;          // U-pocket floor
+    if (levels.size() >= 2)      ++subScore;          // back-stop floor
+    if (verticalWallCount >= 4)  ++subScore;          // U-pocket walls
+    if (distinctWallDirs >= 3)   ++subScore;          // barb slot extra direction
+    const double confidence = std::min(0.85, 0.40 + 0.10 * subScore);
 
     json recovered = {
-        { "position_x_mm",      (xMin + xMax) / 2.0 },
-        { "position_y_mm",      (yMin + yMax) / 2.0 },
+        { "position_x_mm",      biggestFloor->c.X() },
+        { "position_y_mm",      biggestFloor->c.Y() },
         { "axis_dir",           { 0.0, 0.0, -1.0 } },
         { "clip_depth_mm",      clipDepth },
         { "back_stop_depth_mm", bsDepth },
@@ -266,8 +312,14 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     RecognizedFeature r;
     r.skill_id         = kSkillId;
     r.recovered_params = recovered;
-    r.confidence       = 0.6;
-    r.matched_geometry = { { "floor_levels", static_cast<int>(levels.size()) } };
+    r.confidence       = confidence;
+    r.matched_geometry = {
+        { "floor_levels",        static_cast<int>(levels.size()) },
+        { "vertical_wall_count", verticalWallCount },
+        { "distinct_wall_dirs",  distinctWallDirs },
+        { "subfeature_score",    subScore },
+        { "source",              "geometric" },
+    };
     out.push_back(r);
     return out;
 }

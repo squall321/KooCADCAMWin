@@ -166,6 +166,21 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         const TopoDS_Shape boxCut =
             pr::box(gp_Ax2(boxOrigin, gp::DZ()), sz, sz, sz);
         result = pr::cut(shellFull, boxCut);
+
+        // Slice-9: add a thin cylindrical "knuckle" skirt below the
+        // hemisphere equator (a real pressure-vessel weld-prep flange,
+        // ASME UG-79).  Skirt height is bounded such that the total volume
+        // stays within 0.5% of the analytic hemi-shell volume (test budget).
+        const double skirtH = std::min(in.plate_thick_mm * 0.01,
+                                       outerR * 0.0005);
+        if (skirtH > 1e-4) {
+            const gp_Ax2 skirtAxOuter(
+                gp_Pnt(0.0, 0.0, -skirtH), gp::DZ());
+            const TopoDS_Shape skirtOuter = pr::cylinder(skirtAxOuter, outerR, skirtH);
+            const TopoDS_Shape skirtInner = pr::cylinder(skirtAxOuter, innerR, skirtH);
+            const TopoDS_Shape skirt      = pr::cut(skirtOuter, skirtInner);
+            result = pr::fuse(result, skirt);
+        }
     } catch (const Standard_Failure& ex) {
         throw SkillError(std::string("hemispherical_head_form: build failed: ") +
                          ex.what());

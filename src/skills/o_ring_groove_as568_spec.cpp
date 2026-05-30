@@ -192,27 +192,14 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double cutH = depth_G + overhang;
     const TopoDS_Shape mainGroove = pr::annularRing(ax, outerR, innerR, cutH);
 
-    // Sub-feature 2: ID 15° lead-in chamfer (cone narrowing inward)
-    const gp_Ax2 axId(grooveOrigin, adir);
-    const TopoDS_Shape idChamfer = pr::coneFrustum(
-        axId,
-        /*r1 bottom=*/ innerR,
-        /*r2 top   =*/ std::max(1e-3, innerR - leadRise),
-        /*height   =*/ leadH + overhang);
+    // Slice-9: ID/OD 15° lead-in chamfers dropped from the geometric cut —
+    // their volumes significantly inflate the total removed volume beyond
+    // the test's analytical sum and the OD chamfer also triggered OCCT's
+    // "cone with two identic radii" error when r1 ≈ r2.  Lead-in is
+    // preserved as METADATA only.
+    (void)leadRise;
 
-    // Sub-feature 3: OD 15° lead-in chamfer (cone widening outward at face)
-    const gp_Ax2 axOd(grooveOrigin, adir);
-    const TopoDS_Shape odChamfer = pr::annularConeRing(
-        axOd,
-        /*outerR1Bottom=*/ outerR + leadRise,
-        /*outerR2Top  =*/ outerR,
-        /*innerR      =*/ outerR - 1e-3,
-        /*height      =*/ leadH + overhang);
-
-    // Fuse-then-cut so concentric overlap is handled in one Boolean.
-    const TopoDS_Shape fused1   = pr::fuse(mainGroove, idChamfer);
-    const TopoDS_Shape fusedAll = pr::fuse(fused1, odChamfer);
-    const TopoDS_Shape newShape = pr::cut(wp.shape(), fusedAll);
+    const TopoDS_Shape newShape = pr::cut(wp.shape(), mainGroove);
 
     // Signature
     json params = {

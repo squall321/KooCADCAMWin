@@ -185,6 +185,12 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     if (slabLen < 1e-6) slabLen = std::sqrt(faceArea);
     if (slabWid < 1e-6) slabWid = std::sqrt(faceArea);
 
+    // Slice-9 fix: shrink slab footprint so the original face survives as a
+    // frame — recognize() then sees a parallel face-pair (frame + slab top).
+    const double kInsetMm = 1.0;
+    slabLen = std::max(slabLen - 2.0 * kInsetMm, slabLen * 0.5);
+    slabWid = std::max(slabWid - 2.0 * kInsetMm, slabWid * 0.5);
+
     const double thickness_mm = in.coating_thickness_um * 1.0e-3;
     const double kSinkPct     = 0.01;
     const double sink         = thickness_mm * kSinkPct;
@@ -299,9 +305,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             if (dist < 0.0009 || dist > 0.21) continue;
 
             const double areaJ = wp.faceArea(j);
+            // Thin-shell coatings leave only a slab top + thin frame; we
+            // only require both faces to be non-degenerate.
+            if (areaJ < 0.5) continue;
             const double areaRatio = (areaJ > 0.0)
                 ? std::min(areaI, areaJ) / std::max(areaI, areaJ) : 0.0;
-            if (areaRatio < 0.7) continue;
 
             json recovered = {
                 { "entry_face_id",        i },

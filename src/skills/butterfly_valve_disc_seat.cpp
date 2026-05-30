@@ -8,6 +8,7 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <gp.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
@@ -316,47 +317,87 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Geometric: largest flow-axis cylinder + ≥2 perpendicular small cyls.
+    // Geometric: largest flow-axis cylinder + a vertical TOP and BOTTOM
+    // stub-bearing pair whose XY position sits on the bore axis (kinematic
+    // constraint of a butterfly valve: stem pierces the bore through the disc).
     int flowCyl = -1;
     double flowR = 0.0;
-    std::vector<int> stubCyls;
+    gp_Ax1 flowAxis;
+    struct VC { int idx; double radius; gp_Pnt center; };
+    std::vector<VC> verticalCyls;
+
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFaceCylinder(i)) continue;
         BRepAdaptor_Surface s(wp.face(i));
         const gp_Cylinder cyl = s.Cylinder();
         const gp_Dir ad = cyl.Axis().Direction();
         const double r = cyl.Radius();
-        if (std::abs(std::abs(ad.X()) - 1.0) < 1e-2) {
-            // flow-axis
-            if (r > flowR) { flowCyl = i; flowR = r; }
-        } else if (std::abs(std::abs(ad.Z()) - 1.0) < 1e-2) {
-            stubCyls.push_back(i);
+        if (std::abs(std::abs(ad.X()) - 1.0) < 5e-2) {
+            // flow-axis: pick the LARGEST cylinder as the flow bore.
+            if (r > flowR) { flowCyl = i; flowR = r; flowAxis = cyl.Axis(); }
+        } else if (std::abs(std::abs(ad.Z()) - 1.0) < 5e-2) {
+            verticalCyls.push_back({ i, r, wp.faceCenter(i) });
         }
     }
-    if (flowCyl < 0 || stubCyls.size() < 2) return out;
+    if (flowCyl < 0 || verticalCyls.size() < 2) return out;
 
-    // Best stub_dia = median radius of stub-axis cylinders.
-    std::vector<double> stubR;
-    stubR.reserve(stubCyls.size());
-    for (int idx : stubCyls) {
-        BRepAdaptor_Surface s(wp.face(idx));
-        stubR.push_back(s.Cylinder().Radius());
+    // Filter vertical cylinders to those whose XY position lies on the flow
+    // axis (within bore radius + slack).  These are the stub bearings / stem
+    // ports — they MUST coincide with the bore axis or it isn't a BFV.
+    auto onBoreAxis = [&](const gp_Pnt& c) {
+        const double dxy = std::hypot(
+            c.X() - flowAxis.Location().X(),
+            c.Y() - flowAxis.Location().Y());
+        return dxy <= flowR + 1.0;
+    };
+    std::vector<VC> onAxis;
+    for (const auto& v : verticalCyls) if (onBoreAxis(v.center)) onAxis.push_back(v);
+    if (onAxis.size() < 2) return out;
+
+    // Separate into TOP (z > bore center) and BOTTOM groups.
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    const double zMid = flowAxis.Location().Z();
+    bool hasTop = false, hasBot = false;
+    for (const auto& v : onAxis) {
+        if (v.center.Z() > zMid) hasTop = true;
+        else                     hasBot = true;
     }
-    std::sort(stubR.begin(), stubR.end());
-    const double medStub = stubR[stubR.size() / 2];
+
+    // Stub bearing dia = the LARGER of distinct radii among on-axis verticals
+    // (stem ports are smaller; bearings are bigger).
+    std::vector<double> radii;
+    for (const auto& v : onAxis) radii.push_back(v.radius);
+    std::sort(radii.begin(), radii.end());
+    const double medStub = radii[radii.size() / 2];
+    const double maxStub = radii.back();
+
+    int subScore = 0;
+    if (true)    ++subScore;        // through bore
+    if (hasTop)  ++subScore;        // top stub
+    if (hasBot)  ++subScore;        // bottom stub
+    if (onAxis.size() >= 4) ++subScore;   // top+bot ports too
+    const double confidence = std::min(0.90, 0.55 + 0.08 * subScore);
 
     json recovered = {
         { "flow_bore_dia_mm",    2.0 * flowR },
-        { "stub_bearing_dia_mm", 2.0 * medStub },
+        { "stub_bearing_dia_mm", 2.0 * maxStub },
+        { "stem_port_dia_mm",    2.0 * medStub },
+        { "center_x_mm",         flowAxis.Location().X() },
+        { "center_y_mm",         flowAxis.Location().Y() },
+        { "center_z_mm",         zMid },
         { "flow_axis",           { 1.0, 0.0, 0.0 } },
         { "stem_axis",           { 0.0, 0.0, 1.0 } },
     };
     json matched = {
-        { "flow_cyl_face_id",    flowCyl },
-        { "vertical_cyl_count",  static_cast<int>(stubCyls.size()) },
-        { "source",              "geometric" },
+        { "flow_cyl_face_id",      flowCyl },
+        { "on_axis_vertical_count", static_cast<int>(onAxis.size()) },
+        { "has_top_stub",           hasTop },
+        { "has_bottom_stub",        hasBot },
+        { "subfeature_score",       subScore },
+        { "source",                 "geometric" },
     };
-    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.7, matched });
+    out.push_back(RecognizedFeature{ kSkillId, recovered, confidence, matched });
     return out;
 }
 

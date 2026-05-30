@@ -10,8 +10,13 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_List.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
 
 #include <nlohmann/json.hpp>
@@ -20,6 +25,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <string>
 
 namespace koocadcam::skill::press_fit_p7_bore_spec {
 
@@ -283,19 +290,72 @@ std::vector<CylInfo> collectCylinders(const Workpiece& wp)
     return out;
 }
 
+// Preferred press-fit shaft sizes — DIN 6325 / ISO 286 hardened dowel pin
+// nominals + common bearing shaft sizes.  recognize() snaps the measured
+// undersize bore to one of these as the back-mapped key.
+constexpr std::array<double, 20> kPreferredP7Nominal {{
+    1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0,
+    16.0, 18.0, 20.0, 25.0, 30.0, 40.0, 50.0, 60.0, 80.0,
+}};
+
 // Closest P7 nominal whose mid-tolerance landing matches measured_dia.
-double nearestNominal(double measured_dia_mm, double tol_mm)
+double nearestNominal(double measured_dia_mm, double tol_mm, double* out_err = nullptr)
 {
     double best = -1.0;
     double bestErr = tol_mm;
-    for (const auto& r : kP7Table) {
-        const double nominal = r.dia_max;
-        const double midDev = ((r.upper_um + r.lower_um) / 2.0) * 1e-3;
+    for (double nominal : kPreferredP7Nominal) {
+        const auto dev = deviationFor(nominal);
+        if (!dev.valid) continue;
+        const double midDev = ((dev.upper_um + dev.lower_um) / 2.0) * 1e-3;
         const double finalDia = nominal + midDev;
         const double err = std::abs(finalDia - measured_dia_mm);
         if (err < bestErr) { bestErr = err; best = nominal; }
     }
+    if (out_err) *out_err = bestErr;
     return best;
+}
+
+std::string p7Key(double nominal_dia_mm)
+{
+    char buf[32];
+    if (std::abs(nominal_dia_mm - std::round(nominal_dia_mm)) < 1e-3) {
+        std::snprintf(buf, sizeof(buf), "P7-%d",
+                      static_cast<int>(std::round(nominal_dia_mm)));
+    } else {
+        std::snprintf(buf, sizeof(buf), "P7-%.1f", nominal_dia_mm);
+    }
+    return std::string(buf);
+}
+
+using EdgeFaceMap = NCollection_IndexedDataMap<
+    TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>;
+
+EdgeFaceMap buildEdgeFaceMap(const TopoDS_Shape& shape)
+{
+    EdgeFaceMap m;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, m);
+    return m;
+}
+
+bool hasAdjacentChamferCone(const EdgeFaceMap& edgeFaces,
+                            const TopoDS_Face& cylFace,
+                            const gp_Ax1& cylAxis)
+{
+    for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
+        const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
+        if (!edgeFaces.Contains(e)) continue;
+        const auto& adj = edgeFaces.FindFromKey(e);
+        for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
+            const TopoDS_Face& af = TopoDS::Face(it.Value());
+            if (af.IsSame(cylFace)) continue;
+            BRepAdaptor_Surface as(af);
+            if (as.GetType() != GeomAbs_Cone) continue;
+            const gp_Cone cn = as.Cone();
+            if (std::abs(std::abs(cn.Axis().Direction().Dot(cylAxis.Direction())) - 1.0)
+                < 1e-2) return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace
@@ -304,10 +364,15 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
     const auto cyls = collectCylinders(wp);
+    const auto edgeFaces = buildEdgeFaceMap(wp.shape());
+
     for (const auto& cyl : cyls) {
         const double measuredDia = 2.0 * cyl.radius;
         if (measuredDia < 0.9 || measuredDia > 260.0) continue;
-        const double nominal = nearestNominal(measuredDia, 0.08);
+
+        // Back-map measured diameter → preferred ISO 286 P7 nominal.
+        double err = 0.0;
+        const double nominal = nearestNominal(measuredDia, 0.08, &err);
         if (nominal < 0.0) continue;
 
         const double depth = cyl.length;
@@ -317,18 +382,25 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 
         const gp_Dir adir = cyl.axis.Direction();
         const gp_Pnt& entry = cyl.topCenter;
+        const bool hasChamfer = hasAdjacentChamferCone(
+            edgeFaces, wp.face(cyl.faceIdx), cyl.axis);
+        const std::string specKeyTable = p7Key(nominal);
 
         json rp = {
-            { "position_x_mm",   entry.X() },
-            { "position_y_mm",   entry.Y() },
-            { "axis_dir",        { adir.X(), adir.Y(), adir.Z() } },
-            { "nominal_dia_mm",  nominal },
-            { "depth_mm",        depth },
-            { "chamfer_mm",      0.5 },
-            { "spec_key",        "P7" },
-            { "final_dia_mm",    measuredDia },
+            { "position_x_mm",     entry.X() },
+            { "position_y_mm",     entry.Y() },
+            { "axis_dir",          { adir.X(), adir.Y(), adir.Z() } },
+            { "nominal_dia_mm",    nominal },
+            { "depth_mm",          depth },
+            { "chamfer_mm",        hasChamfer ? 0.5 : 0.0 },
+            { "spec_key",          "P7" },
+            { "spec_key_table",    specKeyTable },
+            { "final_dia_mm",      measuredDia },
+            { "fit_match_err_mm",  err },
         };
-        double conf = 0.68;
+        double conf = 0.60;
+        if (err < 0.03) conf += 0.10;
+        if (hasChamfer) conf += 0.10;
         for (const auto& f : wp.features()) {
             const auto& p = f.params;
             auto sk = p.find("spec_key");
@@ -337,11 +409,16 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             if (px == p.end() || py == p.end()) continue;
             const double dx = px->get<double>() - entry.X();
             const double dy = py->get<double>() - entry.Y();
-            if (dx * dx + dy * dy < 1e-2) { conf = 0.93; break; }
+            if (dx * dx + dy * dy < 1e-2) { conf = std::max(conf, 0.93); break; }
         }
+        if (conf > 0.99) conf = 0.99;
+
         json matched = {
-            { "cyl_face_id", cyl.faceIdx },
-            { "entry_center", { entry.X(), entry.Y(), entry.Z() } },
+            { "cyl_face_id",      cyl.faceIdx },
+            { "entry_center",     { entry.X(), entry.Y(), entry.Z() } },
+            { "spec_key_table",   specKeyTable },
+            { "has_chamfer_cone", hasChamfer },
+            { "fit_err_mm",       err },
         };
         out.push_back(RecognizedFeature{ kSkillId, rp, conf, matched });
     }

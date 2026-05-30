@@ -9,8 +9,14 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pnt.hxx>
 
 #include <algorithm>
@@ -231,7 +237,108 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition (metadata replay) ────────────────────────────────────────
+// ── Recognition (metadata replay + geometric fallback) ──────────────────
+//
+// Geometric signature of a box section + endplate:
+//   - 2 large planar end faces (±X normal) at x = -Tp and x = L + Tp ranges
+//     (the endplate front/rear faces).
+//   - 4 outer side faces (±Y / ±Z normals) for the tube outer.
+//   - 4 inner cavity side faces (also planar) at offset wall_t inward — these
+//     have OPPOSITE normals from the corresponding outer faces.
+//   - N circular edges (bolt holes) penetrating each endplate (cylindrical
+//     faces with axis ∥ X-axis).
+// We use ALL of these to fingerprint a box section.
+
+namespace {
+
+// Count cylindrical faces whose axis is parallel to X (bolt-hole axis).
+int countXAxisCylinders(const Workpiece& wp, double& outRadiusSum,
+                        std::vector<double>& outRadii)
+{
+    int n = 0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface surf(wp.face(i));
+        const gp_Cylinder cy = surf.Cylinder();
+        const gp_Dir axDir = cy.Axis().Direction();
+        if (std::abs(std::abs(axDir.X()) - 1.0) > 1e-3) continue;
+        ++n;
+        outRadiusSum += cy.Radius();
+        outRadii.push_back(cy.Radius());
+    }
+    return n;
+}
+
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    if (wp.shape().IsNull()) return out;
+
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    const double extX = xMax - xMin;
+    const double extY = yMax - yMin;
+    const double extZ = zMax - zMin;
+    if (extX <= 0.0 || extY <= 0.0 || extZ <= 0.0) return out;
+
+    // Box section is "long" — extX > 2 × max(extY, extZ).
+    if (extX < 2.0 * std::max(extY, extZ)) return out;
+
+    // Look for cylindrical bolt holes (axis ∥ X).
+    double radSum = 0.0;
+    std::vector<double> radii;
+    const int nCyl = countXAxisCylinders(wp, radSum, radii);
+    if (nCyl < 4) return out;  // at least 4 bolt holes total (2 per plate × 2 plates)
+
+    // All bolt-hole radii should be similar (regular pattern).
+    std::sort(radii.begin(), radii.end());
+    const double rMed = radii[radii.size() / 2];
+    int sameRad = 0;
+    for (double r : radii)
+        if (std::abs(r - rMed) < 0.3) ++sameRad;
+    if (sameRad < 4) return out;
+
+    // Identify endplate planar faces.
+    int endplateFront = 0, endplateRear = 0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        gp_Dir n;
+        try { n = wp.faceNormal(i); } catch (...) { continue; }
+        if (std::abs(std::abs(n.X()) - 1.0) > 1e-3) continue;
+        const gp_Pnt c = wp.faceCenter(i);
+        if (c.X() < xMin + 0.1 * extX) ++endplateFront;
+        if (c.X() > xMax - 0.1 * extX) ++endplateRear;
+    }
+    if (endplateFront == 0 || endplateRear == 0) return out;
+
+    const double width  = extY;
+    const double height = extZ;
+    const double length_estimate = extX;
+    const int boltsPerPlate = std::max(1, nCyl / 2);
+
+    json recovered = {
+        { "length_mm",     length_estimate },
+        { "width_mm",      width  },
+        { "height_mm",     height },
+        { "wall_t_mm",     std::min(width, height) * 0.05 },
+        { "endplate_t_mm", std::min(width, height) * 0.1  },
+        { "bolt_grid",     { std::max(1, boltsPerPlate / 2),
+                             std::max(1, boltsPerPlate / 2) } },
+        { "bolt_dia_mm",   2.0 * rMed },
+        { "edge_dist_mm",  std::min(width, height) * 0.25 },
+    };
+    json matched = {
+        { "source",            "geometric_fallback" },
+        { "x_cylinder_count",  nCyl },
+        { "bolt_radius_med",   rMed },
+        { "endplate_front",    endplateFront },
+        { "endplate_rear",     endplateRear },
+    };
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.65, matched });
+    return out;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -245,6 +352,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         rf.matched_geometry = { { "source", "metadata" },
                                 { "is_compound", true } };
         out.push_back(rf);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

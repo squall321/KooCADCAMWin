@@ -9,6 +9,14 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Pnt.hxx>
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -245,7 +253,140 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition (metadata replay) ────────────────────────────────────────
+// ── Recognition (metadata replay + geometric fallback) ──────────────────
+//
+// Geometric signature of a ball-screw nut pocket:
+//   - 1 large -Z (or arbitrary) cylindrical face (nut OD pocket, large radius)
+//   - 1 smaller concentric cylindrical face (shaft thru-bore)
+//   - 4 small cylindrical mounting holes arranged at 90° on a common PCD
+//     centered on the nut/shaft axis.
+
+namespace {
+
+struct CylSig {
+    int    faceIdx;
+    gp_Pnt center;         // axis location point
+    gp_Dir axDir;
+    double radius;
+};
+
+std::vector<CylSig> collectCyls(const Workpiece& wp)
+{
+    std::vector<CylSig> out;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface surf(wp.face(i));
+        const gp_Cylinder cy = surf.Cylinder();
+        out.push_back({ i, cy.Axis().Location(), cy.Axis().Direction(), cy.Radius() });
+    }
+    return out;
+}
+
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    if (wp.shape().IsNull()) return out;
+
+    const auto cyls = collectCyls(wp);
+    if (cyls.size() < 6) return out;  // nut + shaft + 4 mounts
+
+    // Group by axis direction (≈ same).  Pick the dominant direction.
+    // For the canonical case axis = -Z, all cylinders share Z direction.
+    // We try each cylinder as a potential center.
+    for (size_t cIdx = 0; cIdx < cyls.size(); ++cIdx) {
+        const CylSig& center = cyls[cIdx];
+        // Identify "co-axis" cylinders (same axis line as center).
+        std::vector<CylSig> coax;
+        std::vector<CylSig> ringed;
+        for (const auto& c : cyls) {
+            if (std::abs(std::abs(c.axDir.Dot(center.axDir)) - 1.0) > 1e-3) continue;
+            // distance between axis lines (project center difference perp to axis)
+            const gp_Vec d(center.center, c.center);
+            const gp_Vec ax(center.axDir.X(), center.axDir.Y(), center.axDir.Z());
+            const gp_Vec perp = d - ax * d.Dot(ax);
+            const double dist = perp.Magnitude();
+            if (dist < 0.5) coax.push_back(c);
+            else            ringed.push_back(c);
+        }
+        if (coax.size() < 2) continue;
+
+        // Pick the largest coax radius = nut OD pocket.
+        double nutR = 0.0, shaftR = 0.0;
+        for (const auto& c : coax) {
+            if (c.radius > nutR) {
+                shaftR = nutR;
+                nutR = c.radius;
+            } else if (c.radius > shaftR) {
+                shaftR = c.radius;
+            }
+        }
+        if (nutR <= 0.0 || nutR < 4.0) continue;
+
+        // Mounting holes: need 4 cylinders, same radius, equidistant from
+        // the center axis (the PCD).
+        if (ringed.size() < 4) continue;
+
+        // Compute distance of each ringed cyl from the center axis line.
+        struct RingedHole { double dist; double radius; double angle; };
+        std::vector<RingedHole> holes;
+        for (const auto& c : ringed) {
+            const gp_Vec d(center.center, c.center);
+            const gp_Vec ax(center.axDir.X(), center.axDir.Y(), center.axDir.Z());
+            const gp_Vec perp = d - ax * d.Dot(ax);
+            const double dist = perp.Magnitude();
+            holes.push_back({ dist, c.radius, std::atan2(perp.Y(), perp.X()) });
+        }
+        // Sort by distance, pick the 4 closest with identical distance.
+        std::sort(holes.begin(), holes.end(),
+                  [](const RingedHole& a, const RingedHole& b){ return a.dist < b.dist; });
+        // Find the cluster of 4 with similar distance (PCD/2) and similar radius.
+        int bestStart = -1;
+        for (size_t i = 0; i + 3 < holes.size(); ++i) {
+            const double d0 = holes[i].dist;
+            const double r0 = holes[i].radius;
+            bool ok = true;
+            for (int k = 1; k < 4; ++k) {
+                if (std::abs(holes[i + k].dist   - d0) > 0.5) { ok = false; break; }
+                if (std::abs(holes[i + k].radius - r0) > 0.3) { ok = false; break; }
+            }
+            if (ok) { bestStart = static_cast<int>(i); break; }
+        }
+        if (bestStart < 0) continue;
+
+        const double pcd   = 2.0 * holes[bestStart].dist;
+        const double holeR = holes[bestStart].radius;
+        const double nutOD = 2.0 * nutR;
+
+        // Determine pattern: square4 = angles at 0/90/180/270; diamond4 at 45.
+        const double a0deg = holes[bestStart].angle * 180.0 / M_PI;
+        const double a0    = std::fmod(std::abs(a0deg) + 22.5, 90.0);
+        const std::string pattern = (a0 < 22.5) ? "square4" : "diamond4";
+
+        json recovered = {
+            { "position_x_mm",        center.center.X() },
+            { "position_y_mm",        center.center.Y() },
+            { "axis_dir",             { -center.axDir.X(), -center.axDir.Y(), -center.axDir.Z() } },
+            { "nut_od_mm",            nutOD - 0.1 },   // remove slip clearance approximation
+            { "nut_l_mm",             0.0 },           // depth not directly recoverable from a face
+            { "mounting_pattern",     pattern },
+            { "mounting_pcd_mm",      pcd },
+            { "mounting_hole_dia_mm", 2.0 * holeR },
+            { "shaft_thru_dia_mm",    2.0 * shaftR },
+        };
+        json matched = {
+            { "source",         "geometric_fallback" },
+            { "nut_face_id",    coax.front().faceIdx },
+            { "coax_count",     static_cast<int>(coax.size()) },
+            { "mount_count",    4 },
+            { "detected_pcd",   pcd },
+        };
+        out.push_back(RecognizedFeature{ kSkillId, recovered, 0.65, matched });
+        return out;  // one match per workpiece
+    }
+    return out;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -261,6 +402,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "subfeature_count",  f.pattern.value("subfeature_count", 0) },
         };
         out.push_back(r);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

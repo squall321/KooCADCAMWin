@@ -40,6 +40,43 @@ double sheetThickness(const Workpiece& wp)
     return std::min({ xMax - xMin, yMax - yMin, zMax - zMin });
 }
 
+// Slice-9 fix: after a hydroforming, the workpiece bbox grows by cup_depth
+// so plain bbox-min returns the cup-included span.  Scan for the dominant
+// pair of parallel horizontal planar faces (sheet top + bottom) instead.
+double sheetThicknessFromFaces(const Workpiece& wp)
+{
+    struct HFace { double z; double area; };
+    std::vector<HFace> hf;
+    const int n = wp.faceCount();
+    for (int i = 0; i < n; ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        gp_Dir nrm;
+        try { nrm = wp.faceNormal(i); } catch (...) { continue; }
+        if (std::abs(nrm.Z()) < 0.95) continue;
+        const double area = wp.faceArea(i);
+        if (area <= 0.0) continue;
+        const double z = wp.faceCenter(i).Z();
+        hf.push_back({ z, area });
+    }
+    double bestProd = 0.0;
+    double bestDz   = 0.0;
+    bool   found    = false;
+    for (size_t i = 0; i < hf.size(); ++i) {
+        for (size_t j = i + 1; j < hf.size(); ++j) {
+            const double dz = std::abs(hf[i].z - hf[j].z);
+            if (dz < 0.05 || dz > 6.0) continue;
+            const double prod = hf[i].area * hf[j].area;
+            if (prod > bestProd) {
+                bestProd = prod;
+                bestDz   = dz;
+                found    = true;
+            }
+        }
+    }
+    if (found) return bestDz;
+    return sheetThickness(wp);
+}
+
 // ── Validation ───────────────────────────────────────────────────────────
 
 DFMReport validate(const Workpiece& wp, const Input& in)
@@ -250,7 +287,9 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
-    const double t = sheetThickness(wp);
+    // Slice-9: use face-pair detector to recover sheet thickness — apply()
+    // grew the bbox by cup_depth so bbox-min returns the cup span.
+    const double t = sheetThicknessFromFaces(wp);
     if (t <= 0.0) return out;
 
     // History-aware boost: prior hydroforming?

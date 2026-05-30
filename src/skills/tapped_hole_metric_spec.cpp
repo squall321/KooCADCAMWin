@@ -10,7 +10,13 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -266,7 +272,55 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Pass 2: geometric — scan cylindrical faces, match dia to ISO 965.
+    // Pass 2: geometric fallback — scan cylindrical pilot faces, match dia
+    // to ISO 965; if a coaxial conical chamfer face is present at the
+    // entry, recover chamfer leg & confirm it's a tap-lead chamfer (60°
+    // included → 30° from axis per standard tap-drill practice).  Without
+    // the chamfer the candidate is still emitted but at lower confidence
+    // since it overlaps with bolt_hole_metric_spec for the same pilot.
+    //
+    // Geometric signature:
+    //   * 1 cylindrical pilot face whose radius matches ISO 965 tap-drill
+    //     within 0.10 mm tolerance;
+    //   * optionally 1 conical face coaxial with the pilot whose small
+    //     radius matches the pilot radius (the tap entry chamfer).
+
+    // Collect conical chamfer faces once (small radius, coaxial).
+    struct ConeRec { int faceIdx; gp_Ax1 axis; double rSmall; double rLarge;
+                     double semiAngleRad; };
+    std::vector<ConeRec> cones;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        BRepAdaptor_Surface surf(wp.face(i));
+        if (surf.GetType() != GeomAbs_Cone) continue;
+        const gp_Cone cn = surf.Cone();
+        ConeRec r;
+        r.faceIdx = i; r.axis = cn.Axis();
+        r.semiAngleRad = std::abs(cn.SemiAngle());
+        std::vector<double> radii;
+        for (TopExp_Explorer exp(wp.face(i), TopAbs_EDGE); exp.More(); exp.Next()) {
+            BRepAdaptor_Curve crv(TopoDS::Edge(exp.Current()));
+            if (crv.GetType() != GeomAbs_Circle) continue;
+            const gp_Circ c = crv.Circle();
+            if (std::abs(std::abs(c.Axis().Direction().Dot(r.axis.Direction())) - 1.0) > 1e-3)
+                continue;
+            radii.push_back(c.Radius());
+        }
+        if (radii.size() < 2) continue;
+        const auto [mn, mx] = std::minmax_element(radii.begin(), radii.end());
+        if (std::abs(*mx - *mn) < 0.05) continue;
+        r.rSmall = *mn; r.rLarge = *mx;
+        cones.push_back(r);
+    }
+    auto sameAxis = [](const gp_Ax1& a, const gp_Ax1& b){
+        const gp_Dir da = a.Direction(), db = b.Direction();
+        const double dot = std::abs(da.X()*db.X() + da.Y()*db.Y() + da.Z()*db.Z());
+        if (dot < std::cos(0.5 * M_PI / 180.0)) return false;
+        gp_Vec v(a.Location(), b.Location());
+        gp_Vec axV(da.X(), da.Y(), da.Z());
+        gp_Vec perp = v - axV * v.Dot(axV);
+        return perp.Magnitude() < 0.05;
+    };
+
     for (int fIdx = 0; fIdx < wp.faceCount(); ++fIdx) {
         if (!wp.isFaceCylinder(fIdx)) continue;
         const TopoDS_Face& cylFace = wp.face(fIdx);
@@ -287,21 +341,51 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             break;
         }
 
+        // Look for coaxial chamfer cone (tap-lead) to boost confidence.
+        double chamfer_leg = 0.0;
+        int    cone_face_id = -1;
+        bool   chamfer_found = false;
+        for (const auto& cn : cones) {
+            if (!sameAxis(cyl.Axis(), cn.axis)) continue;
+            if (std::abs(cn.rSmall - cyl.Radius()) > 0.2) continue;
+            chamfer_leg   = std::max(0.0, cn.rLarge - cn.rSmall);
+            cone_face_id  = cn.faceIdx;
+            chamfer_found = true;
+            break;
+        }
+
         const gp_Dir adir = cyl.Axis().Direction();
+        // Back-mapped spec table key: the ISO M-size, e.g. "M6".
+        const std::string specKeyTable = size;
+        // Fit-error: how close measured dia is to the canonical pilot.
+        const double fitErr = std::abs(dia - pilotDiameterFor(size));
         json params = {
             { "position_x_mm",     entryCenter.X() },
             { "position_y_mm",     entryCenter.Y() },
             { "axis_dir",          { adir.X(), adir.Y(), adir.Z() } },
             { "thread_size",       size },
+            { "spec_key_table",    specKeyTable },
             { "tap_depth_mm",      0.0 },
             { "through",           true },
+            { "chamfer_size_mm",   chamfer_leg },
             { "pilot_dia_mm",      dia },
             { "pitch_mm",          pitchFor(size) },
+            { "fit_match_err_mm",  fitErr },
         };
-        out.push_back(RecognizedFeature{
-            kSkillId, params, 0.55,   // lower than drill_hole — overlaps
-            { { "cyl_face_id", fIdx }, { "iso", "ISO 965-1" } }
-        });
+        // Tap lead chamfer presence boosts confidence above bolt_hole's pilot
+        // signature, since the standard tap-drill flow ALWAYS adds a chamfer.
+        double conf = chamfer_found ? 0.65 : 0.55;
+        if (fitErr < 0.02) conf += 0.05;
+        json matched = {
+            { "cyl_face_id",    fIdx },
+            { "iso",            "ISO 965-1" },
+            { "spec_key_table", specKeyTable },
+            { "source",         chamfer_found ? "geometric_fallback" : "cyl_only" },
+            { "chamfer_found",  chamfer_found },
+            { "fit_err_mm",     fitErr },
+        };
+        if (chamfer_found) matched["cone_face_id"] = cone_face_id;
+        out.push_back(RecognizedFeature{ kSkillId, params, conf, matched });
     }
     return out;
 }

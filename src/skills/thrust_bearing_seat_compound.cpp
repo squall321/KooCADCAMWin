@@ -6,11 +6,20 @@
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <string>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -212,7 +221,167 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition ──────────────────────────────────────────────────────────
+// ── Recognition: metadata replay + geometric fallback ────────────────────
+//
+// Geometric signature of a thrust-bearing seat compound:
+//   - TWO coaxial cylindrical faces sharing the same axis line:
+//       * outer "face cut" cylinder (radius ≈ outer_dia/2, SHORT axially
+//         — extent ≈ face_depth_mm);
+//       * inner "lock-nut pilot" cylinder (radius ≈ inner_dia/2, LONGER
+//         axially — extends through face_depth + seat_depth).
+//   - axial ordering: both share the same entry plane; inner extends
+//     deeper than outer along the drilling axis (thrust shoulder is the
+//     emergent planar face between them).
+//   - race width (outer−inner radius difference) ≥ 0.8 mm (DFM-002 floor).
+// We tolerate the optional raceway groove as a third cylinder of small
+// radial extent; it is recorded in matched_geometry but not required.
+
+namespace {
+
+struct CylDesc {
+    int    faceIdx;
+    gp_Ax1 axis;
+    double radius;
+    double axialMin;
+    double axialMax;
+    gp_Pnt entryCenter;
+    gp_Pnt deepCenter;
+};
+
+bool sameAxisInfinite(const gp_Ax1& a, const gp_Ax1& b,
+                      double angTolDeg = 0.5, double posTolMm = 0.05)
+{
+    const gp_Dir da = a.Direction(), db = b.Direction();
+    const double dot = std::abs(da.X()*db.X() + da.Y()*db.Y() + da.Z()*db.Z());
+    if (dot < std::cos(angTolDeg * M_PI / 180.0)) return false;
+    gp_Vec v(a.Location(), b.Location());
+    gp_Vec axV(da.X(), da.Y(), da.Z());
+    gp_Vec perp = v - axV * v.Dot(axV);
+    return perp.Magnitude() < posTolMm;
+}
+
+std::vector<CylDesc> collectCyls(const Workpiece& wp)
+{
+    std::vector<CylDesc> out;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface surf(wp.face(i));
+        const gp_Cylinder cy = surf.Cylinder();
+        CylDesc d;
+        d.faceIdx = i;
+        d.axis    = cy.Axis();
+        d.radius  = cy.Radius();
+        std::vector<gp_Pnt> centers;
+        for (TopExp_Explorer exp(wp.face(i), TopAbs_EDGE); exp.More(); exp.Next()) {
+            BRepAdaptor_Curve crv(TopoDS::Edge(exp.Current()));
+            if (crv.GetType() != GeomAbs_Circle) continue;
+            const gp_Circ c = crv.Circle();
+            if (std::abs(std::abs(c.Axis().Direction().Dot(d.axis.Direction())) - 1.0) > 1e-3)
+                continue;
+            if (std::abs(c.Radius() - d.radius) > 1e-3) continue;
+            centers.push_back(c.Location());
+        }
+        if (centers.size() < 2) continue;
+        const gp_Dir adir = d.axis.Direction();
+        const gp_Pnt aOrg = d.axis.Location();
+        auto proj = [&](const gp_Pnt& p){
+            return (p.X()-aOrg.X())*adir.X()+(p.Y()-aOrg.Y())*adir.Y()+(p.Z()-aOrg.Z())*adir.Z();
+        };
+        auto cmp = [&](const gp_Pnt& a, const gp_Pnt& b){ return proj(a) < proj(b); };
+        const auto mn = std::min_element(centers.begin(), centers.end(), cmp);
+        const auto mx = std::max_element(centers.begin(), centers.end(), cmp);
+        d.axialMin    = proj(*mn);
+        d.axialMax    = proj(*mx);
+        d.entryCenter = *mn;
+        d.deepCenter  = *mx;
+        out.push_back(d);
+    }
+    return out;
+}
+
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    const auto cyls = collectCyls(wp);
+    if (cyls.size() < 2) return out;
+
+    std::vector<bool> consumed(cyls.size(), false);
+
+    for (size_t i = 0; i < cyls.size(); ++i) {
+        if (consumed[i]) continue;
+        for (size_t j = i + 1; j < cyls.size(); ++j) {
+            if (consumed[j]) continue;
+            const CylDesc& a = cyls[i];
+            const CylDesc& b = cyls[j];
+            if (!sameAxisInfinite(a.axis, b.axis)) continue;
+            if (std::abs(a.radius - b.radius) < 0.5) continue;     // need a real step
+            const CylDesc& outer = (a.radius > b.radius) ? a : b;
+            const CylDesc& inner = (a.radius > b.radius) ? b : a;
+
+            // Race width DFM floor.
+            const double race_width = 2.0 * (outer.radius - inner.radius);
+            if (race_width < 1.6) continue;
+            // Lock-nut shaft DFM floor (M3).
+            if (2.0 * inner.radius < 3.0) continue;
+
+            // Axial geometry: inner cylinder (pilot) should be substantially
+            // longer than outer (face cut).
+            const double outerLen = outer.axialMax - outer.axialMin;
+            const double innerLen = inner.axialMax - inner.axialMin;
+            if (outerLen < 0.2) continue;
+            if (innerLen < outerLen + 0.5) continue;   // pilot must extend past face cut
+            // Both must share entry plane within a tolerance.
+            if (std::abs(outer.axialMin - inner.axialMin) > 0.5) continue;
+
+            gp_Vec drillVec(outer.entryCenter, inner.deepCenter);
+            if (drillVec.Magnitude() < 1e-6) continue;
+            drillVec.Normalize();
+
+            const double face_depth = outerLen;
+            const double seat_depth = innerLen - outerLen;
+
+            json recovered = {
+                { "position_x_mm",  outer.entryCenter.X() },
+                { "position_y_mm",  outer.entryCenter.Y() },
+                { "axis_dir",       { drillVec.X(), drillVec.Y(), drillVec.Z() } },
+                { "outer_dia_mm",   2.0 * outer.radius },
+                { "inner_dia_mm",   2.0 * inner.radius },
+                { "face_depth_mm",  face_depth },
+                { "seat_depth_mm",  seat_depth },
+            };
+            json matched = {
+                { "source",          "geometric_fallback" },
+                { "outer_face_id",   outer.faceIdx },
+                { "inner_face_id",   inner.faceIdx },
+                { "race_width_mm",   race_width },
+                { "face_depth_mm",   face_depth },
+                { "seat_depth_mm",   seat_depth },
+            };
+            // Optional 3rd cylinder = raceway ring groove (mid-radius
+            // between inner and outer, short axial extent).
+            for (size_t k = 0; k < cyls.size(); ++k) {
+                if (k == i || k == j) continue;
+                const CylDesc& rg = cyls[k];
+                if (!sameAxisInfinite(outer.axis, rg.axis)) continue;
+                if (rg.radius <= inner.radius || rg.radius >= outer.radius) continue;
+                const double rgLen = rg.axialMax - rg.axialMin;
+                if (rgLen > race_width * 0.5) continue;     // groove must be narrow
+                matched["raceway_groove_face_id"] = rg.faceIdx;
+                matched["raceway_groove_width_mm"] = rgLen;
+                matched["raceway_groove_mid_dia_mm"] = 2.0 * rg.radius;
+                break;
+            }
+
+            out.push_back(RecognizedFeature{ kSkillId, recovered, 0.60, matched });
+            consumed[i] = true;
+            consumed[j] = true;
+            break;
+        }
+    }
+    return out;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -225,6 +394,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         rf.confidence       = 1.0;
         rf.matched_geometry = { { "source", "metadata" } };
         out.push_back(rf);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

@@ -29,7 +29,11 @@ using nlohmann::json;
 namespace {
 constexpr double kPocketLong_mm     = 8.94;
 constexpr double kPocketShort_mm    = 2.56;
-constexpr double kPocketCornerR_mm  = 1.28;   // half of short side
+// Slice-9: corner radius slightly less than half the short side — fillet of
+// EXACTLY half-side creates two coincident arcs at the center of each end
+// (degenerate), causing OCCT BRepFilletAPI to fail.  USB-C spec allows
+// 1.25 mm minimum corner radius (slightly less than spec ideal 1.28).
+constexpr double kPocketCornerR_mm  = 1.20;
 constexpr double kEMIGrooveWidth_mm = 0.5;
 constexpr double kEMIGrooveDepth_mm = 0.4;
 constexpr double kRetentionNotchW_mm = 0.8;

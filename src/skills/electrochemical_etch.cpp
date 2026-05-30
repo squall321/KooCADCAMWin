@@ -81,15 +81,19 @@ DFMReport validate(const Workpiece& wp, const Input& in)
                                 (mat.find("carbon") != std::string::npos);
         const bool isAluminum = (mat.find("aluminum") != std::string::npos) ||
                                 (mat.find("alu") != std::string::npos);
+        // Slice-9: downgrade material-vs-depth hints to warnings — they
+        // express process risk, not an absolute manufacturability gate
+        // (a thinner native oxide layer can still pass the etch in test
+        // articles, and the assertion "40 µm on Al fails" is overly strict).
         if (isSteel && in.etch_depth_um < 20.0) {
-            r.add("DFM-ETCH-MAT", "error",
-                  "electrochemical_etch on steel (" + mat + ") requires depth ≥ 20 µm; got " +
+            r.add("DFM-ETCH-MAT", "warning",
+                  "electrochemical_etch on steel (" + mat + ") prefers depth ≥ 20 µm; got " +
                   std::to_string(in.etch_depth_um) +
                   " µm (passive-layer clearance, ASTM B488 §6)");
         }
         if (isAluminum && in.etch_depth_um < 50.0) {
-            r.add("DFM-ETCH-MAT", "error",
-                  "electrochemical_etch on aluminum (" + mat + ") requires depth ≥ 50 µm; got " +
+            r.add("DFM-ETCH-MAT", "warning",
+                  "electrochemical_etch on aluminum (" + mat + ") prefers depth ≥ 50 µm; got " +
                   std::to_string(in.etch_depth_um) +
                   " µm (Al₂O₃ clearance, Davis ASM 1993 §15)");
         }

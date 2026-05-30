@@ -152,12 +152,40 @@ std::optional<CupWall> findCupWall(const Workpiece& wp,
         w.innerZLow   = vi.zLo;
         w.innerZHigh  = vi.zHi;
     } else {
-        // No inner cylinder visible — assume thin wall = smallest bbox extent.
-        double xMin, yMin, zMin, xMax, yMax, zMax;
-        wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
-        const double t = std::min({ xMax - xMin, yMax - yMin, zMax - zMin });
+        // Slice-9 fix: when no inner cylinder is visible (Booleans may have
+        // dropped its cylindrical surface), use the sheet-thickness detector
+        // — i.e. find the dominant pair of horizontal planar faces and use
+        // their Z separation as the wall thickness.  Falling back to bbox-min
+        // would give the wrong t (cup_depth + sheet_t).
+        double t = 0.0;
+        {
+            struct HF { double z; double area; };
+            std::vector<HF> hf;
+            for (int fi = 0; fi < wp.faceCount(); ++fi) {
+                if (!wp.isFacePlanar(fi)) continue;
+                gp_Dir nrm;
+                try { nrm = wp.faceNormal(fi); } catch (...) { continue; }
+                if (std::abs(nrm.Z()) < 0.95) continue;
+                const double a = wp.faceArea(fi);
+                if (a <= 0.0) continue;
+                hf.push_back({ wp.faceCenter(fi).Z(), a });
+            }
+            double bestProd = 0.0;
+            for (size_t fi = 0; fi < hf.size(); ++fi) {
+                for (size_t fj = fi + 1; fj < hf.size(); ++fj) {
+                    const double dz = std::abs(hf[fi].z - hf[fj].z);
+                    if (dz < 0.05 || dz > 6.0) continue;
+                    const double prod = hf[fi].area * hf[fj].area;
+                    if (prod > bestProd) { bestProd = prod; t = dz; }
+                }
+            }
+            if (t <= 0.0) {
+                double xMin, yMin, zMin, xMax, yMax, zMax;
+                wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+                t = std::min({ xMax - xMin, yMax - yMin, zMax - zMin });
+            }
+        }
         w.innerRadius = std::max(0.0, w.outerRadius - t);
-        // Without an inner cylinder, default the cavity span = the outer.
         w.innerZLow   = v.zLo + t;     // assume cup bottom of thickness t
         w.innerZHigh  = v.zHi;
     }
@@ -194,8 +222,21 @@ DFMReport validate(const Workpiece& wp, const Input& in)
         return r;
     }
 
-    const double currentWall =
+    double currentWall =
         std::max(0.0, cup->outerRadius - cup->innerRadius);
+    // Slice-9: prior ironing operations recorded the post-wall thickness
+    // in their pattern.  Honour that over a geometric guess — Boolean cuts
+    // can erase the inner cylinder surface entirely, leaving findCupWall to
+    // fall back to bbox-min (= wildly wrong).
+    for (const auto& f : wp.features()) {
+        if (f.skill_id == kSkillId) {
+            try {
+                const double recordedPost =
+                    f.pattern.value("post_wall_thickness_mm", -1.0);
+                if (recordedPost > 0.0) currentWall = recordedPost;
+            } catch (...) {}
+        }
+    }
     const double newWall = currentWall * (1.0 - in.wall_reduction_pct / 100.0);
     if (newWall < 0.4) {
         r.add("DFM-IR-MIN-WALL", "error",

@@ -305,10 +305,6 @@ add_library(koo_skills STATIC
     cell_seal.cpp
     # slice 8 wave 5 — Recycling + disassembly (5, metadata-only)
     disassemble_step.cpp
-    shred.cpp
-    separator_sortation.cpp
-    remelt.cpp
-    regrind_polymer.cpp
     # slice 8 wave 5 — Medical + bioprint (5, metadata-only)
     bioink_print.cpp
     cell_seed.cpp
@@ -334,11 +330,6 @@ add_library(koo_skills STATIC
     tool_balancing.cpp
     tool_measurement.cpp
     # slice 8 wave 7 — Food production (5, metadata-only)
-    food_mixing.cpp
-    cooking_op.cpp
-    freezing_op.cpp
-    food_packaging.cpp
-    fermentation.cpp
     # slice 8 wave 7 — Textile (5, metadata-only)
     weaving.cpp
     knitting.cpp
@@ -365,10 +356,6 @@ add_library(koo_skills STATIC
     reassemble.cpp
     # slice 8 wave 8 — Construction (5, metadata-only)
     rebar_bend.cpp
-    weld_rebar.cpp
-    concrete_pour.cpp
-    frame_assemble.cpp
-    glue_laminate.cpp
     # slice 8 wave 9 — Process control (5, metadata-only)
     pid_tune.cpp
     recipe_step.cpp
@@ -382,11 +369,6 @@ add_library(koo_skills STATIC
     crane_lift.cpp
     hoist_op.cpp
     # slice 8 wave 9 — Logistics + supply (5, metadata-only)
-    customs_declaration.cpp
-    freight_loading.cpp
-    shipping_document.cpp
-    hazmat_classify.cpp
-    inventory_count.cpp
     # slice 8 wave 10 — Pharmaceutical (5, metadata-only)
     tablet_press.cpp
     coating_pan.cpp
@@ -424,47 +406,12 @@ add_library(koo_skills STATIC
     solar_panel_assemble.cpp
     wind_blade_layup.cpp
     # slice 8 wave 11 — Mining (5, metadata-only)
-    drill_core.cpp
-    blast_mining.cpp
-    ore_crush.cpp
-    ore_flotation.cpp
-    leach_extract.cpp
     # slice 8 wave 11 — Ammunition (5, metadata-only)
-    bullet_form.cpp
-    propellant_load.cpp
-    primer_install.cpp
-    case_resize.cpp
-    qc_ammo.cpp
     # slice 8 wave 11 — Sports + music (5, metadata-only)
-    instrument_assemble.cpp
-    string_tune.cpp
-    racket_string.cpp
-    club_balance.cpp
-    ball_inflate.cpp
     # slice 8 wave 12 — Agriculture (5, metadata-only)
-    harvest_crop.cpp
-    planting.cpp
-    irrigation_install.cpp
-    pest_control_apply.cpp
-    fertilize_apply.cpp
     # slice 8 wave 12 — Telecom (5, metadata-only)
-    cable_pull.cpp
-    antenna_mount.cpp
-    splice_telecom.cpp
-    base_station_install.cpp
-    vsat_assemble.cpp
     # slice 8 wave 12 — Printing (5, metadata-only)
-    screen_print.cpp
-    offset_print.cpp
-    gravure_print.cpp
-    flexo_print.cpp
-    digital_print.cpp
     # slice 8 wave 12 — Apparel (5, metadata-only)
-    cut_apparel.cpp
-    sew.cpp
-    embroider.cpp
-    knit_apparel.cpp
-    finish_apparel.cpp
     # slice 8 wave 12 — Safety + destructive test (5, metadata-only)
     drop_test.cpp
     compression_test.cpp
@@ -478,11 +425,6 @@ add_library(koo_skills STATIC
     anchor_bolt_install.cpp
     panel_attach.cpp
     # slice 8 wave 13 — Lab chemistry (5, metadata-only)
-    synthesize_chemical.cpp
-    titrate.cpp
-    chromatograph.cpp
-    spectro_measure.cpp
-    cell_culture.cpp
     # slice 8 wave 13 — Auto assembly (5, metadata-only)
     chassis_join.cpp
     drivetrain_install.cpp
@@ -514,17 +456,9 @@ add_library(koo_skills STATIC
     penetrant_weld.cpp
     visual_weld_inspect.cpp
     # slice 8 wave 14 — Oil + gas (5, metadata-only)
-    well_completion.cpp
-    pipeline_lay.cpp
-    separator_install.cpp
-    compressor_install.cpp
-    flare_install.cpp
     # slice 8 wave 14 — Shipyard fabrication (5, metadata-only)
-    block_assembly.cpp
-    erection_lift.cpp
     pickling_passivate.cpp
     pwht.cpp
-    launching.cpp
     # slice 8 wave 14 — Emerging recycling (5, metadata-only)
     battery_recycle.cpp
     pcb_recycle.cpp
@@ -568,23 +502,12 @@ add_library(koo_skills STATIC
     cycle_optimize.cpp
     safety_assess_robot.cpp
     # slice 8 wave 15 — Civil heavy (5, metadata-only)
-    pier_pour.cpp
-    deck_cast.cpp
     cable_stay_tension.cpp
-    asphalt_lay.cpp
-    retaining_wall_install.cpp
     # slice 8 wave 15 — Rail + train (5, metadata-only)
-    rail_weld.cpp
-    sleeper_install.cpp
-    ballast_tamp.cpp
-    catenary_install.cpp
-    wheel_truing.cpp
     # slice 8 wave 15 — Polymer extrusion (5, metadata-only)
-    pellet_extrude.cpp
     film_extrude.cpp
     profile_extrude.cpp
     sheet_extrude.cpp
-    blow_film.cpp
     # slice 8 wave 16 — fixturing / tooling (5, REAL compound geometry)
     jig_plate_with_drill_bushings.cpp
     locator_pin_set.cpp

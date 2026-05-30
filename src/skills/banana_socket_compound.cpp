@@ -10,7 +10,9 @@
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -309,11 +311,27 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         out.push_back(r);
     }
 
-    // Geometric heuristic: ≥3 coaxial cylinders of distinct radii.
+    // Geometric heuristic: ≥3 COAXIAL cylinders of distinct radii AROUND
+    // a vertical bore axis, PLUS planar slit walls that share the bore
+    // axis line.  Axes must AGREE in 3D direction (parallel) AND share a
+    // common axis-line location to be truly coaxial — not just parallel.
     const auto cyls = collectCylinders(wp);
     if (cyls.size() < 3) return out;
 
-    // Group cylinders by axis.
+    // Co-axial means: directions are parallel AND axis lines pass through
+    // the same XY position (within tol).  Strictly stronger than `parallel`.
+    auto coaxial = [](const gp_Ax1& a, const gp_Ax1& b, double tolMm = 0.5) {
+        const gp_Dir da = a.Direction();
+        const gp_Dir db = b.Direction();
+        if (std::abs(std::abs(da.X()*db.X()+da.Y()*db.Y()+da.Z()*db.Z()) - 1.0)
+            > 1e-2) return false;
+        // Project A.Location onto B's line; distance should be ~0.
+        const gp_Vec v(b.Location(), a.Location());
+        const gp_Vec d(b.Direction());
+        const gp_Vec proj = d * v.Dot(d);
+        return (v - proj).Magnitude() < tolMm;
+    };
+
     std::vector<std::vector<size_t>> groups;
     std::vector<bool> used(cyls.size(), false);
     for (size_t i = 0; i < cyls.size(); ++i) {
@@ -322,7 +340,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         used[i] = true;
         for (size_t j = i + 1; j < cyls.size(); ++j) {
             if (used[j]) continue;
-            if (axesParallel(cyls[i].axis, cyls[j].axis)) {
+            if (coaxial(cyls[i].axis, cyls[j].axis)) {
                 g.push_back(j);
                 used[j] = true;
             }
@@ -330,12 +348,32 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         if (g.size() >= 3) groups.push_back(g);
     }
 
+    // Count slit walls: planar faces whose center is close to the bore
+    // axis and whose normal is purely horizontal (perpendicular to axis).
+    auto countSlitWalls = [&](const gp_Ax1& axis) {
+        int n = 0;
+        for (int i = 0; i < wp.faceCount(); ++i) {
+            if (!wp.isFacePlanar(i)) continue;
+            gp_Dir nrm;
+            try { nrm = wp.faceNormal(i); } catch (...) { continue; }
+            // Normal perpendicular to bore axis (here: |n.Z|≈0).
+            const gp_Dir ad = axis.Direction();
+            const double dotZ = std::abs(nrm.X()*ad.X()+nrm.Y()*ad.Y()+nrm.Z()*ad.Z());
+            if (dotZ > 5e-2) continue;
+            const gp_Pnt fc = wp.faceCenter(i);
+            const gp_Vec v(axis.Location(), fc);
+            const gp_Vec d(ad);
+            const gp_Vec proj = d * v.Dot(d);
+            if ((v - proj).Magnitude() < 5.0) ++n;
+        }
+        return n;
+    };
+
     for (const auto& g : groups) {
         // Distinct radii required.
         std::vector<double> radii;
         for (size_t idx : g) radii.push_back(cyls[idx].radius);
         std::sort(radii.begin(), radii.end());
-        // Need at least 3 unique-ish radii.
         int distinct = 1;
         for (size_t i = 1; i < radii.size(); ++i) {
             if (radii[i] - radii[i - 1] > 0.1) ++distinct;
@@ -344,6 +382,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 
         // Banana-socket marker: smallest radius ~2 mm (4 mm bore).
         if (radii.front() < 1.7 || radii.front() > 2.2) continue;
+
+        const int slitWalls = countSlitWalls(cyls[g.front()].axis);
+        // 4 slits give 8 planar walls.  Be lenient.
+        const bool slitsDetected = (slitWalls >= 4);
 
         json recovered = {
             { "position_x_mm",            cyls[g.front()].axis.Location().X() },
@@ -358,10 +400,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         RecognizedFeature r;
         r.skill_id         = kSkillId;
         r.recovered_params = recovered;
-        r.confidence       = 0.7;
+        r.confidence       = slitsDetected ? 0.85 : 0.70;
         r.matched_geometry = {
             { "coaxial_cyl_count", static_cast<int>(g.size()) },
             { "distinct_radii",    distinct },
+            { "slit_wall_count",   slitWalls },
         };
         out.push_back(r);
     }

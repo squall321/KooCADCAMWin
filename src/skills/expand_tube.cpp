@@ -175,14 +175,11 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         (tr.outerR * tr.outerR - rNewInner * rNewInner);
     const double volDelta = volAfter - volBefore;   // negative (bore enlarged)
 
-    TopoDS_Shape result;
-    try {
-        const gp_Ax2 ax(gp_Pnt(0.0, 0.0, bb.zMin), gp::DZ());
-        result = pr::annularRing(ax, tr.outerR, rNewInner, L);
-    } catch (const Standard_Failure& ex) {
-        throw SkillError(std::string("expand_tube: tube rebuild failed: ") +
-                         ex.what());
-    }
+    // Slice-9: expand_tube is METADATA-ONLY — the geometric expansion is a
+    // forming op that conceptually changes the bore but is recorded as a
+    // signature only.  Downstream layers can rebuild the expanded tube from
+    // the recorded parameters if they need the post-expansion geometry.
+    const TopoDS_Shape result = wp.shape();
 
     json params = {
         { "target_expansion_pct", in.target_expansion_pct },
@@ -198,7 +195,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "tube_length_mm",        L },
         { "initial_solid",         tr.initially_solid },
         { "axis",                  { 0.0, 0.0, 1.0 } },
-        { "geometry_changed",      true },
+        { "geometry_changed",      false },
     };
 
     json findings = json::array();
@@ -217,9 +214,8 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     tooling.flute_count       = 0;
     tooling.cutting_speed_sfm = 0.0;
     tooling.feed_per_tooth_mm = 0.0;
-    // Stock REMOVED — expansion enlarges the bore, displacing wall material.
-    // We model it as removal (negative volDelta).
-    tooling.stock_removed_mm3 = -volDelta;     // positive when bore enlarged
+    // Slice-9: metadata-only — no stock is removed (forming op, not cutting).
+    tooling.stock_removed_mm3 = 0.0;
     tooling.est_cycle_time_s  = (in.method == "hydraulic") ? 5.0 : 20.0;
     tooling.extra = {
         { "process",              "tube_expansion" },
@@ -273,42 +269,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // (b) geometric fallback — a tubular section (two coaxial Z cylinders).
-    if (wp.shape().IsNull()) return out;
-    const pr::Bbox3d bb = pr::optimalBbox(wp.shape());
-    if (bb.outerRadiusXY() <= 0.0 || bb.dz() <= 0.0) return out;
-
-    double rOuter = 0.0;
-    double rInner = 1e30;
-    int    nZCyl  = 0;
-    for (int fIdx = 0; fIdx < wp.faceCount(); ++fIdx) {
-        if (!wp.isFaceCylinder(fIdx)) continue;
-        BRepAdaptor_Surface s(wp.face(fIdx));
-        const gp_Cylinder cyl = s.Cylinder();
-        if (std::abs(std::abs(cyl.Axis().Direction().Z()) - 1.0) > 1e-3)
-            continue;
-        const double r = cyl.Radius();
-        ++nZCyl;
-        rOuter = std::max(rOuter, r);
-        rInner = std::min(rInner, r);
-    }
-    if (nZCyl < 2 || rInner >= rOuter - 1e-3) return out;
-
-    // We can't recover the expansion percentage from geometry alone — emit
-    // a "default 8%" guess (the most common hydraulic expansion target).
-    json recovered = {
-        { "target_expansion_pct", 8.0 },
-        { "method",               "hydraulic" },
-    };
-    json matched = {
-        { "outer_radius_mm",   rOuter },
-        { "inner_radius_mm",   rInner },
-        { "tube_length_mm",    bb.dz() },
-        { "cyl_face_count",    nZCyl },
-        { "source",            "geometric_fallback" },
-    };
-    out.push_back(RecognizedFeature{
-        kSkillId, recovered, /*confidence*/ 0.40, matched });
+    // Slice-9: expand_tube is metadata-only.  Without a recorded signature
+    // we cannot distinguish an expanded tube from a native flow-formed tube
+    // (both have the same outer + inner cylindrical surface pair) — so we
+    // emit no geometric candidates.
     return out;
 }
 

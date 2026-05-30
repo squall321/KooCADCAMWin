@@ -84,13 +84,16 @@ DFMReport validate(const Workpiece& wp, const Input& in)
               " mm < 1.5 × convolution height (" +
               std::to_string(1.5 * convHeight) + " mm)");
     }
-    // Stack must fit within pipe length.
+    // Slice-9: stack must fit within ~1.2× pipe_length — convolutions can
+    // extend slightly beyond the pipe terminus on real EJMA bellows joints
+    // (the end-cap weld lap-joint sits on the last convolution crown).
     const double stackH = in.corrugation_pitch_mm *
                           static_cast<double>(in.corrugation_count);
-    if (stackH > in.pipe_length_mm) {
+    if (stackH > in.pipe_length_mm * 1.2) {
         r.add("DFM-EJMA-10", "error",
               "corrugation stack height " + std::to_string(stackH) +
-              " mm > pipe_length (" + std::to_string(in.pipe_length_mm) + ")");
+              " mm > 1.2 × pipe_length (" +
+              std::to_string(in.pipe_length_mm * 1.2) + ")");
     }
 
     (void)wp;

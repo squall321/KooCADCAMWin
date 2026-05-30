@@ -107,6 +107,7 @@
 #include "skills/sealed_bearing_seat_with_shield_relief.hpp"
 #include "skills/needle_bearing_seat_press_fit.hpp"
 #include "skills/thrust_bearing_seat_compound.hpp"
+#include "skills/plain_bushing_bore_with_lube_groove.hpp"
 // Compound features — fastener seats
 #include "skills/socket_head_bolt_seat.hpp"
 #include "skills/countersunk_bolt_seat.hpp"
@@ -117,6 +118,12 @@
 #include "skills/jic_flare_port_seat.hpp"
 #include "skills/banjo_fitting_seat.hpp"
 #include "skills/manifold_cross_drill_compound.hpp"
+#include "skills/blind_threaded_insert_seat.hpp"
+#include "skills/bolt_hole_metric_spec.hpp"
+#include "skills/tapped_hole_metric_spec.hpp"
+#include "skills/unc_unf_hole_spec.hpp"
+#include "skills/threaded_through_with_chamfers.hpp"
+#include "skills/captive_screw_pocket_spec.hpp"
 // Compound features — drive components
 #include "skills/shaft_with_keyway_step.hpp"
 #include "skills/pulley_with_keyway_compound.hpp"
@@ -132,6 +139,13 @@
 #include "skills/lip_seal_seat.hpp"
 #include "skills/caseback_o_ring_groove.hpp"
 #include "skills/sapphire_glass_seat.hpp"
+#include "skills/o_ring_groove_as568_spec.hpp"
+#include "skills/x_ring_groove.hpp"
+#include "skills/x_ring_groove_spec.hpp"
+#include "skills/spiral_back_up_ring_groove.hpp"
+#include "skills/dust_lip_seal_seat_compound.hpp"
+#include "skills/face_seal_compound_compression.hpp"
+#include "skills/gasket_face_with_drain_groove.hpp"
 // Compound features — bushings / mounting
 #include "skills/eccentric_bushing_seat.hpp"
 #include "skills/vibration_isolator_seat.hpp"
@@ -144,6 +158,135 @@
 #include "skills/shim_pocket.hpp"
 #include "skills/undercut_relief.hpp"
 #include "skills/datum_face_establish.hpp"
+
+// Compound features — mechanical structures / drive / fluid / spring / linear-motion / adjusters
+#include "skills/i_beam_compound_section.hpp"
+#include "skills/box_section_with_endplate.hpp"
+#include "skills/gusset_plate_compound.hpp"
+#include "skills/lifting_lug_pad_eye.hpp"
+#include "skills/base_bracket_compound.hpp"
+#include "skills/din_rail_mount_slot.hpp"
+#include "skills/dovetail_mount_compound.hpp"
+#include "skills/t_slot_table_groove.hpp"
+#include "skills/linear_rail_seat_compound.hpp"
+#include "skills/ball_screw_nut_pocket.hpp"
+#include "skills/lead_screw_anti_backlash_pocket.hpp"
+#include "skills/linear_bushing_seat.hpp"
+#include "skills/cam_follower_threaded_seat.hpp"
+#include "skills/internal_water_jacket.hpp"
+#include "skills/adjuster_screw_pocket_compound.hpp"
+#include "skills/tab_lock_anti_rotation.hpp"
+#include "skills/coil_spring_seat_compound.hpp"
+#include "skills/wave_spring_groove.hpp"
+#include "skills/gas_spring_clevis_pocket.hpp"
+#include "skills/leaf_spring_anchor_compound.hpp"
+#include "skills/torsion_spring_anchor_compound.hpp"
+#include "skills/leaf_spring_anchor.hpp"
+
+// ── Slice 9 expansion: valve / electrical / tooling / machine / hinge ────
+// Valve seats
+#include "skills/gate_valve_seat_compound.hpp"
+#include "skills/ball_valve_seat_compound.hpp"
+#include "skills/butterfly_valve_disc_seat.hpp"
+#include "skills/check_valve_seat_with_stop.hpp"
+#include "skills/needle_valve_seat.hpp"
+// Electrical contacts
+#include "skills/banana_socket_compound.hpp"
+#include "skills/spring_contact_clip.hpp"
+#include "skills/terminal_block_post.hpp"
+#include "skills/busbar_lap_joint.hpp"
+#include "skills/pcb_card_edge_socket.hpp"
+// Tooling / jig
+#include "skills/jig_plate_with_drill_bushings.hpp"
+#include "skills/locator_pin_set.hpp"
+#include "skills/gauge_block_step.hpp"
+#include "skills/vise_jaw_with_v_groove.hpp"
+#include "skills/pin_and_diamond_locating_set.hpp"
+// Machine elements
+#include "skills/cam_with_profile.hpp"
+#include "skills/cam_follower_roller_seat.hpp"
+#include "skills/eccentric_shaft_collar.hpp"
+#include "skills/flywheel_with_balance.hpp"
+#include "skills/governor_arm_with_pivot.hpp"
+#include "skills/spur_gear_with_real_teeth.hpp"
+#include "skills/helical_gear_teeth.hpp"
+#include "skills/sprocket_with_chain_teeth.hpp"
+#include "skills/spline_shaft_compound.hpp"
+#include "skills/ratchet_pawl_set.hpp"
+// Hinge / latch
+#include "skills/piano_hinge_strip.hpp"
+#include "skills/overcenter_latch.hpp"
+#include "skills/snap_action_lock_pocket.hpp"
+#include "skills/gas_strut_hinge_compound.hpp"
+#include "skills/spring_loaded_door_latch.hpp"
+#include "skills/cam_lock_cavity.hpp"
+
+// ── Slice 9 expansion: context-aware + morphing + misc compound features ──
+// Context-aware auto-synthesis
+#include "skills/auto_boss_under_hole.hpp"
+#include "skills/auto_standoff_floating_point.hpp"
+#include "skills/auto_rib_between_two_walls.hpp"
+#include "skills/auto_gusset_corner_brace.hpp"
+#include "skills/auto_chamfer_all_outer_edges.hpp"
+// Morphing (single-workpiece only — multi-workpiece morphs deferred)
+#include "skills/blend_morph_two_shapes.hpp"
+#include "skills/parametric_sweep_morph.hpp"
+#include "skills/deformation_warp.hpp"
+// Sheet variants (geometric — emboss/notch/coining/draw_bead already wired)
+#include "skills/lance.hpp"
+#include "skills/beading.hpp"
+// Heat exchanger geometric
+#include "skills/shell_roll.hpp"
+#include "skills/hemispherical_head_form.hpp"
+#include "skills/expand_tube.hpp"
+#include "skills/tube_to_tubesheet_weld.hpp"
+#include "skills/tube_swage.hpp"
+// Misc structural connections
+#include "skills/bolted_flange_compound.hpp"
+#include "skills/pinned_clevis_joint.hpp"
+#include "skills/expansion_joint_bellows_stub.hpp"
+#include "skills/anchor_pad_compound.hpp"
+#include "skills/flange_face_with_gasket_groove.hpp"
+
+// ── Slice 16/smart-spec/PCB-electronics compound features ──────────────────
+// ISO bore fit family
+#include "skills/iso_h7_bore_spec.hpp"
+#include "skills/press_fit_p7_bore_spec.hpp"
+#include "skills/slip_fit_h11_bore_spec.hpp"
+#include "skills/dowel_pin_h6_bore.hpp"
+#include "skills/locating_g6_bore.hpp"
+// Parametric rib / wall
+#include "skills/parametric_rib_array.hpp"
+#include "skills/draft_wall_with_radius.hpp"
+#include "skills/top_face_recess_with_walls.hpp"
+#include "skills/partition_wall_with_passthrough.hpp"
+#include "skills/curved_lip_around_face.hpp"
+// Heat / vent (electronics)
+#include "skills/heat_sink_fin_array.hpp"
+#include "skills/vent_slot_array.hpp"
+#include "skills/louvered_vent.hpp"
+#include "skills/perforated_grille_pattern.hpp"
+#include "skills/breather_vent_compound.hpp"
+// PCB / electronics mounting
+#include "skills/pcb_standoff_array_under_board.hpp"
+#include "skills/connector_cutout_with_keepout.hpp"
+#include "skills/cable_grommet_pass_through.hpp"
+#include "skills/isolator_grommet_seat.hpp"
+#include "skills/tilt_post_for_lcd_panel.hpp"
+// Connector cutouts (slice 16)
+#include "skills/din_rail_clip_slot.hpp"
+#include "skills/banana_jack_receptacle.hpp"
+#include "skills/rj45_socket_cutout.hpp"
+// Sliding / pivot mechanisms (smart-spec)
+#include "skills/linear_slider_track.hpp"
+#include "skills/pivot_pin_clevis_compound.hpp"
+#include "skills/cam_actuated_slider.hpp"
+#include "skills/over_center_toggle_pocket.hpp"
+#include "skills/detented_position_slider.hpp"
+// Watch + hinge (slice 16)
+#include "skills/bezel_groove_assembly.hpp"
+#include "skills/lug_with_spring_bar_holes.hpp"
+#include "skills/crown_stem_cavity_compound.hpp"
 
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
@@ -1934,6 +2077,1958 @@ sk::datum_face_establish::Input parseDatumFaceEstablish(const json& p)
     return in;
 }
 
+// ── Slice-9 compound bearing/seal/fastener parsers ──────────────────────
+
+sk::plain_bushing_bore_with_lube_groove::Input parsePlainBushingBoreWithLubeGroove(const json& p)
+{
+    sk::plain_bushing_bore_with_lube_groove::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.position_x_mm   = jdouble(p, "position_x_mm",   0.0);
+    in.position_y_mm   = jdouble(p, "position_y_mm",   0.0);
+    in.axis_dir        = parseAxisDir(p);
+    in.bore_dia_mm     = jdouble(p, "bore_dia_mm",     0.0);
+    in.length_mm       = jdouble(p, "length_mm",       0.0);
+    in.groove_pitch_mm = jdouble(p, "groove_pitch_mm", 0.0);
+    return in;
+}
+
+sk::o_ring_groove_as568_spec::Input parseORingGrooveAs568Spec(const json& p)
+{
+    sk::o_ring_groove_as568_spec::Input in;
+    in.face_id     = parseFaceDatum(p);
+    in.center_x_mm = jdouble(p, "center_x_mm", 0.0);
+    in.center_y_mm = jdouble(p, "center_y_mm", 0.0);
+    in.axis_dir    = parseAxisDir(p);
+    in.mean_dia_mm = jdouble(p, "mean_dia_mm", 0.0);
+    in.dash_size   = jstring(p, "dash_size",   "");
+    return in;
+}
+
+sk::x_ring_groove::Input parseXRingGroove(const json& p)
+{
+    sk::x_ring_groove::Input in;
+    in.bore_or_shaft_dia_mm = jdouble(p, "bore_or_shaft_dia_mm", 0.0);
+    in.mean_dia_mm          = jdouble(p, "mean_dia_mm",          0.0);
+    in.position_z_mm        = jdouble(p, "position_z_mm",        0.0);
+    in.x_ring_size          = jstring(p, "x_ring_size",          "");
+    return in;
+}
+
+sk::x_ring_groove_spec::Input parseXRingGrooveSpec(const json& p)
+{
+    sk::x_ring_groove_spec::Input in;
+    in.face_id     = parseFaceDatum(p);
+    in.center_x_mm = jdouble(p, "center_x_mm", 0.0);
+    in.center_y_mm = jdouble(p, "center_y_mm", 0.0);
+    in.axis_dir    = parseAxisDir(p);
+    in.mean_dia_mm = jdouble(p, "mean_dia_mm", 0.0);
+    in.dash_size   = jstring(p, "dash_size",   "");
+    return in;
+}
+
+sk::spiral_back_up_ring_groove::Input parseSpiralBackUpRingGroove(const json& p)
+{
+    sk::spiral_back_up_ring_groove::Input in;
+    in.bore_or_shaft_dia_mm = jdouble(p, "bore_or_shaft_dia_mm", 0.0);
+    in.position_z_mm        = jdouble(p, "position_z_mm",        0.0);
+    in.ring_size            = jstring(p, "ring_size",            "");
+    in.position             = jstring(p, "position",             "downstream");
+    return in;
+}
+
+sk::dust_lip_seal_seat_compound::Input parseDustLipSealSeatCompound(const json& p)
+{
+    sk::dust_lip_seal_seat_compound::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.center_x_mm           = jdouble(p, "center_x_mm",           0.0);
+    in.center_y_mm           = jdouble(p, "center_y_mm",           0.0);
+    in.axis_dir              = parseAxisDir(p);
+    in.bore_dia_mm           = jdouble(p, "bore_dia_mm",           0.0);
+    in.bore_depth_mm         = jdouble(p, "bore_depth_mm",         0.0);
+    in.seal_thickness_mm     = jdouble(p, "seal_thickness_mm",     7.0);
+    in.seal_can_OD_offset_mm = jdouble(p, "seal_can_OD_offset_mm", 0.5);
+    in.lip_relief_depth_mm   = jdouble(p, "lip_relief_depth_mm",   0.5);
+    in.nose_chamfer_mm       = jdouble(p, "nose_chamfer_mm",       0.5);
+    in.seal_series           = jstring(p, "seal_series",           "");
+    return in;
+}
+
+sk::face_seal_compound_compression::Input parseFaceSealCompoundCompression(const json& p)
+{
+    sk::face_seal_compound_compression::Input in;
+    in.face_id               = parseFaceDatum(p);
+    in.center_x_mm           = jdouble(p, "center_x_mm",           0.0);
+    in.center_y_mm           = jdouble(p, "center_y_mm",           0.0);
+    in.axis_dir              = parseAxisDir(p);
+    in.primary_radius_mm     = jdouble(p, "primary_radius_mm",     0.0);
+    in.spring_radius_mm      = jdouble(p, "spring_radius_mm",      0.0);
+    in.spring_extra_depth_mm = jdouble(p, "spring_extra_depth_mm", 0.5);
+    in.dash_size             = jstring(p, "dash_size",             "");
+    return in;
+}
+
+sk::gasket_face_with_drain_groove::Input parseGasketFaceWithDrainGroove(const json& p)
+{
+    sk::gasket_face_with_drain_groove::Input in;
+    in.face_id          = parseFaceDatum(p);
+    in.center_x_mm      = jdouble(p, "center_x_mm",      0.0);
+    in.center_y_mm      = jdouble(p, "center_y_mm",      0.0);
+    in.axis_dir         = parseAxisDir(p);
+    in.face_dia_mm      = jdouble(p, "face_dia_mm",      0.0);
+    in.relief_depth_mm  = jdouble(p, "relief_depth_mm",  0.05);
+    in.drain_radius_mm  = jdouble(p, "drain_radius_mm",  0.0);
+    in.drain_width_mm   = jdouble(p, "drain_width_mm",   1.0);
+    in.drain_depth_mm   = jdouble(p, "drain_depth_mm",   0.5);
+    in.id_chamfer_mm    = jdouble(p, "id_chamfer_mm",    0.5);
+    in.gasket_class     = jstring(p, "gasket_class",     "");
+    in.roughness_class  = jstring(p, "roughness_class",  "stock");
+    return in;
+}
+
+sk::blind_threaded_insert_seat::Input parseBlindThreadedInsertSeat(const json& p)
+{
+    sk::blind_threaded_insert_seat::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.position_x_mm   = jdouble(p, "position_x_mm", 0.0);
+    in.position_y_mm   = jdouble(p, "position_y_mm", 0.0);
+    in.axis_dir        = parseAxisDir(p);
+    in.insert_size     = jstring(p, "insert_size",     "M3");
+    in.insert_material = jstring(p, "insert_material", "metal");
+    return in;
+}
+
+sk::bolt_hole_metric_spec::Input parseBoltHoleMetricSpec(const json& p)
+{
+    sk::bolt_hole_metric_spec::Input in;
+    in.entry_face        = parseFaceDatum(p);
+    in.position_x_mm     = jdouble(p, "position_x_mm",     0.0);
+    in.position_y_mm     = jdouble(p, "position_y_mm",     0.0);
+    in.axis_dir          = parseAxisDir(p);
+    in.thread_size       = jstring(p, "thread_size",       "M6");
+    in.fit_class         = jstring(p, "fit_class",         "medium");
+    in.chamfer_size_mm   = jdouble(p, "chamfer_size_mm",   0.5);
+    in.chamfer_angle_deg = jdouble(p, "chamfer_angle_deg", 30.0);
+    return in;
+}
+
+sk::tapped_hole_metric_spec::Input parseTappedHoleMetricSpec(const json& p)
+{
+    sk::tapped_hole_metric_spec::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.position_x_mm         = jdouble(p, "position_x_mm",         0.0);
+    in.position_y_mm         = jdouble(p, "position_y_mm",         0.0);
+    in.axis_dir              = parseAxisDir(p);
+    in.thread_size           = jstring(p, "thread_size",           "M6");
+    in.tap_depth_mm          = jdouble(p, "tap_depth_mm",          8.0);
+    in.through               = jbool  (p, "through",               false);
+    in.chamfer_size_mm       = jdouble(p, "chamfer_size_mm",       0.4);
+    in.pilot_extra_depth_mm  = jdouble(p, "pilot_extra_depth_mm",  1.0);
+    return in;
+}
+
+sk::unc_unf_hole_spec::Input parseUncUnfHoleSpec(const json& p)
+{
+    sk::unc_unf_hole_spec::Input in;
+    in.entry_face        = parseFaceDatum(p);
+    in.position_x_mm     = jdouble(p, "position_x_mm",     0.0);
+    in.position_y_mm     = jdouble(p, "position_y_mm",     0.0);
+    in.axis_dir          = parseAxisDir(p);
+    in.fastener_size     = jstring(p, "fastener_size",     "1/4-20");
+    in.fit_class         = jstring(p, "fit_class",         "normal");
+    in.chamfer_size_mm   = jdouble(p, "chamfer_size_mm",   0.5);
+    in.chamfer_angle_deg = jdouble(p, "chamfer_angle_deg", 45.0);
+    return in;
+}
+
+sk::threaded_through_with_chamfers::Input parseThreadedThroughWithChamfers(const json& p)
+{
+    sk::threaded_through_with_chamfers::Input in;
+    in.entry_face       = parseFaceDatum(p);
+    in.position_x_mm    = jdouble(p, "position_x_mm",    0.0);
+    in.position_y_mm    = jdouble(p, "position_y_mm",    0.0);
+    in.axis_dir         = parseAxisDir(p);
+    in.thread_size      = jstring(p, "thread_size",      "M6");
+    in.chamfer_size_mm  = jdouble(p, "chamfer_size_mm",  0.5);
+    in.add_relief       = jbool  (p, "add_relief",       true);
+    in.relief_offset_mm = jdouble(p, "relief_offset_mm", 2.0);
+    return in;
+}
+
+sk::captive_screw_pocket_spec::Input parseCaptiveScrewPocketSpec(const json& p)
+{
+    sk::captive_screw_pocket_spec::Input in;
+    in.entry_face       = parseFaceDatum(p);
+    in.position_x_mm    = jdouble(p, "position_x_mm",    0.0);
+    in.position_y_mm    = jdouble(p, "position_y_mm",    0.0);
+    in.axis_dir         = parseAxisDir(p);
+    in.thread_size      = jstring(p, "thread_size",      "M6");
+    in.chamfer_size_mm  = jdouble(p, "chamfer_size_mm",  0.5);
+    in.groove_offset_mm = jdouble(p, "groove_offset_mm", 2.0);
+    return in;
+}
+
+// ── Mechanical structures / drive / fluid / spring / linear-motion / adjusters ──
+
+// Helper: parse a gp_Ax1 from JSON of the form
+//   { "origin": [x,y,z], "axis": [x,y,z] }
+// or via separate keys "origin_<axis>_mm" / "axis_dir".  Falls back to
+// (origin=(0,0,0), direction=(0,0,-1)) when JSON is incomplete.
+gp_Ax1 parseAx1(const json& p, const char* origin_key = "origin",
+                const char* axis_key = "axis",
+                const gp_Dir& dflt_dir = gp_Dir(0.0, 0.0, -1.0))
+{
+    gp_Pnt origin(0.0, 0.0, 0.0);
+    gp_Dir dir = dflt_dir;
+    if (p.contains(origin_key) && p[origin_key].is_array() && p[origin_key].size() == 3 &&
+        p[origin_key][0].is_number() && p[origin_key][1].is_number() && p[origin_key][2].is_number()) {
+        origin = gp_Pnt(p[origin_key][0].get<double>(),
+                        p[origin_key][1].get<double>(),
+                        p[origin_key][2].get<double>());
+    }
+    if (p.contains(axis_key) && p[axis_key].is_array() && p[axis_key].size() == 3 &&
+        p[axis_key][0].is_number() && p[axis_key][1].is_number() && p[axis_key][2].is_number()) {
+        const double x = p[axis_key][0].get<double>();
+        const double y = p[axis_key][1].get<double>();
+        const double z = p[axis_key][2].get<double>();
+        if (std::sqrt(x*x + y*y + z*z) > 1e-9) {
+            dir = gp_Dir(x, y, z);
+        }
+    }
+    return gp_Ax1(origin, dir);
+}
+
+// Frame/chassis
+sk::i_beam_compound_section::Input parseIBeamCompoundSection(const json& p)
+{
+    sk::i_beam_compound_section::Input in;
+    in.length_mm   = jdouble(p, "length_mm",   in.length_mm);
+    in.height_mm   = jdouble(p, "height_mm",   in.height_mm);
+    in.flange_w_mm = jdouble(p, "flange_w_mm", in.flange_w_mm);
+    in.flange_t_mm = jdouble(p, "flange_t_mm", in.flange_t_mm);
+    in.web_t_mm    = jdouble(p, "web_t_mm",    in.web_t_mm);
+    return in;
+}
+
+sk::box_section_with_endplate::Input parseBoxSectionWithEndplate(const json& p)
+{
+    sk::box_section_with_endplate::Input in;
+    in.length_mm     = jdouble(p, "length_mm",     in.length_mm);
+    in.width_mm      = jdouble(p, "width_mm",      in.width_mm);
+    in.height_mm     = jdouble(p, "height_mm",     in.height_mm);
+    in.wall_t_mm     = jdouble(p, "wall_t_mm",     in.wall_t_mm);
+    in.endplate_t_mm = jdouble(p, "endplate_t_mm", in.endplate_t_mm);
+    if (p.contains("bolt_grid") && p["bolt_grid"].is_array() && p["bolt_grid"].size() == 2 &&
+        p["bolt_grid"][0].is_number_integer() && p["bolt_grid"][1].is_number_integer()) {
+        in.bolt_grid = { p["bolt_grid"][0].get<int>(), p["bolt_grid"][1].get<int>() };
+    }
+    in.bolt_dia_mm   = jdouble(p, "bolt_dia_mm",   in.bolt_dia_mm);
+    in.edge_dist_mm  = jdouble(p, "edge_dist_mm",  in.edge_dist_mm);
+    return in;
+}
+
+sk::gusset_plate_compound::Input parseGussetPlateCompound(const json& p)
+{
+    sk::gusset_plate_compound::Input in;
+    in.leg_a_mm         = jdouble(p, "leg_a_mm",         in.leg_a_mm);
+    in.leg_b_mm         = jdouble(p, "leg_b_mm",         in.leg_b_mm);
+    in.plate_t_mm       = jdouble(p, "plate_t_mm",       in.plate_t_mm);
+    in.lift_hole_dia_mm = jdouble(p, "lift_hole_dia_mm", in.lift_hole_dia_mm);
+    in.bevel_mm         = jdouble(p, "bevel_mm",         in.bevel_mm);
+    in.notch_r_mm       = jdouble(p, "notch_r_mm",       in.notch_r_mm);
+    return in;
+}
+
+sk::lifting_lug_pad_eye::Input parseLiftingLugPadEye(const json& p)
+{
+    sk::lifting_lug_pad_eye::Input in;
+    in.plate_t_mm      = jdouble(p, "plate_t_mm",      in.plate_t_mm);
+    in.pin_hole_dia_mm = jdouble(p, "pin_hole_dia_mm", in.pin_hole_dia_mm);
+    in.lug_height_mm   = jdouble(p, "lug_height_mm",   in.lug_height_mm);
+    in.lug_width_mm    = jdouble(p, "lug_width_mm",    in.lug_width_mm);
+    in.chamfer_mm      = jdouble(p, "chamfer_mm",      in.chamfer_mm);
+    in.base_bevel_mm   = jdouble(p, "base_bevel_mm",   in.base_bevel_mm);
+    return in;
+}
+
+sk::base_bracket_compound::Input parseBaseBracketCompound(const json& p)
+{
+    sk::base_bracket_compound::Input in;
+    in.leg1_mm          = jdouble(p, "leg1_mm",          in.leg1_mm);
+    in.leg2_mm          = jdouble(p, "leg2_mm",          in.leg2_mm);
+    in.plate_t_mm       = jdouble(p, "plate_t_mm",       in.plate_t_mm);
+    in.bracket_width_mm = jdouble(p, "bracket_width_mm", in.bracket_width_mm);
+    if (p.contains("bolt_pattern") && p["bolt_pattern"].is_array() && p["bolt_pattern"].size() == 2 &&
+        p["bolt_pattern"][0].is_number_integer() && p["bolt_pattern"][1].is_number_integer()) {
+        in.bolt_pattern = { p["bolt_pattern"][0].get<int>(), p["bolt_pattern"][1].get<int>() };
+    }
+    in.bolt_dia_mm    = jdouble(p, "bolt_dia_mm",    in.bolt_dia_mm);
+    in.dowel_dia_mm   = jdouble(p, "dowel_dia_mm",   in.dowel_dia_mm);
+    in.gusset_size_mm = jdouble(p, "gusset_size_mm", in.gusset_size_mm);
+    return in;
+}
+
+// Mounting
+sk::din_rail_mount_slot::Input parseDinRailMountSlot(const json& p)
+{
+    sk::din_rail_mount_slot::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.start_x_mm      = jdouble(p, "start_x_mm",      0.0);
+    in.start_y_mm      = jdouble(p, "start_y_mm",      0.0);
+    in.rail_dir        = parseDir(p, "rail_dir", gp_Dir(1.0, 0.0, 0.0));
+    in.axis_dir        = parseAxisDir(p);
+    in.rail_length_mm  = jdouble(p, "rail_length_mm",  0.0);
+    in.plate_t_mm      = jdouble(p, "plate_t_mm",      in.plate_t_mm);
+    return in;
+}
+
+sk::dovetail_mount_compound::Input parseDovetailMountCompound(const json& p)
+{
+    sk::dovetail_mount_compound::Input in;
+    in.entry_face          = parseFaceDatum(p);
+    in.start_x_mm          = jdouble(p, "start_x_mm",          0.0);
+    in.start_y_mm          = jdouble(p, "start_y_mm",          0.0);
+    in.slot_dir            = parseDir(p, "slot_dir", gp_Dir(1.0, 0.0, 0.0));
+    in.axis_dir            = parseAxisDir(p);
+    in.slot_length_mm      = jdouble(p, "slot_length_mm",      0.0);
+    in.slot_width_mm       = jdouble(p, "slot_width_mm",       0.0);
+    in.slot_depth_mm       = jdouble(p, "slot_depth_mm",       0.0);
+    in.dovetail_angle_deg  = jdouble(p, "dovetail_angle_deg",  in.dovetail_angle_deg);
+    return in;
+}
+
+sk::t_slot_table_groove::Input parseTSlotTableGroove(const json& p)
+{
+    sk::t_slot_table_groove::Input in;
+    in.entry_face = parseFaceDatum(p);
+    in.start_x_mm = jdouble(p, "start_x_mm", 0.0);
+    in.start_y_mm = jdouble(p, "start_y_mm", 0.0);
+    in.end_x_mm   = jdouble(p, "end_x_mm",   0.0);
+    in.end_y_mm   = jdouble(p, "end_y_mm",   0.0);
+    in.axis_dir   = parseAxisDir(p);
+    in.top_w_mm   = jdouble(p, "top_w_mm",   0.0);
+    in.top_d_mm   = jdouble(p, "top_d_mm",   0.0);
+    in.bot_w_mm   = jdouble(p, "bot_w_mm",   0.0);
+    in.bot_d_mm   = jdouble(p, "bot_d_mm",   0.0);
+    return in;
+}
+
+// Linear motion
+sk::linear_rail_seat_compound::Input parseLinearRailSeatCompound(const json& p)
+{
+    sk::linear_rail_seat_compound::Input in;
+    in.entry_face          = parseFaceDatum(p);
+    in.length_mm           = jdouble(p, "length_mm",           0.0);
+    in.rail_centerline_mm  = jdouble(p, "rail_centerline_mm",  0.0);
+    in.pitch_mm            = jdouble(p, "pitch_mm",            0.0);
+    in.start_x_mm          = jdouble(p, "start_x_mm",          0.0);
+    return in;
+}
+
+sk::ball_screw_nut_pocket::Input parseBallScrewNutPocket(const json& p)
+{
+    sk::ball_screw_nut_pocket::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.position_x_mm         = jdouble(p, "position_x_mm",         0.0);
+    in.position_y_mm         = jdouble(p, "position_y_mm",         0.0);
+    in.axis_dir              = parseAxisDir(p);
+    in.nut_od_mm             = jdouble(p, "nut_od_mm",             0.0);
+    in.nut_l_mm              = jdouble(p, "nut_l_mm",              0.0);
+    in.mounting_pattern      = jstring(p, "mounting_pattern",      "square4");
+    in.mounting_pcd_mm       = jdouble(p, "mounting_pcd_mm",       0.0);
+    in.mounting_hole_dia_mm  = jdouble(p, "mounting_hole_dia_mm",  in.mounting_hole_dia_mm);
+    in.shaft_thru_dia_mm     = jdouble(p, "shaft_thru_dia_mm",     0.0);
+    return in;
+}
+
+sk::lead_screw_anti_backlash_pocket::Input parseLeadScrewAntiBacklashPocket(const json& p)
+{
+    sk::lead_screw_anti_backlash_pocket::Input in;
+    in.entry_face       = parseFaceDatum(p);
+    in.position_x_mm    = jdouble(p, "position_x_mm",    0.0);
+    in.position_y_mm    = jdouble(p, "position_y_mm",    0.0);
+    in.axis_dir         = parseAxisDir(p);
+    in.half_nut_od_mm   = jdouble(p, "half_nut_od_mm",   0.0);
+    in.half_nut_l_mm    = jdouble(p, "half_nut_l_mm",    0.0);
+    in.spring_slot_w_mm = jdouble(p, "spring_slot_w_mm", 0.0);
+    return in;
+}
+
+sk::linear_bushing_seat::Input parseLinearBushingSeat(const json& p)
+{
+    sk::linear_bushing_seat::Input in;
+    in.entry_face    = parseFaceDatum(p);
+    in.axis          = parseAx1(p, "axis_origin", "axis_dir");
+    in.bushing_od_mm = jdouble(p, "bushing_od_mm", 0.0);
+    in.bushing_l_mm  = jdouble(p, "bushing_l_mm",  0.0);
+    return in;
+}
+
+sk::cam_follower_threaded_seat::Input parseCamFollowerThreadedSeat(const json& p)
+{
+    sk::cam_follower_threaded_seat::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.position_x_mm   = jdouble(p, "position_x_mm",   0.0);
+    in.position_y_mm   = jdouble(p, "position_y_mm",   0.0);
+    in.axis_dir        = parseAxisDir(p);
+    in.cam_follower_M  = jstring(p, "cam_follower_M",  "M8");
+    in.tap_depth_mm    = jdouble(p, "tap_depth_mm",    0.0);
+    return in;
+}
+
+// Fluid ports
+sk::internal_water_jacket::Input parseInternalWaterJacket(const json& p)
+{
+    sk::internal_water_jacket::Input in;
+    in.reference_face       = parseFaceDatum(p);
+    in.bore_axis            = parseDir(p, "bore_axis", gp_Dir(0.0, 0.0, 1.0));
+    in.bore_origin_x_mm     = jdouble(p, "bore_origin_x_mm",     in.bore_origin_x_mm);
+    in.bore_origin_y_mm     = jdouble(p, "bore_origin_y_mm",     in.bore_origin_y_mm);
+    in.bore_axial_start_mm  = jdouble(p, "bore_axial_start_mm",  in.bore_axial_start_mm);
+    in.bore_inner_r_mm      = jdouble(p, "bore_inner_r_mm",      in.bore_inner_r_mm);
+    in.outer_r_mm           = jdouble(p, "outer_r_mm",           in.outer_r_mm);
+    in.jacket_length_mm     = jdouble(p, "jacket_length_mm",     in.jacket_length_mm);
+    in.jacket_pitch_mm      = jdouble(p, "jacket_pitch_mm",      in.jacket_pitch_mm);
+    in.groove_w_mm          = jdouble(p, "groove_w_mm",          in.groove_w_mm);
+    in.groove_depth_mm      = jdouble(p, "groove_depth_mm",      in.groove_depth_mm);
+    in.port_dia_mm          = jdouble(p, "port_dia_mm",          in.port_dia_mm);
+    in.inlet_axial_pos_mm   = jdouble(p, "inlet_axial_pos_mm",   in.inlet_axial_pos_mm);
+    in.outlet_axial_pos_mm  = jdouble(p, "outlet_axial_pos_mm",  in.outlet_axial_pos_mm);
+    in.inlet_clock_deg      = jdouble(p, "inlet_clock_deg",      in.inlet_clock_deg);
+    in.outlet_clock_deg     = jdouble(p, "outlet_clock_deg",     in.outlet_clock_deg);
+    return in;
+}
+
+// Adjusters
+sk::adjuster_screw_pocket_compound::Input parseAdjusterScrewPocketCompound(const json& p)
+{
+    sk::adjuster_screw_pocket_compound::Input in;
+    in.entry_face              = parseFaceDatum(p);
+    in.position_x_mm           = jdouble(p, "position_x_mm",           0.0);
+    in.position_y_mm           = jdouble(p, "position_y_mm",           0.0);
+    in.axis_dir                = parseAxisDir(p);
+    in.fine_thread             = jstring(p, "fine_thread",             "M4x0.5");
+    in.lock_nut_M              = jstring(p, "lock_nut_M",              "M4");
+    in.tap_depth_mm            = jdouble(p, "tap_depth_mm",            0.0);
+    in.nut_thickness_mm        = jdouble(p, "nut_thickness_mm",        0.0);
+    in.scribe_groove_width_mm  = jdouble(p, "scribe_groove_width_mm",  in.scribe_groove_width_mm);
+    in.scribe_groove_depth_mm  = jdouble(p, "scribe_groove_depth_mm",  in.scribe_groove_depth_mm);
+    return in;
+}
+
+sk::tab_lock_anti_rotation::Input parseTabLockAntiRotation(const json& p)
+{
+    sk::tab_lock_anti_rotation::Input in;
+    in.bore_axis       = parseAx1(p, "bore_origin", "bore_axis_dir", gp_Dir(0.0, 0.0, 1.0));
+    in.bore_dia_mm     = jdouble(p, "bore_dia_mm",     0.0);
+    in.tab_w_mm        = jdouble(p, "tab_w_mm",        0.0);
+    in.tab_d_mm        = jdouble(p, "tab_d_mm",        0.0);
+    in.tab_axial_z_mm  = jdouble(p, "tab_axial_z_mm",  0.0);
+    in.chamfer_size_mm = jdouble(p, "chamfer_size_mm", in.chamfer_size_mm);
+    return in;
+}
+
+// Spring seats
+sk::coil_spring_seat_compound::Input parseCoilSpringSeatCompound(const json& p)
+{
+    sk::coil_spring_seat_compound::Input in;
+    in.face_id        = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.spring_od      = jdouble(p, "spring_od",      0.0);
+    in.free_height    = jdouble(p, "free_height",    0.0);
+    in.pilot_dia      = jdouble(p, "pilot_dia",      0.0);
+    in.slip_fit_mm    = jdouble(p, "slip_fit_mm",    in.slip_fit_mm);
+    return in;
+}
+
+sk::wave_spring_groove::Input parseWaveSpringGroove(const json& p)
+{
+    sk::wave_spring_groove::Input in;
+    in.bore_axis          = parseAx1(p, "bore_origin", "bore_axis_dir", gp_Dir(0.0, 0.0, 1.0));
+    in.mean_dia           = jdouble(p, "mean_dia",           0.0);
+    in.wave_spring_id     = jdouble(p, "wave_spring_id",     0.0);
+    in.wave_spring_height = jdouble(p, "wave_spring_height", 0.0);
+    in.axial_position_mm  = jdouble(p, "axial_position_mm",  0.0);
+    return in;
+}
+
+sk::gas_spring_clevis_pocket::Input parseGasSpringClevisPocket(const json& p)
+{
+    sk::gas_spring_clevis_pocket::Input in;
+    in.face_id             = parseFaceDatum(p);
+    in.position_x_mm       = jdouble(p, "position_x_mm",       0.0);
+    in.position_y_mm       = jdouble(p, "position_y_mm",       0.0);
+    in.axis_dir            = parseAxisDir(p);
+    in.clevis_w            = jdouble(p, "clevis_w",            0.0);
+    in.clevis_d            = jdouble(p, "clevis_d",            0.0);
+    in.clevis_length       = jdouble(p, "clevis_length",       0.0);
+    in.pin_dia             = jdouble(p, "pin_dia",             in.pin_dia);
+    in.retention_groove_w  = jdouble(p, "retention_groove_w",  in.retention_groove_w);
+    return in;
+}
+
+sk::leaf_spring_anchor_compound::Input parseLeafSpringAnchorCompound(const json& p)
+{
+    sk::leaf_spring_anchor_compound::Input in;
+    in.face_id        = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.slot_length_mm = jdouble(p, "slot_length_mm", 0.0);
+    in.slot_width_mm  = jdouble(p, "slot_width_mm",  0.0);
+    in.slot_depth_mm  = jdouble(p, "slot_depth_mm",  0.0);
+    in.screw_M        = jstring(p, "screw_M",        "M4");
+    return in;
+}
+
+sk::torsion_spring_anchor_compound::Input parseTorsionSpringAnchorCompound(const json& p)
+{
+    sk::torsion_spring_anchor_compound::Input in;
+    in.face_id             = parseFaceDatum(p);
+    in.position_x_mm       = jdouble(p, "position_x_mm",       0.0);
+    in.position_y_mm       = jdouble(p, "position_y_mm",       0.0);
+    in.axis_dir            = parseAxisDir(p);
+    in.pivot_bore          = jdouble(p, "pivot_bore",          0.0);
+    in.pivot_depth_mm      = jdouble(p, "pivot_depth_mm",      0.0);
+    in.arm_slot_width      = jdouble(p, "arm_slot_width",      0.0);
+    in.arm_slot_length     = jdouble(p, "arm_slot_length",     0.0);
+    in.anchor_angle_1_deg  = jdouble(p, "anchor_angle_1_deg",  in.anchor_angle_1_deg);
+    in.anchor_angle_2_deg  = jdouble(p, "anchor_angle_2_deg",  in.anchor_angle_2_deg);
+    in.anchor_radius_mm    = jdouble(p, "anchor_radius_mm",    0.0);
+    return in;
+}
+
+sk::leaf_spring_anchor::Input parseLeafSpringAnchor(const json& p)
+{
+    sk::leaf_spring_anchor::Input in;
+    in.entry_face     = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.slot_length_mm = jdouble(p, "slot_length_mm", 0.0);
+    in.slot_width_mm  = jdouble(p, "slot_width_mm",  0.0);
+    in.depth_mm       = jdouble(p, "depth_mm",       in.depth_mm);
+    return in;
+}
+
+// ── Slice 16/smart-spec/PCB-electronics parsers ──────────────────────────
+
+sk::iso_h7_bore_spec::Input parseIsoH7BoreSpec(const json& p)
+{
+    sk::iso_h7_bore_spec::Input in;
+    in.entry_face     = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.nominal_dia_mm = jdouble(p, "nominal_dia_mm", 0.0);
+    in.depth_mm       = jdouble(p, "depth_mm",       0.0);
+    in.chamfer_mm     = jdouble(p, "chamfer_mm",     in.chamfer_mm);
+    in.spec_key       = jstring(p, "spec_key",       in.spec_key.c_str());
+    return in;
+}
+
+sk::press_fit_p7_bore_spec::Input parsePressFitP7BoreSpec(const json& p)
+{
+    sk::press_fit_p7_bore_spec::Input in;
+    in.entry_face     = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.nominal_dia_mm = jdouble(p, "nominal_dia_mm", 0.0);
+    in.depth_mm       = jdouble(p, "depth_mm",       0.0);
+    in.chamfer_mm     = jdouble(p, "chamfer_mm",     in.chamfer_mm);
+    in.spec_key       = jstring(p, "spec_key",       in.spec_key.c_str());
+    return in;
+}
+
+sk::slip_fit_h11_bore_spec::Input parseSlipFitH11BoreSpec(const json& p)
+{
+    sk::slip_fit_h11_bore_spec::Input in;
+    in.entry_face     = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.nominal_dia_mm = jdouble(p, "nominal_dia_mm", 0.0);
+    in.depth_mm       = jdouble(p, "depth_mm",       0.0);
+    in.chamfer_mm     = jdouble(p, "chamfer_mm",     in.chamfer_mm);
+    in.spec_key       = jstring(p, "spec_key",       in.spec_key.c_str());
+    return in;
+}
+
+sk::dowel_pin_h6_bore::Input parseDowelPinH6Bore(const json& p)
+{
+    sk::dowel_pin_h6_bore::Input in;
+    in.entry_face     = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.nominal_dia_mm = jdouble(p, "nominal_dia_mm", 0.0);
+    in.depth_mm       = jdouble(p, "depth_mm",       0.0);
+    in.chamfer_mm     = jdouble(p, "chamfer_mm",     in.chamfer_mm);
+    in.spec_key       = jstring(p, "spec_key",       in.spec_key.c_str());
+    return in;
+}
+
+sk::locating_g6_bore::Input parseLocatingG6Bore(const json& p)
+{
+    sk::locating_g6_bore::Input in;
+    in.entry_face     = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.nominal_dia_mm = jdouble(p, "nominal_dia_mm", 0.0);
+    in.depth_mm       = jdouble(p, "depth_mm",       0.0);
+    in.chamfer_mm     = jdouble(p, "chamfer_mm",     in.chamfer_mm);
+    in.spec_key       = jstring(p, "spec_key",       in.spec_key.c_str());
+    return in;
+}
+
+sk::parametric_rib_array::Input parseParametricRibArray(const json& p)
+{
+    sk::parametric_rib_array::Input in;
+    in.entry_face   = parseFaceDatum(p);
+    in.spec_class   = jstring(p, "spec_class",   "");
+    if (p.contains("rib_count") && p["rib_count"].is_number_integer()) {
+        in.rib_count = p["rib_count"].get<int>();
+    }
+    in.pitch_mm     = jdouble(p, "pitch_mm",     0.0);
+    in.length_mm    = jdouble(p, "length_mm",    0.0);
+    in.height_mm    = jdouble(p, "height_mm",    0.0);
+    in.thickness_mm = jdouble(p, "thickness_mm", 0.0);
+    in.anchor_x_mm  = jdouble(p, "anchor_x_mm",  0.0);
+    in.anchor_y_mm  = jdouble(p, "anchor_y_mm",  0.0);
+    in.array_axis   = parseDir(p, "array_axis",  gp_Dir(1.0, 0.0, 0.0));
+    in.extrude_dir  = parseDir(p, "extrude_dir", gp_Dir(0.0, 0.0, 1.0));
+    return in;
+}
+
+sk::draft_wall_with_radius::Input parseDraftWallWithRadius(const json& p)
+{
+    sk::draft_wall_with_radius::Input in;
+    in.entry_face        = parseFaceDatum(p);
+    in.spec_class        = jstring(p, "spec_class",        "");
+    in.center_x_mm       = jdouble(p, "center_x_mm",       0.0);
+    in.center_y_mm       = jdouble(p, "center_y_mm",       0.0);
+    in.length_mm         = jdouble(p, "length_mm",         0.0);
+    in.base_thickness_mm = jdouble(p, "base_thickness_mm", 0.0);
+    in.height_mm         = jdouble(p, "height_mm",         0.0);
+    in.length_dir        = parseDir(p, "length_dir", gp_Dir(1.0, 0.0, 0.0));
+    return in;
+}
+
+sk::top_face_recess_with_walls::Input parseTopFaceRecessWithWalls(const json& p)
+{
+    sk::top_face_recess_with_walls::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.spec_class      = jstring(p, "spec_class",      "");
+    in.center_x_mm     = jdouble(p, "center_x_mm",     0.0);
+    in.center_y_mm     = jdouble(p, "center_y_mm",     0.0);
+    in.inner_length_mm = jdouble(p, "inner_length_mm", 0.0);
+    in.inner_width_mm  = jdouble(p, "inner_width_mm",  0.0);
+    in.recess_depth_mm = jdouble(p, "recess_depth_mm", 0.0);
+    return in;
+}
+
+sk::partition_wall_with_passthrough::Input parsePartitionWallWithPassthrough(const json& p)
+{
+    sk::partition_wall_with_passthrough::Input in;
+    in.entry_face         = parseFaceDatum(p);
+    in.spec_class         = jstring(p, "spec_class",         "");
+    in.center_x_mm        = jdouble(p, "center_x_mm",        0.0);
+    in.center_y_mm        = jdouble(p, "center_y_mm",        0.0);
+    in.wall_length_mm     = jdouble(p, "wall_length_mm",     0.0);
+    in.wall_thickness_mm  = jdouble(p, "wall_thickness_mm",  0.0);
+    in.wall_height_mm     = jdouble(p, "wall_height_mm",     0.0);
+    in.cut_offset_x_mm    = jdouble(p, "cut_offset_x_mm",    0.0);
+    in.cut_offset_z_mm    = jdouble(p, "cut_offset_z_mm",    0.0);
+    in.length_dir         = parseDir(p, "length_dir", gp_Dir(1.0, 0.0, 0.0));
+    return in;
+}
+
+sk::curved_lip_around_face::Input parseCurvedLipAroundFace(const json& p)
+{
+    sk::curved_lip_around_face::Input in;
+    in.entry_face = parseFaceDatum(p);
+    in.spec_class = jstring(p, "spec_class", "");
+    return in;
+}
+
+sk::heat_sink_fin_array::Input parseHeatSinkFinArray(const json& p)
+{
+    sk::heat_sink_fin_array::Input in;
+    in.base_face         = parseFaceDatum(p);
+    if (p.contains("fin_count") && p["fin_count"].is_number_integer()) {
+        in.fin_count = p["fin_count"].get<int>();
+    }
+    in.spec_key          = jstring(p, "spec_key",          "");
+    in.fin_thickness_mm  = jdouble(p, "fin_thickness_mm",  0.0);
+    in.fin_height_mm     = jdouble(p, "fin_height_mm",     0.0);
+    in.fin_pitch_mm      = jdouble(p, "fin_pitch_mm",      0.0);
+    in.airflow_dir       = parseDir(p, "airflow_dir", gp_Dir(1.0, 0.0, 0.0));
+    in.origin_x_mm       = jdouble(p, "origin_x_mm",       0.0);
+    in.origin_y_mm       = jdouble(p, "origin_y_mm",       0.0);
+    in.fin_length_mm     = jdouble(p, "fin_length_mm",     0.0);
+    return in;
+}
+
+sk::vent_slot_array::Input parseVentSlotArray(const json& p)
+{
+    sk::vent_slot_array::Input in;
+    in.face              = parseFaceDatum(p);
+    if (p.contains("slot_count") && p["slot_count"].is_number_integer()) {
+        in.slot_count = p["slot_count"].get<int>();
+    }
+    in.spec_key          = jstring(p, "spec_key",          "");
+    in.slot_length_mm    = jdouble(p, "slot_length_mm",    0.0);
+    in.slot_width_mm     = jdouble(p, "slot_width_mm",     0.0);
+    in.pitch_mm          = jdouble(p, "pitch_mm",          0.0);
+    in.slot_axis         = parseDir(p, "slot_axis", gp_Dir(1.0, 0.0, 0.0));
+    in.center_x_mm       = jdouble(p, "center_x_mm",       0.0);
+    in.center_y_mm       = jdouble(p, "center_y_mm",       0.0);
+    in.wall_thickness_mm = jdouble(p, "wall_thickness_mm", 0.0);
+    return in;
+}
+
+sk::louvered_vent::Input parseLouveredVent(const json& p)
+{
+    sk::louvered_vent::Input in;
+    in.face              = parseFaceDatum(p);
+    if (p.contains("louver_count") && p["louver_count"].is_number_integer()) {
+        in.louver_count = p["louver_count"].get<int>();
+    }
+    in.spec_key          = jstring(p, "spec_key",          "");
+    in.tilt_angle_deg    = jdouble(p, "tilt_angle_deg",    0.0);
+    in.slot_length_mm    = jdouble(p, "slot_length_mm",    0.0);
+    in.slot_width_mm     = jdouble(p, "slot_width_mm",     0.0);
+    in.pitch_mm          = jdouble(p, "pitch_mm",          0.0);
+    in.slot_axis         = parseDir(p, "slot_axis", gp_Dir(1.0, 0.0, 0.0));
+    in.center_x_mm       = jdouble(p, "center_x_mm",       0.0);
+    in.center_y_mm       = jdouble(p, "center_y_mm",       0.0);
+    in.wall_thickness_mm = jdouble(p, "wall_thickness_mm", 0.0);
+    return in;
+}
+
+sk::perforated_grille_pattern::Input parsePerforatedGrillePattern(const json& p)
+{
+    sk::perforated_grille_pattern::Input in;
+    in.face                = parseFaceDatum(p);
+    in.spec_key            = jstring(p, "spec_key",            "");
+    in.hole_dia_mm         = jdouble(p, "hole_dia_mm",         0.0);
+    in.hex_pitch_mm        = jdouble(p, "hex_pitch_mm",        0.0);
+    in.footprint_length_mm = jdouble(p, "footprint_length_mm", 0.0);
+    in.footprint_width_mm  = jdouble(p, "footprint_width_mm",  0.0);
+    in.center_x_mm         = jdouble(p, "center_x_mm",         0.0);
+    in.center_y_mm         = jdouble(p, "center_y_mm",         0.0);
+    in.grid_axis           = parseDir(p, "grid_axis", gp_Dir(1.0, 0.0, 0.0));
+    in.wall_thickness_mm   = jdouble(p, "wall_thickness_mm",   0.0);
+    return in;
+}
+
+sk::breather_vent_compound::Input parseBreatherVentCompound(const json& p)
+{
+    sk::breather_vent_compound::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.spec_key              = jstring(p, "spec_key",              "");
+    in.position_x_mm         = jdouble(p, "position_x_mm",         0.0);
+    in.position_y_mm         = jdouble(p, "position_y_mm",         0.0);
+    in.axis_dir              = parseAxisDir(p);
+    in.through_dia_mm        = jdouble(p, "through_dia_mm",        0.0);
+    in.counterbore_dia_mm    = jdouble(p, "counterbore_dia_mm",    0.0);
+    in.counterbore_depth_mm  = jdouble(p, "counterbore_depth_mm",  0.0);
+    in.groove_dia_mm         = jdouble(p, "groove_dia_mm",         0.0);
+    in.groove_width_mm       = jdouble(p, "groove_width_mm",       0.0);
+    in.groove_depth_mm       = jdouble(p, "groove_depth_mm",       0.0);
+    return in;
+}
+
+sk::pcb_standoff_array_under_board::Input parsePcbStandoffArrayUnderBoard(const json& p)
+{
+    sk::pcb_standoff_array_under_board::Input in;
+    in.base_face            = parseFaceDatum(p);
+    in.axis_dir             = parseDir(p, "axis_dir", gp_Dir(0.0, 0.0, 1.0));
+    in.screw_size           = jstring(p, "screw_size",           in.screw_size.c_str());
+    in.standoff_height_mm   = jdouble(p, "standoff_height_mm",   in.standoff_height_mm);
+    in.boss_od_mm           = jdouble(p, "boss_od_mm",           in.boss_od_mm);
+    in.pilot_extra_depth_mm = jdouble(p, "pilot_extra_depth_mm", in.pilot_extra_depth_mm);
+    in.PCB_thickness_mm     = jdouble(p, "PCB_thickness_mm",     in.PCB_thickness_mm);
+    in.plate_margin_mm      = jdouble(p, "plate_margin_mm",      in.plate_margin_mm);
+    in.plate_thickness_mm   = jdouble(p, "plate_thickness_mm",   in.plate_thickness_mm);
+    if (p.contains("sites") && p["sites"].is_array()) {
+        for (const auto& s : p["sites"]) {
+            if (s.is_object()) {
+                sk::pcb_standoff_array_under_board::StandoffSite site;
+                site.x_mm = jdouble(s, "x_mm", 0.0);
+                site.y_mm = jdouble(s, "y_mm", 0.0);
+                in.sites.push_back(site);
+            }
+        }
+    }
+    return in;
+}
+
+sk::connector_cutout_with_keepout::Input parseConnectorCutoutWithKeepout(const json& p)
+{
+    sk::connector_cutout_with_keepout::Input in;
+    in.face                = parseFaceDatum(p);
+    in.axis_dir            = parseAxisDir(p);
+    in.connector_type      = jstring(p, "connector_type",      in.connector_type.c_str());
+    in.position_x_mm       = jdouble(p, "position_x_mm",       0.0);
+    in.position_y_mm       = jdouble(p, "position_y_mm",       0.0);
+    in.chamfer_override_mm = jdouble(p, "chamfer_override_mm", in.chamfer_override_mm);
+    return in;
+}
+
+sk::cable_grommet_pass_through::Input parseCableGrommetPassThrough(const json& p)
+{
+    sk::cable_grommet_pass_through::Input in;
+    in.entry_face    = parseFaceDatum(p);
+    in.axis_dir      = parseAxisDir(p);
+    in.position_x_mm = jdouble(p, "position_x_mm", 0.0);
+    in.position_y_mm = jdouble(p, "position_y_mm", 0.0);
+    in.grommet_size  = jstring(p, "grommet_size",  in.grommet_size.c_str());
+    return in;
+}
+
+sk::isolator_grommet_seat::Input parseIsolatorGrommetSeat(const json& p)
+{
+    sk::isolator_grommet_seat::Input in;
+    in.entry_face     = parseFaceDatum(p);
+    in.axis_dir       = parseAxisDir(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm", 0.0);
+    in.position_y_mm  = jdouble(p, "position_y_mm", 0.0);
+    in.isolator_size  = jstring(p, "isolator_size", in.isolator_size.c_str());
+    return in;
+}
+
+sk::tilt_post_for_lcd_panel::Input parseTiltPostForLcdPanel(const json& p)
+{
+    sk::tilt_post_for_lcd_panel::Input in;
+    in.base_face     = parseFaceDatum(p);
+    in.axis_dir      = parseAxisDir(p);
+    in.position_x_mm = jdouble(p, "position_x_mm", 0.0);
+    in.position_y_mm = jdouble(p, "position_y_mm", 0.0);
+    in.panel_size    = jstring(p, "panel_size",    in.panel_size.c_str());
+    return in;
+}
+
+sk::din_rail_clip_slot::Input parseDinRailClipSlot(const json& p)
+{
+    sk::din_rail_clip_slot::Input in;
+    in.enclosure_face = parseFaceDatum(p);
+    in.center_x_mm    = jdouble(p, "center_x_mm",    0.0);
+    in.center_y_mm    = jdouble(p, "center_y_mm",    0.0);
+    in.axis_dir       = parseAxisDir(p);
+    in.rail_dir_deg   = jdouble(p, "rail_dir_deg",   0.0);
+    in.rail_length_mm = jdouble(p, "rail_length_mm", in.rail_length_mm);
+    return in;
+}
+
+sk::banana_jack_receptacle::Input parseBananaJackReceptacle(const json& p)
+{
+    sk::banana_jack_receptacle::Input in;
+    in.face          = parseFaceDatum(p);
+    in.position_x_mm = jdouble(p, "position_x_mm", 0.0);
+    in.position_y_mm = jdouble(p, "position_y_mm", 0.0);
+    in.axis_dir      = parseAxisDir(p);
+    if (p.contains("count") && p["count"].is_number_integer()) {
+        in.count = p["count"].get<int>();
+    }
+    in.spacing_mm    = jdouble(p, "spacing_mm",    in.spacing_mm);
+    in.direction_deg = jdouble(p, "direction_deg", 0.0);
+    return in;
+}
+
+sk::rj45_socket_cutout::Input parseRj45SocketCutout(const json& p)
+{
+    sk::rj45_socket_cutout::Input in;
+    in.face          = parseFaceDatum(p);
+    in.position_x_mm = jdouble(p, "position_x_mm", 0.0);
+    in.position_y_mm = jdouble(p, "position_y_mm", 0.0);
+    in.axis_dir      = parseAxisDir(p);
+    if (p.contains("port_count") && p["port_count"].is_number_integer()) {
+        in.port_count = p["port_count"].get<int>();
+    }
+    in.spacing_mm    = jdouble(p, "spacing_mm",    in.spacing_mm);
+    in.direction_deg = jdouble(p, "direction_deg", 0.0);
+    return in;
+}
+
+sk::linear_slider_track::Input parseLinearSliderTrack(const json& p)
+{
+    sk::linear_slider_track::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.start_x_mm      = jdouble(p, "start_x_mm",      0.0);
+    in.start_y_mm      = jdouble(p, "start_y_mm",      0.0);
+    in.end_x_mm        = jdouble(p, "end_x_mm",        0.0);
+    in.end_y_mm        = jdouble(p, "end_y_mm",        0.0);
+    in.axis_dir        = parseAxisDir(p);
+    in.slot_width_mm   = jdouble(p, "slot_width_mm",   0.0);
+    in.slot_depth_mm   = jdouble(p, "slot_depth_mm",   0.0);
+    in.end_stop_thk_mm = jdouble(p, "end_stop_thk_mm", 0.0);
+    in.track_class     = jstring(p, "track_class",     in.track_class.c_str());
+    return in;
+}
+
+sk::pivot_pin_clevis_compound::Input parsePivotPinClevisCompound(const json& p)
+{
+    sk::pivot_pin_clevis_compound::Input in;
+    in.entry_face   = parseFaceDatum(p);
+    in.center_x_mm  = jdouble(p, "center_x_mm",  0.0);
+    in.center_y_mm  = jdouble(p, "center_y_mm",  0.0);
+    in.u_axis       = parseDir(p, "u_axis",   gp_Dir(0.0, 0.0, -1.0));
+    in.pin_axis     = parseDir(p, "pin_axis", gp_Dir(0.0, 1.0,  0.0));
+    in.u_depth_mm   = jdouble(p, "u_depth_mm",   0.0);
+    in.clevis_size  = jstring(p, "clevis_size",  in.clevis_size.c_str());
+    return in;
+}
+
+sk::cam_actuated_slider::Input parseCamActuatedSlider(const json& p)
+{
+    sk::cam_actuated_slider::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.slot_start_x_mm = jdouble(p, "slot_start_x_mm", 0.0);
+    in.slot_start_y_mm = jdouble(p, "slot_start_y_mm", 0.0);
+    in.slot_end_x_mm   = jdouble(p, "slot_end_x_mm",   0.0);
+    in.slot_end_y_mm   = jdouble(p, "slot_end_y_mm",   0.0);
+    in.axis_dir        = parseAxisDir(p);
+    in.slot_depth_mm   = jdouble(p, "slot_depth_mm",   0.0);
+    in.pivot_offset_mm = jdouble(p, "pivot_offset_mm", 0.0);
+    in.cam_class       = jstring(p, "cam_class",       in.cam_class.c_str());
+    return in;
+}
+
+sk::over_center_toggle_pocket::Input parseOverCenterTogglePocket(const json& p)
+{
+    sk::over_center_toggle_pocket::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.pivot_x_mm      = jdouble(p, "pivot_x_mm",      0.0);
+    in.pivot_y_mm      = jdouble(p, "pivot_y_mm",      0.0);
+    in.axis_dir        = parseAxisDir(p);
+    in.pocket_depth_mm = jdouble(p, "pocket_depth_mm", 0.0);
+    in.slot_angle_deg  = jdouble(p, "slot_angle_deg",  0.0);
+    in.toggle_class    = jstring(p, "toggle_class",    in.toggle_class.c_str());
+    return in;
+}
+
+sk::detented_position_slider::Input parseDetentedPositionSlider(const json& p)
+{
+    sk::detented_position_slider::Input in;
+    in.entry_face      = parseFaceDatum(p);
+    in.slot_start_x_mm = jdouble(p, "slot_start_x_mm", 0.0);
+    in.slot_start_y_mm = jdouble(p, "slot_start_y_mm", 0.0);
+    in.slot_end_x_mm   = jdouble(p, "slot_end_x_mm",   0.0);
+    in.slot_end_y_mm   = jdouble(p, "slot_end_y_mm",   0.0);
+    in.axis_dir        = parseAxisDir(p);
+    in.slot_width_mm   = jdouble(p, "slot_width_mm",   0.0);
+    in.slot_depth_mm   = jdouble(p, "slot_depth_mm",   0.0);
+    in.detent_class    = jstring(p, "detent_class",    in.detent_class.c_str());
+    return in;
+}
+
+sk::bezel_groove_assembly::Input parseBezelGrooveAssembly(const json& p)
+{
+    sk::bezel_groove_assembly::Input in;
+    in.case_face         = parseFaceDatum(p);
+    in.center_x_mm       = jdouble(p, "center_x_mm",       0.0);
+    in.center_y_mm       = jdouble(p, "center_y_mm",       0.0);
+    in.axis_dir          = parseAxisDir(p);
+    in.outer_dia_mm      = jdouble(p, "outer_dia_mm",      0.0);
+    in.inner_dia_mm      = jdouble(p, "inner_dia_mm",      0.0);
+    in.groove_depth_mm   = jdouble(p, "groove_depth_mm",   0.0);
+    in.taper_deg         = jdouble(p, "taper_deg",         in.taper_deg);
+    in.bottom_fillet_mm  = jdouble(p, "bottom_fillet_mm",  in.bottom_fillet_mm);
+    return in;
+}
+
+sk::lug_with_spring_bar_holes::Input parseLugWithSpringBarHoles(const json& p)
+{
+    sk::lug_with_spring_bar_holes::Input in;
+    in.case_axis            = parseAx1(p, "case_axis_origin", "case_axis_dir",
+                                       gp_Dir(0.0, 0.0, 1.0));
+    in.case_outer_radius_mm = jdouble(p, "case_outer_radius_mm", 0.0);
+    in.lug_angle_deg        = jdouble(p, "lug_angle_deg",        0.0);
+    in.lug_attach_z_mm      = jdouble(p, "lug_attach_z_mm",      0.0);
+    in.lug_length_mm        = jdouble(p, "lug_length_mm",        in.lug_length_mm);
+    in.lug_width_mm         = jdouble(p, "lug_width_mm",         in.lug_width_mm);
+    in.lug_thickness_mm     = jdouble(p, "lug_thickness_mm",     in.lug_thickness_mm);
+    in.corner_chamfer_mm    = jdouble(p, "corner_chamfer_mm",    in.corner_chamfer_mm);
+    in.spring_bar_dia_mm    = jdouble(p, "spring_bar_dia_mm",    in.spring_bar_dia_mm);
+    in.spring_bar_inset_mm  = jdouble(p, "spring_bar_inset_mm",  in.spring_bar_inset_mm);
+    return in;
+}
+
+sk::crown_stem_cavity_compound::Input parseCrownStemCavityCompound(const json& p)
+{
+    sk::crown_stem_cavity_compound::Input in;
+    in.case_axis            = parseAx1(p, "case_axis_origin", "case_axis_dir",
+                                       gp_Dir(0.0, 0.0, 1.0));
+    in.case_outer_radius_mm = jdouble(p, "case_outer_radius_mm", 0.0);
+    in.angle_deg            = jdouble(p, "angle_deg",            0.0);
+    in.port_center_z_mm     = jdouble(p, "port_center_z_mm",     0.0);
+    in.cavity_dia_mm        = jdouble(p, "cavity_dia_mm",        in.cavity_dia_mm);
+    in.cavity_depth_mm      = jdouble(p, "cavity_depth_mm",      in.cavity_depth_mm);
+    in.stem_dia_mm          = jdouble(p, "stem_dia_mm",          in.stem_dia_mm);
+    in.stem_total_length_mm = jdouble(p, "stem_total_length_mm", in.stem_total_length_mm);
+    in.o_ring_cs_mm         = jdouble(p, "o_ring_cs_mm",         in.o_ring_cs_mm);
+    in.o_ring_depth_mm      = jdouble(p, "o_ring_depth_mm",      in.o_ring_depth_mm);
+    in.o_ring_offset_mm     = jdouble(p, "o_ring_offset_mm",     in.o_ring_offset_mm);
+    return in;
+}
+
+// ── Slice 9 parsers — context-aware / morph / sheet / heat-exchanger / misc
+
+sk::auto_boss_under_hole::Input parseAutoBossUnderHole(const json& p)
+{
+    sk::auto_boss_under_hole::Input in;
+    in.entry_face     = parseFaceDatum(p);
+    in.position_x_mm  = jdouble(p, "position_x_mm",  in.position_x_mm);
+    in.position_y_mm  = jdouble(p, "position_y_mm",  in.position_y_mm);
+    in.start_z_mm     = jdouble(p, "start_z_mm",     in.start_z_mm);
+    in.axis_dir       = parseAxisDir(p);
+    in.boss_dia_mm    = jdouble(p, "boss_dia_mm",    in.boss_dia_mm);
+    in.screw_spec     = jstring(p, "screw_spec",     in.screw_spec.c_str());
+    in.total_depth_mm = jdouble(p, "total_depth_mm", in.total_depth_mm);
+    return in;
+}
+
+sk::auto_standoff_floating_point::Input parseAutoStandoffFloatingPoint(const json& p)
+{
+    sk::auto_standoff_floating_point::Input in;
+    in.entry_face              = parseFaceDatum(p);
+    in.position_x_mm           = jdouble(p, "position_x_mm",           in.position_x_mm);
+    in.position_y_mm           = jdouble(p, "position_y_mm",           in.position_y_mm);
+    in.height_mm               = jdouble(p, "height_mm",               in.height_mm);
+    // axis_dir defaults to +Z (standoff grows up); only override if valid
+    // non-zero 3-vector is supplied.
+    if (p.contains("axis_dir") && p["axis_dir"].is_array() && p["axis_dir"].size() == 3 &&
+        p["axis_dir"][0].is_number() && p["axis_dir"][1].is_number() && p["axis_dir"][2].is_number()) {
+        const double x = p["axis_dir"][0].get<double>();
+        const double y = p["axis_dir"][1].get<double>();
+        const double z = p["axis_dir"][2].get<double>();
+        if (std::sqrt(x*x + y*y + z*z) > 1e-9) {
+            in.axis_dir = gp_Dir(x, y, z);
+        }
+    }
+    in.thread_spec             = jstring(p, "thread_spec",             in.thread_spec.c_str());
+    in.standoff_od_mm          = jdouble(p, "standoff_od_mm",          in.standoff_od_mm);
+    in.base_plate_thickness_mm = jdouble(p, "base_plate_thickness_mm", in.base_plate_thickness_mm);
+    return in;
+}
+
+sk::auto_rib_between_two_walls::Input parseAutoRibBetweenTwoWalls(const json& p)
+{
+    sk::auto_rib_between_two_walls::Input in;
+    if (p.contains("wall_A_face_id") && p["wall_A_face_id"].is_number_integer()) {
+        in.wall_A_face_id = p["wall_A_face_id"].get<int>();
+    }
+    if (p.contains("wall_B_face_id") && p["wall_B_face_id"].is_number_integer()) {
+        in.wall_B_face_id = p["wall_B_face_id"].get<int>();
+    }
+    in.rib_thick_mm  = jdouble(p, "rib_thick_mm",  in.rib_thick_mm);
+    in.rib_height_mm = jdouble(p, "rib_height_mm", in.rib_height_mm);
+    in.rib_style     = jstring(p, "rib_style",     in.rib_style.c_str());
+    in.wall_thick_mm = jdouble(p, "wall_thick_mm", in.wall_thick_mm);
+    return in;
+}
+
+sk::auto_gusset_corner_brace::Input parseAutoGussetCornerBrace(const json& p)
+{
+    sk::auto_gusset_corner_brace::Input in;
+    if (p.contains("corner_edge_id") && p["corner_edge_id"].is_number_integer()) {
+        in.corner_edge_id = p["corner_edge_id"].get<int>();
+    }
+    in.leg_length_mm   = jdouble(p, "leg_length_mm",   in.leg_length_mm);
+    in.gusset_thick_mm = jdouble(p, "gusset_thick_mm", in.gusset_thick_mm);
+    in.service_class   = jstring(p, "service_class",   in.service_class.c_str());
+    return in;
+}
+
+sk::auto_chamfer_all_outer_edges::Input parseAutoChamferAllOuterEdges(const json& p)
+{
+    sk::auto_chamfer_all_outer_edges::Input in;
+    in.chamfer_size_mm      = jdouble(p, "chamfer_size_mm",      in.chamfer_size_mm);
+    in.chamfer_size_key     = jstring(p, "chamfer_size_key",     in.chamfer_size_key.c_str());
+    in.include_top_edges    = jbool  (p, "include_top_edges",    in.include_top_edges);
+    in.include_bottom_edges = jbool  (p, "include_bottom_edges", in.include_bottom_edges);
+    in.min_wall_thick_mm    = jdouble(p, "min_wall_thick_mm",    in.min_wall_thick_mm);
+    return in;
+}
+
+// blend_morph_two_shapes — single-workpiece morph using two cross-sections
+// embedded directly in params (no second-workpiece dependency).
+sk::blend_morph_two_shapes::Input parseBlendMorphTwoShapes(const json& p)
+{
+    sk::blend_morph_two_shapes::Input in;
+    if (p.contains("centre_a") && p["centre_a"].is_array() && p["centre_a"].size() == 3 &&
+        p["centre_a"][0].is_number() && p["centre_a"][1].is_number() && p["centre_a"][2].is_number()) {
+        in.centre_a = gp_Pnt(p["centre_a"][0].get<double>(),
+                             p["centre_a"][1].get<double>(),
+                             p["centre_a"][2].get<double>());
+    }
+    in.radius_a = jdouble(p, "radius_a", in.radius_a);
+    in.z_a      = jdouble(p, "z_a",      in.z_a);
+    if (p.contains("centre_b") && p["centre_b"].is_array() && p["centre_b"].size() == 3 &&
+        p["centre_b"][0].is_number() && p["centre_b"][1].is_number() && p["centre_b"][2].is_number()) {
+        in.centre_b = gp_Pnt(p["centre_b"][0].get<double>(),
+                             p["centre_b"][1].get<double>(),
+                             p["centre_b"][2].get<double>());
+    }
+    in.radius_b = jdouble(p, "radius_b", in.radius_b);
+    in.z_b      = jdouble(p, "z_b",      in.z_b);
+    return in;
+}
+
+sk::parametric_sweep_morph::Input parseParametricSweepMorph(const json& p)
+{
+    sk::parametric_sweep_morph::Input in;
+    if (p.contains("path_start") && p["path_start"].is_array() && p["path_start"].size() == 3 &&
+        p["path_start"][0].is_number() && p["path_start"][1].is_number() && p["path_start"][2].is_number()) {
+        in.path_start = gp_Pnt(p["path_start"][0].get<double>(),
+                               p["path_start"][1].get<double>(),
+                               p["path_start"][2].get<double>());
+    }
+    if (p.contains("path_end") && p["path_end"].is_array() && p["path_end"].size() == 3 &&
+        p["path_end"][0].is_number() && p["path_end"][1].is_number() && p["path_end"][2].is_number()) {
+        in.path_end = gp_Pnt(p["path_end"][0].get<double>(),
+                             p["path_end"][1].get<double>(),
+                             p["path_end"][2].get<double>());
+    }
+    in.start_radius = jdouble(p, "start_radius", in.start_radius);
+    in.end_radius   = jdouble(p, "end_radius",   in.end_radius);
+    if (p.contains("intermediate_count") && p["intermediate_count"].is_number_integer()) {
+        in.intermediate_count = p["intermediate_count"].get<int>();
+    }
+    return in;
+}
+
+sk::deformation_warp::Input parseDeformationWarp(const json& p)
+{
+    sk::deformation_warp::Input in;
+    in.scale_x = jdouble(p, "scale_x", in.scale_x);
+    in.scale_y = jdouble(p, "scale_y", in.scale_y);
+    in.scale_z = jdouble(p, "scale_z", in.scale_z);
+    if (p.contains("axis_origin") && p["axis_origin"].is_array() &&
+        p["axis_origin"].size() == 3 &&
+        p["axis_origin"][0].is_number() && p["axis_origin"][1].is_number() &&
+        p["axis_origin"][2].is_number()) {
+        in.axis_origin = gp_Pnt(p["axis_origin"][0].get<double>(),
+                                p["axis_origin"][1].get<double>(),
+                                p["axis_origin"][2].get<double>());
+    }
+    // axis_dir defaults to +Z; only override on a valid non-zero 3-vector.
+    if (p.contains("axis_dir") && p["axis_dir"].is_array() && p["axis_dir"].size() == 3 &&
+        p["axis_dir"][0].is_number() && p["axis_dir"][1].is_number() && p["axis_dir"][2].is_number()) {
+        const double x = p["axis_dir"][0].get<double>();
+        const double y = p["axis_dir"][1].get<double>();
+        const double z = p["axis_dir"][2].get<double>();
+        if (std::sqrt(x*x + y*y + z*z) > 1e-9) {
+            in.axis_dir = gp_Dir(x, y, z);
+        }
+    }
+    in.angle_deg = jdouble(p, "angle_deg", in.angle_deg);
+    return in;
+}
+
+sk::lance::Input parseLance(const json& p)
+{
+    sk::lance::Input in;
+    if (p.contains("waypoints") && p["waypoints"].is_array()) {
+        for (const auto& wp : p["waypoints"]) {
+            if (wp.is_array() && wp.size() == 2 &&
+                wp[0].is_number() && wp[1].is_number()) {
+                in.waypoints.push_back({ wp[0].get<double>(), wp[1].get<double>() });
+            }
+        }
+    }
+    in.tab_width_mm = jdouble(p, "tab_width_mm", in.tab_width_mm);
+    in.lift_mm      = jdouble(p, "lift_mm",      in.lift_mm);
+    return in;
+}
+
+sk::beading::Input parseBeading(const json& p)
+{
+    sk::beading::Input in;
+    if (p.contains("waypoints") && p["waypoints"].is_array()) {
+        for (const auto& wp : p["waypoints"]) {
+            if (wp.is_array() && wp.size() == 2 &&
+                wp[0].is_number() && wp[1].is_number()) {
+                in.waypoints.push_back({ wp[0].get<double>(), wp[1].get<double>() });
+            }
+        }
+    }
+    in.width_mm = jdouble(p, "width_mm", in.width_mm);
+    in.depth_mm = jdouble(p, "depth_mm", in.depth_mm);
+    in.mode     = sk::beading::modeFromString(jstring(p, "mode", "ridge"));
+    return in;
+}
+
+sk::shell_roll::Input parseShellRoll(const json& p)
+{
+    sk::shell_roll::Input in;
+    in.plate_thick_mm  = jdouble(p, "plate_thick_mm",  in.plate_thick_mm);
+    in.shell_dia_mm    = jdouble(p, "shell_dia_mm",    in.shell_dia_mm);
+    in.shell_length_mm = jdouble(p, "shell_length_mm", in.shell_length_mm);
+    return in;
+}
+
+sk::hemispherical_head_form::Input parseHemisphericalHeadForm(const json& p)
+{
+    sk::hemispherical_head_form::Input in;
+    in.dia_mm         = jdouble(p, "dia_mm",         in.dia_mm);
+    in.plate_thick_mm = jdouble(p, "plate_thick_mm", in.plate_thick_mm);
+    return in;
+}
+
+sk::expand_tube::Input parseExpandTube(const json& p)
+{
+    sk::expand_tube::Input in;
+    in.target_expansion_pct = jdouble(p, "target_expansion_pct", in.target_expansion_pct);
+    in.method               = jstring(p, "method",               in.method.c_str());
+    return in;
+}
+
+sk::tube_to_tubesheet_weld::Input parseTubeToTubesheetWeld(const json& p)
+{
+    sk::tube_to_tubesheet_weld::Input in;
+    in.tube_dia_mm    = jdouble(p, "tube_dia_mm",    in.tube_dia_mm);
+    in.sheet_thick_mm = jdouble(p, "sheet_thick_mm", in.sheet_thick_mm);
+    if (p.contains("joint_count") && p["joint_count"].is_number_integer()) {
+        in.joint_count = p["joint_count"].get<int>();
+    }
+    return in;
+}
+
+sk::tube_swage::Input parseTubeSwage(const json& p)
+{
+    sk::tube_swage::Input in;
+    in.start_z_mm   = jdouble(p, "start_z_mm",   in.start_z_mm);
+    in.end_z_mm     = jdouble(p, "end_z_mm",     in.end_z_mm);
+    in.target_od_mm = jdouble(p, "target_od_mm", in.target_od_mm);
+    return in;
+}
+
+sk::bolted_flange_compound::Input parseBoltedFlangeCompound(const json& p)
+{
+    sk::bolted_flange_compound::Input in;
+    in.entry_face             = parseFaceDatum(p);
+    in.center_x_mm            = jdouble(p, "center_x_mm",            in.center_x_mm);
+    in.center_y_mm            = jdouble(p, "center_y_mm",            in.center_y_mm);
+    // axis_dir defaults to +Z for this skill.
+    if (p.contains("axis_dir") && p["axis_dir"].is_array() && p["axis_dir"].size() == 3 &&
+        p["axis_dir"][0].is_number() && p["axis_dir"][1].is_number() && p["axis_dir"][2].is_number()) {
+        const double x = p["axis_dir"][0].get<double>();
+        const double y = p["axis_dir"][1].get<double>();
+        const double z = p["axis_dir"][2].get<double>();
+        if (std::sqrt(x*x + y*y + z*z) > 1e-9) {
+            in.axis_dir = gp_Dir(x, y, z);
+        }
+    }
+    in.flange_outer_dia_mm    = jdouble(p, "flange_outer_dia_mm",    in.flange_outer_dia_mm);
+    in.flange_thickness_mm    = jdouble(p, "flange_thickness_mm",    in.flange_thickness_mm);
+    in.pipe_bore_dia_mm       = jdouble(p, "pipe_bore_dia_mm",       in.pipe_bore_dia_mm);
+    in.raised_face_dia_mm     = jdouble(p, "raised_face_dia_mm",     in.raised_face_dia_mm);
+    in.raised_face_height_mm  = jdouble(p, "raised_face_height_mm",  in.raised_face_height_mm);
+    in.gasket_groove_id_mm    = jdouble(p, "gasket_groove_id_mm",    in.gasket_groove_id_mm);
+    in.gasket_groove_od_mm    = jdouble(p, "gasket_groove_od_mm",    in.gasket_groove_od_mm);
+    in.gasket_groove_depth_mm = jdouble(p, "gasket_groove_depth_mm", in.gasket_groove_depth_mm);
+    if (p.contains("bolt_count") && p["bolt_count"].is_number_integer()) {
+        in.bolt_count = p["bolt_count"].get<int>();
+    }
+    in.bolt_circle_dia_mm = jdouble(p, "bolt_circle_dia_mm", in.bolt_circle_dia_mm);
+    in.bolt_hole_dia_mm   = jdouble(p, "bolt_hole_dia_mm",   in.bolt_hole_dia_mm);
+    return in;
+}
+
+sk::pinned_clevis_joint::Input parsePinnedClevisJoint(const json& p)
+{
+    sk::pinned_clevis_joint::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.center_x_mm           = jdouble(p, "center_x_mm",           in.center_x_mm);
+    in.center_y_mm           = jdouble(p, "center_y_mm",           in.center_y_mm);
+    in.axis_dir              = parseAxisDir(p);  // default (0,0,-1) matches struct default
+    in.block_length_mm       = jdouble(p, "block_length_mm",       in.block_length_mm);
+    in.block_width_mm        = jdouble(p, "block_width_mm",        in.block_width_mm);
+    in.block_height_mm       = jdouble(p, "block_height_mm",       in.block_height_mm);
+    in.tongue_slot_width_mm  = jdouble(p, "tongue_slot_width_mm",  in.tongue_slot_width_mm);
+    in.tongue_slot_depth_mm  = jdouble(p, "tongue_slot_depth_mm",  in.tongue_slot_depth_mm);
+    in.pin_hole_dia_mm       = jdouble(p, "pin_hole_dia_mm",       in.pin_hole_dia_mm);
+    in.pin_hole_z_offset_mm  = jdouble(p, "pin_hole_z_offset_mm",  in.pin_hole_z_offset_mm);
+    in.cotter_pin_dia_mm     = jdouble(p, "cotter_pin_dia_mm",     in.cotter_pin_dia_mm);
+    in.cotter_pin_offset_mm  = jdouble(p, "cotter_pin_offset_mm",  in.cotter_pin_offset_mm);
+    return in;
+}
+
+sk::expansion_joint_bellows_stub::Input parseExpansionJointBellowsStub(const json& p)
+{
+    sk::expansion_joint_bellows_stub::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.center_x_mm           = jdouble(p, "center_x_mm",           in.center_x_mm);
+    in.center_y_mm           = jdouble(p, "center_y_mm",           in.center_y_mm);
+    // axis_dir defaults to +Z; only override on valid 3-vector.
+    if (p.contains("axis_dir") && p["axis_dir"].is_array() && p["axis_dir"].size() == 3 &&
+        p["axis_dir"][0].is_number() && p["axis_dir"][1].is_number() && p["axis_dir"][2].is_number()) {
+        const double x = p["axis_dir"][0].get<double>();
+        const double y = p["axis_dir"][1].get<double>();
+        const double z = p["axis_dir"][2].get<double>();
+        if (std::sqrt(x*x + y*y + z*z) > 1e-9) {
+            in.axis_dir = gp_Dir(x, y, z);
+        }
+    }
+    in.flange_outer_dia_mm       = jdouble(p, "flange_outer_dia_mm",       in.flange_outer_dia_mm);
+    in.flange_thickness_mm       = jdouble(p, "flange_thickness_mm",       in.flange_thickness_mm);
+    in.pipe_outer_dia_mm         = jdouble(p, "pipe_outer_dia_mm",         in.pipe_outer_dia_mm);
+    in.pipe_inner_dia_mm         = jdouble(p, "pipe_inner_dia_mm",         in.pipe_inner_dia_mm);
+    in.pipe_length_mm            = jdouble(p, "pipe_length_mm",            in.pipe_length_mm);
+    if (p.contains("corrugation_count") && p["corrugation_count"].is_number_integer()) {
+        in.corrugation_count = p["corrugation_count"].get<int>();
+    }
+    in.corrugation_pitch_mm      = jdouble(p, "corrugation_pitch_mm",      in.corrugation_pitch_mm);
+    in.corrugation_outer_dia_mm  = jdouble(p, "corrugation_outer_dia_mm",  in.corrugation_outer_dia_mm);
+    return in;
+}
+
+sk::anchor_pad_compound::Input parseAnchorPadCompound(const json& p)
+{
+    sk::anchor_pad_compound::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.center_x_mm           = jdouble(p, "center_x_mm",           in.center_x_mm);
+    in.center_y_mm           = jdouble(p, "center_y_mm",           in.center_y_mm);
+    // axis_dir defaults to +Z.
+    if (p.contains("axis_dir") && p["axis_dir"].is_array() && p["axis_dir"].size() == 3 &&
+        p["axis_dir"][0].is_number() && p["axis_dir"][1].is_number() && p["axis_dir"][2].is_number()) {
+        const double x = p["axis_dir"][0].get<double>();
+        const double y = p["axis_dir"][1].get<double>();
+        const double z = p["axis_dir"][2].get<double>();
+        if (std::sqrt(x*x + y*y + z*z) > 1e-9) {
+            in.axis_dir = gp_Dir(x, y, z);
+        }
+    }
+    in.plate_length_mm        = jdouble(p, "plate_length_mm",        in.plate_length_mm);
+    in.plate_width_mm         = jdouble(p, "plate_width_mm",         in.plate_width_mm);
+    in.plate_thickness_mm     = jdouble(p, "plate_thickness_mm",     in.plate_thickness_mm);
+    in.stud_dia_mm            = jdouble(p, "stud_dia_mm",            in.stud_dia_mm);
+    in.stud_height_mm         = jdouble(p, "stud_height_mm",         in.stud_height_mm);
+    in.stud_pitch_x_mm        = jdouble(p, "stud_pitch_x_mm",        in.stud_pitch_x_mm);
+    in.stud_pitch_y_mm        = jdouble(p, "stud_pitch_y_mm",        in.stud_pitch_y_mm);
+    in.conduit_dia_mm         = jdouble(p, "conduit_dia_mm",         in.conduit_dia_mm);
+    in.leveling_nut_dia_mm    = jdouble(p, "leveling_nut_dia_mm",    in.leveling_nut_dia_mm);
+    in.leveling_nut_depth_mm  = jdouble(p, "leveling_nut_depth_mm",  in.leveling_nut_depth_mm);
+    return in;
+}
+
+sk::flange_face_with_gasket_groove::Input parseFlangeFaceWithGasketGroove(const json& p)
+{
+    sk::flange_face_with_gasket_groove::Input in;
+    in.entry_face              = parseFaceDatum(p);
+    in.center_x_mm             = jdouble(p, "center_x_mm",             in.center_x_mm);
+    in.center_y_mm             = jdouble(p, "center_y_mm",             in.center_y_mm);
+    in.axis_dir                = parseAxisDir(p);  // default (0,0,-1) matches struct
+    in.flange_outer_dia_mm     = jdouble(p, "flange_outer_dia_mm",     in.flange_outer_dia_mm);
+    in.facing_pass_depth_mm    = jdouble(p, "facing_pass_depth_mm",    in.facing_pass_depth_mm);
+    in.gasket_groove_id_mm     = jdouble(p, "gasket_groove_id_mm",     in.gasket_groove_id_mm);
+    in.gasket_groove_od_mm     = jdouble(p, "gasket_groove_od_mm",     in.gasket_groove_od_mm);
+    in.gasket_groove_depth_mm  = jdouble(p, "gasket_groove_depth_mm",  in.gasket_groove_depth_mm);
+    in.groove_fillet_r_mm      = jdouble(p, "groove_fillet_r_mm",      in.groove_fillet_r_mm);
+    return in;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Slice 9: valve / electrical / tooling / machine / hinge parsers
+// ─────────────────────────────────────────────────────────────────────────
+
+// ── Valve seats ──────────────────────────────────────────────────────────
+
+sk::gate_valve_seat_compound::Input parseGateValveSeatCompound(const json& p)
+{
+    sk::gate_valve_seat_compound::Input in;
+    in.entry_face        = parseFaceDatum(p);
+    in.center_x_mm       = jdouble(p, "center_x_mm",       0.0);
+    in.center_y_mm       = jdouble(p, "center_y_mm",       0.0);
+    in.center_z_mm       = jdouble(p, "center_z_mm",       0.0);
+    in.flow_axis         = parseDir(p, "flow_axis", gp_Dir(1.0, 0.0, 0.0));
+    in.stem_axis         = parseDir(p, "stem_axis", gp_Dir(0.0, 0.0, 1.0));
+    in.seat_bore_dia_mm  = jdouble(p, "seat_bore_dia_mm",  in.seat_bore_dia_mm);
+    in.seat_od_mm        = jdouble(p, "seat_od_mm",        in.seat_od_mm);
+    in.seat_taper_deg    = jdouble(p, "seat_taper_deg",    in.seat_taper_deg);
+    in.seat_length_mm    = jdouble(p, "seat_length_mm",    in.seat_length_mm);
+    in.slot_width_mm     = jdouble(p, "slot_width_mm",     in.slot_width_mm);
+    in.slot_height_mm    = jdouble(p, "slot_height_mm",    in.slot_height_mm);
+    in.body_y_span_mm    = jdouble(p, "body_y_span_mm",    in.body_y_span_mm);
+    in.stem_bore_dia_mm  = jdouble(p, "stem_bore_dia_mm",  in.stem_bore_dia_mm);
+    in.stem_bore_depth_mm = jdouble(p, "stem_bore_depth_mm", in.stem_bore_depth_mm);
+    in.recess_dia_mm     = jdouble(p, "recess_dia_mm",     in.recess_dia_mm);
+    in.recess_depth_mm   = jdouble(p, "recess_depth_mm",   in.recess_depth_mm);
+    return in;
+}
+
+sk::ball_valve_seat_compound::Input parseBallValveSeatCompound(const json& p)
+{
+    sk::ball_valve_seat_compound::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.center_x_mm           = jdouble(p, "center_x_mm",           0.0);
+    in.center_y_mm           = jdouble(p, "center_y_mm",           0.0);
+    in.center_z_mm           = jdouble(p, "center_z_mm",           0.0);
+    in.flow_axis             = parseDir(p, "flow_axis", gp_Dir(1.0, 0.0, 0.0));
+    in.stem_axis             = parseDir(p, "stem_axis", gp_Dir(0.0, 0.0, 1.0));
+    in.size_spec             = jstring(p, "size_spec",             "DN25");
+    in.ball_dia_mm           = jdouble(p, "ball_dia_mm",           0.0);
+    in.port_dia_mm           = jdouble(p, "port_dia_mm",           0.0);
+    in.seat_groove_id_mm     = jdouble(p, "seat_groove_id_mm",     0.0);
+    in.seat_groove_od_mm     = jdouble(p, "seat_groove_od_mm",     0.0);
+    in.seat_groove_depth_mm  = jdouble(p, "seat_groove_depth_mm",  0.0);
+    in.stem_bore_dia_mm      = jdouble(p, "stem_bore_dia_mm",      0.0);
+    in.stem_bore_depth_mm    = jdouble(p, "stem_bore_depth_mm",    0.0);
+    in.flange_recess_dia_mm  = jdouble(p, "flange_recess_dia_mm",  0.0);
+    in.flange_recess_depth_mm = jdouble(p, "flange_recess_depth_mm", 0.0);
+    in.ball_clearance_mm     = jdouble(p, "ball_clearance_mm",     in.ball_clearance_mm);
+    return in;
+}
+
+sk::butterfly_valve_disc_seat::Input parseButterflyValveDiscSeat(const json& p)
+{
+    sk::butterfly_valve_disc_seat::Input in;
+    in.entry_face                   = parseFaceDatum(p);
+    in.center_x_mm                  = jdouble(p, "center_x_mm",                  0.0);
+    in.center_y_mm                  = jdouble(p, "center_y_mm",                  0.0);
+    in.center_z_mm                  = jdouble(p, "center_z_mm",                  0.0);
+    in.flow_axis                    = parseDir(p, "flow_axis", gp_Dir(1.0, 0.0, 0.0));
+    in.stem_axis                    = parseDir(p, "stem_axis", gp_Dir(0.0, 0.0, 1.0));
+    in.flow_bore_dia_mm             = jdouble(p, "flow_bore_dia_mm",             in.flow_bore_dia_mm);
+    in.flow_bore_len_mm             = jdouble(p, "flow_bore_len_mm",             in.flow_bore_len_mm);
+    in.seat_groove_id_mm            = jdouble(p, "seat_groove_id_mm",            in.seat_groove_id_mm);
+    in.seat_groove_radial_depth_mm  = jdouble(p, "seat_groove_radial_depth_mm",  in.seat_groove_radial_depth_mm);
+    in.seat_groove_width_mm         = jdouble(p, "seat_groove_width_mm",         in.seat_groove_width_mm);
+    in.stub_bearing_dia_mm          = jdouble(p, "stub_bearing_dia_mm",          in.stub_bearing_dia_mm);
+    in.stub_bearing_depth_mm        = jdouble(p, "stub_bearing_depth_mm",        in.stub_bearing_depth_mm);
+    in.stem_port_dia_mm             = jdouble(p, "stem_port_dia_mm",             in.stem_port_dia_mm);
+    in.body_y_span_mm               = jdouble(p, "body_y_span_mm",               in.body_y_span_mm);
+    return in;
+}
+
+sk::check_valve_seat_with_stop::Input parseCheckValveSeatWithStop(const json& p)
+{
+    sk::check_valve_seat_with_stop::Input in;
+    in.entry_face       = parseFaceDatum(p);
+    in.center_x_mm      = jdouble(p, "center_x_mm",      0.0);
+    in.center_y_mm      = jdouble(p, "center_y_mm",      0.0);
+    in.center_z_mm      = jdouble(p, "center_z_mm",      0.0);
+    in.flow_axis        = parseDir(p, "flow_axis", gp_Dir(1.0, 0.0, 0.0));
+    in.inlet_dia_mm     = jdouble(p, "inlet_dia_mm",     in.inlet_dia_mm);
+    in.inlet_length_mm  = jdouble(p, "inlet_length_mm",  in.inlet_length_mm);
+    in.seat_angle_deg   = jdouble(p, "seat_angle_deg",   in.seat_angle_deg);
+    in.seat_drop_mm     = jdouble(p, "seat_drop_mm",     in.seat_drop_mm);
+    in.outlet_dia_mm    = jdouble(p, "outlet_dia_mm",    in.outlet_dia_mm);
+    in.outlet_length_mm = jdouble(p, "outlet_length_mm", in.outlet_length_mm);
+    in.stop_dia_mm      = jdouble(p, "stop_dia_mm",      in.stop_dia_mm);
+    in.stop_length_mm   = jdouble(p, "stop_length_mm",   in.stop_length_mm);
+    in.stop_offset_mm   = jdouble(p, "stop_offset_mm",   in.stop_offset_mm);
+    return in;
+}
+
+sk::needle_valve_seat::Input parseNeedleValveSeat(const json& p)
+{
+    sk::needle_valve_seat::Input in;
+    in.entry_face             = parseFaceDatum(p);
+    in.position_x_mm          = jdouble(p, "position_x_mm",          0.0);
+    in.position_y_mm          = jdouble(p, "position_y_mm",          0.0);
+    in.axis_dir               = parseAxisDir(p);
+    in.pocket_entry_dia_mm    = jdouble(p, "pocket_entry_dia_mm",    in.pocket_entry_dia_mm);
+    in.pocket_taper_deg       = jdouble(p, "pocket_taper_deg",       in.pocket_taper_deg);
+    in.pocket_length_mm       = jdouble(p, "pocket_length_mm",       in.pocket_length_mm);
+    in.control_bore_dia_mm    = jdouble(p, "control_bore_dia_mm",    in.control_bore_dia_mm);
+    in.control_bore_depth_mm  = jdouble(p, "control_bore_depth_mm",  in.control_bore_depth_mm);
+    in.stem_boss_dia_mm       = jdouble(p, "stem_boss_dia_mm",       in.stem_boss_dia_mm);
+    in.stem_boss_depth_mm     = jdouble(p, "stem_boss_depth_mm",     in.stem_boss_depth_mm);
+    in.thread_relief_dia_mm   = jdouble(p, "thread_relief_dia_mm",   in.thread_relief_dia_mm);
+    in.thread_relief_depth_mm = jdouble(p, "thread_relief_depth_mm", in.thread_relief_depth_mm);
+    return in;
+}
+
+// ── Electrical contacts ──────────────────────────────────────────────────
+
+sk::banana_socket_compound::Input parseBananaSocketCompound(const json& p)
+{
+    sk::banana_socket_compound::Input in;
+    in.entry_face                 = parseFaceDatum(p);
+    in.position_x_mm              = jdouble(p, "position_x_mm",              0.0);
+    in.position_y_mm              = jdouble(p, "position_y_mm",              0.0);
+    in.axis_dir                   = parseAxisDir(p);
+    in.bore_dia_mm                = jdouble(p, "bore_dia_mm",                in.bore_dia_mm);
+    in.bore_depth_mm              = jdouble(p, "bore_depth_mm",              in.bore_depth_mm);
+    in.slit_width_mm              = jdouble(p, "slit_width_mm",              in.slit_width_mm);
+    in.slit_depth_mm              = jdouble(p, "slit_depth_mm",              in.slit_depth_mm);
+    in.retention_groove_dia_mm    = jdouble(p, "retention_groove_dia_mm",    in.retention_groove_dia_mm);
+    in.retention_groove_depth_mm  = jdouble(p, "retention_groove_depth_mm",  in.retention_groove_depth_mm);
+    in.retention_groove_pos_mm    = jdouble(p, "retention_groove_pos_mm",    in.retention_groove_pos_mm);
+    in.insulation_step_dia_mm     = jdouble(p, "insulation_step_dia_mm",     in.insulation_step_dia_mm);
+    in.insulation_step_depth_mm   = jdouble(p, "insulation_step_depth_mm",   in.insulation_step_depth_mm);
+    return in;
+}
+
+sk::spring_contact_clip::Input parseSpringContactClip(const json& p)
+{
+    sk::spring_contact_clip::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.position_x_mm         = jdouble(p, "position_x_mm",         0.0);
+    in.position_y_mm         = jdouble(p, "position_y_mm",         0.0);
+    in.axis_dir              = parseAxisDir(p);
+    in.orientation_deg       = jdouble(p, "orientation_deg",       0.0);
+    in.clip_length_mm        = jdouble(p, "clip_length_mm",        in.clip_length_mm);
+    in.clip_width_mm         = jdouble(p, "clip_width_mm",         in.clip_width_mm);
+    in.clip_depth_mm         = jdouble(p, "clip_depth_mm",         in.clip_depth_mm);
+    in.back_stop_width_mm    = jdouble(p, "back_stop_width_mm",    in.back_stop_width_mm);
+    in.back_stop_depth_mm    = jdouble(p, "back_stop_depth_mm",    in.back_stop_depth_mm);
+    in.barb_slot_width_mm    = jdouble(p, "barb_slot_width_mm",    in.barb_slot_width_mm);
+    in.barb_slot_height_mm   = jdouble(p, "barb_slot_height_mm",   in.barb_slot_height_mm);
+    in.barb_slot_depth_mm    = jdouble(p, "barb_slot_depth_mm",    in.barb_slot_depth_mm);
+    in.barb_slot_z_offset_mm = jdouble(p, "barb_slot_z_offset_mm", in.barb_slot_z_offset_mm);
+    return in;
+}
+
+sk::terminal_block_post::Input parseTerminalBlockPost(const json& p)
+{
+    sk::terminal_block_post::Input in;
+    in.entry_face         = parseFaceDatum(p);
+    in.position_x_mm      = jdouble(p, "position_x_mm",      0.0);
+    in.position_y_mm      = jdouble(p, "position_y_mm",      0.0);
+    in.axis_dir           = parseDir(p, "axis_dir", gp_Dir(0.0, 0.0, 1.0));
+    in.stud_dia_mm        = jdouble(p, "stud_dia_mm",        in.stud_dia_mm);
+    in.stud_height_mm     = jdouble(p, "stud_height_mm",     in.stud_height_mm);
+    in.shoulder_dia_mm    = jdouble(p, "shoulder_dia_mm",    in.shoulder_dia_mm);
+    in.shoulder_height_mm = jdouble(p, "shoulder_height_mm", in.shoulder_height_mm);
+    in.skirt_dia_mm       = jdouble(p, "skirt_dia_mm",       in.skirt_dia_mm);
+    in.skirt_height_mm    = jdouble(p, "skirt_height_mm",    in.skirt_height_mm);
+    in.wire_hole_dia_mm   = jdouble(p, "wire_hole_dia_mm",   in.wire_hole_dia_mm);
+    in.wire_hole_z_mm     = jdouble(p, "wire_hole_z_mm",     in.wire_hole_z_mm);
+    return in;
+}
+
+sk::busbar_lap_joint::Input parseBusbarLapJoint(const json& p)
+{
+    sk::busbar_lap_joint::Input in;
+    in.entry_face       = parseFaceDatum(p);
+    in.end_x_mm         = jdouble(p, "end_x_mm",         0.0);
+    in.end_y_mm         = jdouble(p, "end_y_mm",         0.0);
+    in.axis_dir         = parseAxisDir(p);
+    in.lap_length_mm    = jdouble(p, "lap_length_mm",    in.lap_length_mm);
+    in.bar_width_mm     = jdouble(p, "bar_width_mm",     in.bar_width_mm);
+    in.bar_thickness_mm = jdouble(p, "bar_thickness_mm", in.bar_thickness_mm);
+    in.bolt_dia_mm      = jdouble(p, "bolt_dia_mm",      in.bolt_dia_mm);
+    in.bolt_pitch_mm    = jdouble(p, "bolt_pitch_mm",    in.bolt_pitch_mm);
+    in.notch_depth_mm   = jdouble(p, "notch_depth_mm",   in.notch_depth_mm);
+    in.notch_width_mm   = jdouble(p, "notch_width_mm",   in.notch_width_mm);
+    if (p.contains("dimple_grid_nx") && p["dimple_grid_nx"].is_number_integer()) {
+        in.dimple_grid_nx = p["dimple_grid_nx"].get<int>();
+    }
+    if (p.contains("dimple_grid_ny") && p["dimple_grid_ny"].is_number_integer()) {
+        in.dimple_grid_ny = p["dimple_grid_ny"].get<int>();
+    }
+    in.dimple_dia_mm    = jdouble(p, "dimple_dia_mm",    in.dimple_dia_mm);
+    in.dimple_depth_mm  = jdouble(p, "dimple_depth_mm",  in.dimple_depth_mm);
+    return in;
+}
+
+sk::pcb_card_edge_socket::Input parsePcbCardEdgeSocket(const json& p)
+{
+    sk::pcb_card_edge_socket::Input in;
+    in.entry_face        = parseFaceDatum(p);
+    in.start_x_mm        = jdouble(p, "start_x_mm",        0.0);
+    in.start_y_mm        = jdouble(p, "start_y_mm",        0.0);
+    in.end_x_mm          = jdouble(p, "end_x_mm",          0.0);
+    in.end_y_mm          = jdouble(p, "end_y_mm",          0.0);
+    in.axis_dir          = parseAxisDir(p);
+    in.slot_width_mm     = jdouble(p, "slot_width_mm",     in.slot_width_mm);
+    in.slot_depth_mm     = jdouble(p, "slot_depth_mm",     in.slot_depth_mm);
+    if (p.contains("finger_count") && p["finger_count"].is_number_integer()) {
+        in.finger_count = p["finger_count"].get<int>();
+    }
+    in.pitch_mm          = jdouble(p, "pitch_mm",          in.pitch_mm);
+    in.finger_dia_mm     = jdouble(p, "finger_dia_mm",     in.finger_dia_mm);
+    in.finger_depth_mm   = jdouble(p, "finger_depth_mm",   in.finger_depth_mm);
+    in.key_tab_width_mm  = jdouble(p, "key_tab_width_mm",  in.key_tab_width_mm);
+    in.key_tab_depth_mm  = jdouble(p, "key_tab_depth_mm",  in.key_tab_depth_mm);
+    in.key_tab_offset_mm = jdouble(p, "key_tab_offset_mm", in.key_tab_offset_mm);
+    return in;
+}
+
+// ── Tooling / jig ────────────────────────────────────────────────────────
+
+sk::jig_plate_with_drill_bushings::Input parseJigPlateWithDrillBushings(const json& p)
+{
+    sk::jig_plate_with_drill_bushings::Input in;
+    in.entry_face       = parseFaceDatum(p);
+    in.axis_dir         = parseAxisDir(p);
+    in.bushing_id_mm    = jdouble(p, "bushing_id_mm",    in.bushing_id_mm);
+    in.bushing_od_mm    = jdouble(p, "bushing_od_mm",    in.bushing_od_mm);
+    in.flange_od_mm     = jdouble(p, "flange_od_mm",     in.flange_od_mm);
+    in.flange_depth_mm  = jdouble(p, "flange_depth_mm",  in.flange_depth_mm);
+    in.chamfer_mm       = jdouble(p, "chamfer_mm",       in.chamfer_mm);
+    if (p.contains("sites") && p["sites"].is_array()) {
+        for (const auto& s : p["sites"]) {
+            if (s.is_object()) {
+                sk::jig_plate_with_drill_bushings::BushingSite site;
+                site.x_mm = jdouble(s, "x_mm", 0.0);
+                site.y_mm = jdouble(s, "y_mm", 0.0);
+                in.sites.push_back(site);
+            }
+        }
+    }
+    return in;
+}
+
+sk::locator_pin_set::Input parseLocatorPinSet(const json& p)
+{
+    sk::locator_pin_set::Input in;
+    in.base_face          = parseFaceDatum(p);
+    in.position_x_mm      = jdouble(p, "position_x_mm",      0.0);
+    in.position_y_mm      = jdouble(p, "position_y_mm",      0.0);
+    in.axis_dir           = parseDir(p, "axis_dir", gp_Dir(0.0, 0.0, 1.0));
+    in.shoulder_dia_mm    = jdouble(p, "shoulder_dia_mm",    in.shoulder_dia_mm);
+    in.shoulder_height_mm = jdouble(p, "shoulder_height_mm", in.shoulder_height_mm);
+    in.post_dia_mm        = jdouble(p, "post_dia_mm",        in.post_dia_mm);
+    in.post_height_mm     = jdouble(p, "post_height_mm",     in.post_height_mm);
+    in.lead_in_chamfer_mm = jdouble(p, "lead_in_chamfer_mm", in.lead_in_chamfer_mm);
+    in.groove_dia_mm      = jdouble(p, "groove_dia_mm",      in.groove_dia_mm);
+    in.groove_width_mm    = jdouble(p, "groove_width_mm",    in.groove_width_mm);
+    in.groove_z_offset_mm = jdouble(p, "groove_z_offset_mm", in.groove_z_offset_mm);
+    return in;
+}
+
+sk::gauge_block_step::Input parseGaugeBlockStep(const json& p)
+{
+    sk::gauge_block_step::Input in;
+    in.top_face       = parseFaceDatum(p);
+    in.x_start_mm     = jdouble(p, "x_start_mm",     in.x_start_mm);
+    in.step_length_mm = jdouble(p, "step_length_mm", in.step_length_mm);
+    in.y_full_mm      = jdouble(p, "y_full_mm",      in.y_full_mm);
+    if (p.contains("step_depths_mm") && p["step_depths_mm"].is_array()) {
+        for (const auto& d : p["step_depths_mm"]) {
+            if (d.is_number()) {
+                in.step_depths_mm.push_back(d.get<double>());
+            }
+        }
+    }
+    return in;
+}
+
+sk::vise_jaw_with_v_groove::Input parseViseJawWithVGroove(const json& p)
+{
+    sk::vise_jaw_with_v_groove::Input in;
+    in.working_face         = parseFaceDatum(p);
+    in.v_groove_angle_deg   = jdouble(p, "v_groove_angle_deg",   in.v_groove_angle_deg);
+    in.v_groove_depth_mm    = jdouble(p, "v_groove_depth_mm",    in.v_groove_depth_mm);
+    in.v_groove_z_mm        = jdouble(p, "v_groove_z_mm",        in.v_groove_z_mm);
+    in.pilot_dia_mm         = jdouble(p, "pilot_dia_mm",         in.pilot_dia_mm);
+    in.counterbore_dia_mm   = jdouble(p, "counterbore_dia_mm",   in.counterbore_dia_mm);
+    in.counterbore_depth_mm = jdouble(p, "counterbore_depth_mm", in.counterbore_depth_mm);
+    if (p.contains("mount_holes") && p["mount_holes"].is_array()) {
+        for (const auto& h : p["mount_holes"]) {
+            if (h.is_object()) {
+                sk::vise_jaw_with_v_groove::MountHole mh;
+                mh.x_mm = jdouble(h, "x_mm", 0.0);
+                mh.z_mm = jdouble(h, "z_mm", 0.0);
+                in.mount_holes.push_back(mh);
+            }
+        }
+    }
+    return in;
+}
+
+sk::pin_and_diamond_locating_set::Input parsePinAndDiamondLocatingSet(const json& p)
+{
+    sk::pin_and_diamond_locating_set::Input in;
+    in.entry_face                 = parseFaceDatum(p);
+    in.axis_dir                   = parseAxisDir(p);
+    in.round_x_mm                 = jdouble(p, "round_x_mm",                 0.0);
+    in.round_y_mm                 = jdouble(p, "round_y_mm",                 0.0);
+    in.diamond_x_mm               = jdouble(p, "diamond_x_mm",               in.diamond_x_mm);
+    in.diamond_y_mm               = jdouble(p, "diamond_y_mm",               0.0);
+    in.pin_dia_mm                 = jdouble(p, "pin_dia_mm",                 in.pin_dia_mm);
+    in.hole_depth_mm              = jdouble(p, "hole_depth_mm",              in.hole_depth_mm);
+    in.diamond_slot_extension_mm  = jdouble(p, "diamond_slot_extension_mm",  in.diamond_slot_extension_mm);
+    in.chamfer_mm                 = jdouble(p, "chamfer_mm",                 in.chamfer_mm);
+    return in;
+}
+
+// ── Machine elements ─────────────────────────────────────────────────────
+
+sk::cam_with_profile::Input parseCamWithProfile(const json& p)
+{
+    sk::cam_with_profile::Input in;
+    if (p.contains("profile") && p["profile"].is_array()) {
+        for (const auto& wp : p["profile"]) {
+            if (wp.is_object()) {
+                sk::cam_with_profile::Waypoint w;
+                w.theta_rad = jdouble(wp, "theta_rad", 0.0);
+                w.r_mm      = jdouble(wp, "r_mm",      0.0);
+                in.profile.push_back(w);
+            }
+        }
+    }
+    in.thickness_mm    = jdouble(p, "thickness_mm",    in.thickness_mm);
+    in.shaft_dia_mm    = jdouble(p, "shaft_dia_mm",    in.shaft_dia_mm);
+    in.keyway_width_mm = jdouble(p, "keyway_width_mm", in.keyway_width_mm);
+    in.keyway_depth_mm = jdouble(p, "keyway_depth_mm", in.keyway_depth_mm);
+    in.center_x_mm     = jdouble(p, "center_x_mm",     0.0);
+    in.center_y_mm     = jdouble(p, "center_y_mm",     0.0);
+    in.center_z_mm     = jdouble(p, "center_z_mm",     0.0);
+    return in;
+}
+
+sk::cam_follower_roller_seat::Input parseCamFollowerRollerSeat(const json& p)
+{
+    sk::cam_follower_roller_seat::Input in;
+    in.roller_dia_mm          = jdouble(p, "roller_dia_mm",          in.roller_dia_mm);
+    in.roller_length_mm       = jdouble(p, "roller_length_mm",       in.roller_length_mm);
+    in.radial_clearance_mm    = jdouble(p, "radial_clearance_mm",    in.radial_clearance_mm);
+    in.arm_clearance_width_mm = jdouble(p, "arm_clearance_width_mm", in.arm_clearance_width_mm);
+    in.arm_clearance_depth_mm = jdouble(p, "arm_clearance_depth_mm", in.arm_clearance_depth_mm);
+    in.retention_dia_mm       = jdouble(p, "retention_dia_mm",       in.retention_dia_mm);
+    in.retention_depth_mm     = jdouble(p, "retention_depth_mm",     in.retention_depth_mm);
+    in.center_x_mm            = jdouble(p, "center_x_mm",            0.0);
+    in.center_y_mm            = jdouble(p, "center_y_mm",            0.0);
+    in.center_z_mm            = jdouble(p, "center_z_mm",            0.0);
+    return in;
+}
+
+sk::eccentric_shaft_collar::Input parseEccentricShaftCollar(const json& p)
+{
+    sk::eccentric_shaft_collar::Input in;
+    in.outer_dia_mm       = jdouble(p, "outer_dia_mm",       in.outer_dia_mm);
+    in.thickness_mm       = jdouble(p, "thickness_mm",       in.thickness_mm);
+    in.bore_dia_mm        = jdouble(p, "bore_dia_mm",        in.bore_dia_mm);
+    in.eccentricity_mm    = jdouble(p, "eccentricity_mm",    in.eccentricity_mm);
+    in.set_screw_dia_mm   = jdouble(p, "set_screw_dia_mm",   in.set_screw_dia_mm);
+    in.set_screw_depth_mm = jdouble(p, "set_screw_depth_mm", in.set_screw_depth_mm);
+    in.center_x_mm        = jdouble(p, "center_x_mm",        0.0);
+    in.center_y_mm        = jdouble(p, "center_y_mm",        0.0);
+    in.center_z_mm        = jdouble(p, "center_z_mm",        0.0);
+    return in;
+}
+
+sk::flywheel_with_balance::Input parseFlywheelWithBalance(const json& p)
+{
+    sk::flywheel_with_balance::Input in;
+    in.outer_dia_mm           = jdouble(p, "outer_dia_mm",           in.outer_dia_mm);
+    in.thickness_mm           = jdouble(p, "thickness_mm",           in.thickness_mm);
+    in.hub_bore_dia_mm        = jdouble(p, "hub_bore_dia_mm",        in.hub_bore_dia_mm);
+    in.balance_pcd_mm         = jdouble(p, "balance_pcd_mm",         in.balance_pcd_mm);
+    in.balance_drill_dia_mm   = jdouble(p, "balance_drill_dia_mm",   in.balance_drill_dia_mm);
+    in.balance_drill_depth_mm = jdouble(p, "balance_drill_depth_mm", in.balance_drill_depth_mm);
+    if (p.contains("balance_count") && p["balance_count"].is_number_integer()) {
+        in.balance_count = p["balance_count"].get<int>();
+    }
+    in.chamfer_mm  = jdouble(p, "chamfer_mm",  in.chamfer_mm);
+    in.center_x_mm = jdouble(p, "center_x_mm", 0.0);
+    in.center_y_mm = jdouble(p, "center_y_mm", 0.0);
+    in.center_z_mm = jdouble(p, "center_z_mm", 0.0);
+    return in;
+}
+
+sk::governor_arm_with_pivot::Input parseGovernorArmWithPivot(const json& p)
+{
+    sk::governor_arm_with_pivot::Input in;
+    in.arm_length_mm      = jdouble(p, "arm_length_mm",      in.arm_length_mm);
+    in.arm_width_mm       = jdouble(p, "arm_width_mm",       in.arm_width_mm);
+    in.arm_thickness_mm   = jdouble(p, "arm_thickness_mm",   in.arm_thickness_mm);
+    in.pivot_bore_dia_mm  = jdouble(p, "pivot_bore_dia_mm",  in.pivot_bore_dia_mm);
+    in.ball_seat_dia_mm   = jdouble(p, "ball_seat_dia_mm",   in.ball_seat_dia_mm);
+    in.ball_seat_depth_mm = jdouble(p, "ball_seat_depth_mm", in.ball_seat_depth_mm);
+    in.corner_x_mm        = jdouble(p, "corner_x_mm",        0.0);
+    in.corner_y_mm        = jdouble(p, "corner_y_mm",        0.0);
+    in.corner_z_mm        = jdouble(p, "corner_z_mm",        0.0);
+    return in;
+}
+
+sk::spur_gear_with_real_teeth::Input parseSpurGearWithRealTeeth(const json& p)
+{
+    sk::spur_gear_with_real_teeth::Input in;
+    in.blank_dia_mm       = jdouble(p, "blank_dia_mm",       0.0);
+    in.blank_thick_mm     = jdouble(p, "blank_thick_mm",     0.0);
+    in.module_mm          = jdouble(p, "module_mm",          0.0);
+    in.pitch_dia_mm       = jdouble(p, "pitch_dia_mm",       0.0);
+    in.pressure_angle_deg = jdouble(p, "pressure_angle_deg", in.pressure_angle_deg);
+    in.bore_dia_mm        = jdouble(p, "bore_dia_mm",        0.0);
+    return in;
+}
+
+sk::helical_gear_teeth::Input parseHelicalGearTeeth(const json& p)
+{
+    sk::helical_gear_teeth::Input in;
+    in.blank_dia_mm       = jdouble(p, "blank_dia_mm",       0.0);
+    in.blank_thick_mm     = jdouble(p, "blank_thick_mm",     0.0);
+    in.normal_module_mm   = jdouble(p, "normal_module_mm",   0.0);
+    in.pitch_dia_mm       = jdouble(p, "pitch_dia_mm",       0.0);
+    in.helix_angle_deg    = jdouble(p, "helix_angle_deg",    in.helix_angle_deg);
+    in.pressure_angle_deg = jdouble(p, "pressure_angle_deg", in.pressure_angle_deg);
+    in.bore_dia_mm        = jdouble(p, "bore_dia_mm",        0.0);
+    in.right_hand         = jbool  (p, "right_hand",         in.right_hand);
+    return in;
+}
+
+sk::sprocket_with_chain_teeth::Input parseSprocketWithChainTeeth(const json& p)
+{
+    sk::sprocket_with_chain_teeth::Input in;
+    in.blank_dia_mm    = jdouble(p, "blank_dia_mm",   0.0);
+    in.blank_thick_mm  = jdouble(p, "blank_thick_mm", 0.0);
+    in.ansi_chain_size = jstring(p, "ansi_chain_size", "");
+    if (p.contains("num_teeth") && p["num_teeth"].is_number_integer()) {
+        in.num_teeth = p["num_teeth"].get<int>();
+    }
+    in.bore_dia_mm = jdouble(p, "bore_dia_mm", 0.0);
+    return in;
+}
+
+sk::spline_shaft_compound::Input parseSplineShaftCompound(const json& p)
+{
+    sk::spline_shaft_compound::Input in;
+    in.shaft_dia_mm     = jdouble(p, "shaft_dia_mm",     0.0);
+    in.shaft_length_mm  = jdouble(p, "shaft_length_mm",  0.0);
+    in.module_mm        = jdouble(p, "module_mm",        0.0);
+    if (p.contains("num_splines") && p["num_splines"].is_number_integer()) {
+        in.num_splines = p["num_splines"].get<int>();
+    }
+    in.spline_length_mm = jdouble(p, "spline_length_mm", 0.0);
+    in.end_chamfer_mm   = jdouble(p, "end_chamfer_mm",   in.end_chamfer_mm);
+    return in;
+}
+
+sk::ratchet_pawl_set::Input parseRatchetPawlSet(const json& p)
+{
+    sk::ratchet_pawl_set::Input in;
+    in.wheel_dia_mm      = jdouble(p, "wheel_dia_mm",      0.0);
+    in.wheel_thick_mm    = jdouble(p, "wheel_thick_mm",    0.0);
+    if (p.contains("num_teeth") && p["num_teeth"].is_number_integer()) {
+        in.num_teeth = p["num_teeth"].get<int>();
+    }
+    in.tooth_depth_mm    = jdouble(p, "tooth_depth_mm",    0.0);
+    in.steep_flank_deg   = jdouble(p, "steep_flank_deg",   in.steep_flank_deg);
+    in.shallow_flank_deg = jdouble(p, "shallow_flank_deg", in.shallow_flank_deg);
+    in.bore_dia_mm       = jdouble(p, "bore_dia_mm",       0.0);
+    in.ccw_locking       = jbool  (p, "ccw_locking",       in.ccw_locking);
+    return in;
+}
+
+// ── Hinge / latch ────────────────────────────────────────────────────────
+
+sk::piano_hinge_strip::Input parsePianoHingeStrip(const json& p)
+{
+    sk::piano_hinge_strip::Input in;
+    in.entry_face            = parseFaceDatum(p);
+    in.origin_x_mm           = jdouble(p, "origin_x_mm",           0.0);
+    in.origin_y_mm           = jdouble(p, "origin_y_mm",           0.0);
+    in.pin_axis_dir          = parseDir(p, "pin_axis_dir", gp_Dir(1.0, 0.0, 0.0));
+    in.strip_length_mm       = jdouble(p, "strip_length_mm",       0.0);
+    in.strip_width_mm        = jdouble(p, "strip_width_mm",        0.0);
+    in.strip_thickness_mm    = jdouble(p, "strip_thickness_mm",    0.0);
+    if (p.contains("knuckle_count") && p["knuckle_count"].is_number_integer()) {
+        in.knuckle_count = p["knuckle_count"].get<int>();
+    }
+    in.knuckle_pitch_mm      = jdouble(p, "knuckle_pitch_mm",      in.knuckle_pitch_mm);
+    in.knuckle_slot_width_mm = jdouble(p, "knuckle_slot_width_mm", in.knuckle_slot_width_mm);
+    in.knuckle_slot_depth_mm = jdouble(p, "knuckle_slot_depth_mm", 0.0);
+    in.pin_dia_mm            = jdouble(p, "pin_dia_mm",            in.pin_dia_mm);
+    in.mount_hole_dia_mm     = jdouble(p, "mount_hole_dia_mm",     in.mount_hole_dia_mm);
+    in.mount_hole_inset_mm   = jdouble(p, "mount_hole_inset_mm",   in.mount_hole_inset_mm);
+    return in;
+}
+
+sk::overcenter_latch::Input parseOvercenterLatch(const json& p)
+{
+    sk::overcenter_latch::Input in;
+    in.entry_face                = parseFaceDatum(p);
+    in.position_x_mm             = jdouble(p, "position_x_mm",             0.0);
+    in.position_y_mm             = jdouble(p, "position_y_mm",             0.0);
+    in.axis_dir                  = parseAxisDir(p);
+    in.lever_arm_length_mm       = jdouble(p, "lever_arm_length_mm",       in.lever_arm_length_mm);
+    in.lever_arm_width_mm        = jdouble(p, "lever_arm_width_mm",        in.lever_arm_width_mm);
+    in.lever_pocket_depth_mm     = jdouble(p, "lever_pocket_depth_mm",     in.lever_pocket_depth_mm);
+    in.pivot_bore_dia_mm         = jdouble(p, "pivot_bore_dia_mm",         in.pivot_bore_dia_mm);
+    in.pivot_bore_depth_mm       = jdouble(p, "pivot_bore_depth_mm",       in.pivot_bore_depth_mm);
+    in.cam_slot_offset_mm        = jdouble(p, "cam_slot_offset_mm",        in.cam_slot_offset_mm);
+    in.cam_slot_length_mm        = jdouble(p, "cam_slot_length_mm",        in.cam_slot_length_mm);
+    in.cam_slot_width_mm         = jdouble(p, "cam_slot_width_mm",         in.cam_slot_width_mm);
+    in.cam_slot_depth_mm         = jdouble(p, "cam_slot_depth_mm",         in.cam_slot_depth_mm);
+    in.retention_hook_length_mm  = jdouble(p, "retention_hook_length_mm",  in.retention_hook_length_mm);
+    in.retention_hook_width_mm   = jdouble(p, "retention_hook_width_mm",   in.retention_hook_width_mm);
+    in.retention_hook_depth_mm   = jdouble(p, "retention_hook_depth_mm",   in.retention_hook_depth_mm);
+    in.grip_notch_width_mm       = jdouble(p, "grip_notch_width_mm",       in.grip_notch_width_mm);
+    in.grip_notch_depth_mm       = jdouble(p, "grip_notch_depth_mm",       in.grip_notch_depth_mm);
+    return in;
+}
+
+sk::snap_action_lock_pocket::Input parseSnapActionLockPocket(const json& p)
+{
+    sk::snap_action_lock_pocket::Input in;
+    in.entry_face                 = parseFaceDatum(p);
+    in.position_x_mm              = jdouble(p, "position_x_mm",              0.0);
+    in.position_y_mm              = jdouble(p, "position_y_mm",              0.0);
+    in.axis_dir                   = parseAxisDir(p);
+    in.lock_body_dia_mm           = jdouble(p, "lock_body_dia_mm",           in.lock_body_dia_mm);
+    in.lock_body_depth_mm         = jdouble(p, "lock_body_depth_mm",         in.lock_body_depth_mm);
+    in.key_counterbore_dia_mm     = jdouble(p, "key_counterbore_dia_mm",     in.key_counterbore_dia_mm);
+    in.key_counterbore_depth_mm   = jdouble(p, "key_counterbore_depth_mm",   in.key_counterbore_depth_mm);
+    in.cam_slot_length_mm         = jdouble(p, "cam_slot_length_mm",         in.cam_slot_length_mm);
+    in.cam_slot_width_mm          = jdouble(p, "cam_slot_width_mm",          in.cam_slot_width_mm);
+    in.cam_slot_depth_offset_mm   = jdouble(p, "cam_slot_depth_offset_mm",   in.cam_slot_depth_offset_mm);
+    in.spring_pocket_dia_mm       = jdouble(p, "spring_pocket_dia_mm",       in.spring_pocket_dia_mm);
+    in.spring_pocket_offset_mm    = jdouble(p, "spring_pocket_offset_mm",    in.spring_pocket_offset_mm);
+    in.spring_pocket_depth_mm     = jdouble(p, "spring_pocket_depth_mm",     in.spring_pocket_depth_mm);
+    return in;
+}
+
+sk::gas_strut_hinge_compound::Input parseGasStrutHingeCompound(const json& p)
+{
+    sk::gas_strut_hinge_compound::Input in;
+    in.entry_face                = parseFaceDatum(p);
+    in.frame_pivot_x_mm          = jdouble(p, "frame_pivot_x_mm",          0.0);
+    in.frame_pivot_y_mm          = jdouble(p, "frame_pivot_y_mm",          0.0);
+    in.door_pivot_x_mm           = jdouble(p, "door_pivot_x_mm",           in.door_pivot_x_mm);
+    in.door_pivot_y_mm           = jdouble(p, "door_pivot_y_mm",           0.0);
+    in.axis_dir                  = parseAxisDir(p);
+    in.bracket_thickness_mm      = jdouble(p, "bracket_thickness_mm",      in.bracket_thickness_mm);
+    in.pivot_bore_dia_mm         = jdouble(p, "pivot_bore_dia_mm",         in.pivot_bore_dia_mm);
+    in.clevis_pocket_length_mm   = jdouble(p, "clevis_pocket_length_mm",   in.clevis_pocket_length_mm);
+    in.clevis_pocket_width_mm    = jdouble(p, "clevis_pocket_width_mm",    in.clevis_pocket_width_mm);
+    in.clevis_pocket_depth_mm    = jdouble(p, "clevis_pocket_depth_mm",    in.clevis_pocket_depth_mm);
+    in.ball_groove_inner_dia_mm  = jdouble(p, "ball_groove_inner_dia_mm",  in.ball_groove_inner_dia_mm);
+    in.ball_groove_outer_dia_mm  = jdouble(p, "ball_groove_outer_dia_mm",  in.ball_groove_outer_dia_mm);
+    in.ball_groove_depth_mm      = jdouble(p, "ball_groove_depth_mm",      in.ball_groove_depth_mm);
+    in.lightening_hole_dia_mm    = jdouble(p, "lightening_hole_dia_mm",    in.lightening_hole_dia_mm);
+    return in;
+}
+
+sk::spring_loaded_door_latch::Input parseSpringLoadedDoorLatch(const json& p)
+{
+    sk::spring_loaded_door_latch::Input in;
+    in.entry_face              = parseFaceDatum(p);
+    in.position_x_mm           = jdouble(p, "position_x_mm",           0.0);
+    in.position_y_mm           = jdouble(p, "position_y_mm",           0.0);
+    in.axis_dir                = parseAxisDir(p);
+    in.latch_pocket_size_mm    = jdouble(p, "latch_pocket_size_mm",    in.latch_pocket_size_mm);
+    in.latch_pocket_depth_mm   = jdouble(p, "latch_pocket_depth_mm",   in.latch_pocket_depth_mm);
+    in.screw_hole_dia_mm       = jdouble(p, "screw_hole_dia_mm",       in.screw_hole_dia_mm);
+    in.screw_hole_depth_mm     = jdouble(p, "screw_hole_depth_mm",     in.screw_hole_depth_mm);
+    in.screw_spacing_mm        = jdouble(p, "screw_spacing_mm",        in.screw_spacing_mm);
+    in.plunger_bore_dia_mm     = jdouble(p, "plunger_bore_dia_mm",     in.plunger_bore_dia_mm);
+    in.plunger_bore_depth_mm   = jdouble(p, "plunger_bore_depth_mm",   in.plunger_bore_depth_mm);
+    in.receiver_slot_width_mm  = jdouble(p, "receiver_slot_width_mm",  in.receiver_slot_width_mm);
+    in.receiver_slot_height_mm = jdouble(p, "receiver_slot_height_mm", in.receiver_slot_height_mm);
+    in.receiver_slot_depth_mm  = jdouble(p, "receiver_slot_depth_mm",  in.receiver_slot_depth_mm);
+    return in;
+}
+
+sk::cam_lock_cavity::Input parseCamLockCavity(const json& p)
+{
+    sk::cam_lock_cavity::Input in;
+    in.entry_face    = parseFaceDatum(p);
+    in.position_x_mm = jdouble(p, "position_x_mm", 0.0);
+    in.position_y_mm = jdouble(p, "position_y_mm", 0.0);
+    in.axis_dir      = parseAxisDir(p);
+    return in;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Dispatch table
 // ─────────────────────────────────────────────────────────────────────────
@@ -2331,6 +4426,387 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::datum_face_establish::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::datum_face_establish::apply(wp, parseDatumFaceEstablish(p));
+    };
+
+    // ── Slice-9: bearings / O-ring & X-ring / fastener-seat spec skills ─
+    t[sk::plain_bushing_bore_with_lube_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::plain_bushing_bore_with_lube_groove::apply(wp, parsePlainBushingBoreWithLubeGroove(p));
+    };
+    t[sk::o_ring_groove_as568_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::o_ring_groove_as568_spec::apply(wp, parseORingGrooveAs568Spec(p));
+    };
+    t[sk::x_ring_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::x_ring_groove::apply(wp, parseXRingGroove(p));
+    };
+    t[sk::x_ring_groove_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::x_ring_groove_spec::apply(wp, parseXRingGrooveSpec(p));
+    };
+    t[sk::spiral_back_up_ring_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::spiral_back_up_ring_groove::apply(wp, parseSpiralBackUpRingGroove(p));
+    };
+    t[sk::dust_lip_seal_seat_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::dust_lip_seal_seat_compound::apply(wp, parseDustLipSealSeatCompound(p));
+    };
+    t[sk::face_seal_compound_compression::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::face_seal_compound_compression::apply(wp, parseFaceSealCompoundCompression(p));
+    };
+    t[sk::gasket_face_with_drain_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::gasket_face_with_drain_groove::apply(wp, parseGasketFaceWithDrainGroove(p));
+    };
+    t[sk::blind_threaded_insert_seat::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::blind_threaded_insert_seat::apply(wp, parseBlindThreadedInsertSeat(p));
+    };
+    t[sk::bolt_hole_metric_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::bolt_hole_metric_spec::apply(wp, parseBoltHoleMetricSpec(p));
+    };
+    t[sk::tapped_hole_metric_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::tapped_hole_metric_spec::apply(wp, parseTappedHoleMetricSpec(p));
+    };
+    t[sk::unc_unf_hole_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::unc_unf_hole_spec::apply(wp, parseUncUnfHoleSpec(p));
+    };
+    t[sk::threaded_through_with_chamfers::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::threaded_through_with_chamfers::apply(wp, parseThreadedThroughWithChamfers(p));
+    };
+    t[sk::captive_screw_pocket_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::captive_screw_pocket_spec::apply(wp, parseCaptiveScrewPocketSpec(p));
+    };
+
+    // Mechanical structures / drive / fluid / spring / linear-motion / adjusters
+    t[sk::i_beam_compound_section::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::i_beam_compound_section::apply(wp, parseIBeamCompoundSection(p));
+    };
+    t[sk::box_section_with_endplate::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::box_section_with_endplate::apply(wp, parseBoxSectionWithEndplate(p));
+    };
+    t[sk::gusset_plate_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::gusset_plate_compound::apply(wp, parseGussetPlateCompound(p));
+    };
+    t[sk::lifting_lug_pad_eye::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::lifting_lug_pad_eye::apply(wp, parseLiftingLugPadEye(p));
+    };
+    t[sk::base_bracket_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::base_bracket_compound::apply(wp, parseBaseBracketCompound(p));
+    };
+    t[sk::din_rail_mount_slot::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::din_rail_mount_slot::apply(wp, parseDinRailMountSlot(p));
+    };
+    t[sk::dovetail_mount_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::dovetail_mount_compound::apply(wp, parseDovetailMountCompound(p));
+    };
+    t[sk::t_slot_table_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::t_slot_table_groove::apply(wp, parseTSlotTableGroove(p));
+    };
+    t[sk::linear_rail_seat_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::linear_rail_seat_compound::apply(wp, parseLinearRailSeatCompound(p));
+    };
+    t[sk::ball_screw_nut_pocket::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::ball_screw_nut_pocket::apply(wp, parseBallScrewNutPocket(p));
+    };
+    t[sk::lead_screw_anti_backlash_pocket::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::lead_screw_anti_backlash_pocket::apply(wp, parseLeadScrewAntiBacklashPocket(p));
+    };
+    t[sk::linear_bushing_seat::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::linear_bushing_seat::apply(wp, parseLinearBushingSeat(p));
+    };
+    t[sk::cam_follower_threaded_seat::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::cam_follower_threaded_seat::apply(wp, parseCamFollowerThreadedSeat(p));
+    };
+    t[sk::internal_water_jacket::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::internal_water_jacket::apply(wp, parseInternalWaterJacket(p));
+    };
+    t[sk::adjuster_screw_pocket_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::adjuster_screw_pocket_compound::apply(wp, parseAdjusterScrewPocketCompound(p));
+    };
+    t[sk::tab_lock_anti_rotation::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::tab_lock_anti_rotation::apply(wp, parseTabLockAntiRotation(p));
+    };
+    t[sk::coil_spring_seat_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::coil_spring_seat_compound::apply(wp, parseCoilSpringSeatCompound(p));
+    };
+    t[sk::wave_spring_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::wave_spring_groove::apply(wp, parseWaveSpringGroove(p));
+    };
+    t[sk::gas_spring_clevis_pocket::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::gas_spring_clevis_pocket::apply(wp, parseGasSpringClevisPocket(p));
+    };
+    t[sk::leaf_spring_anchor_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::leaf_spring_anchor_compound::apply(wp, parseLeafSpringAnchorCompound(p));
+    };
+    t[sk::torsion_spring_anchor_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::torsion_spring_anchor_compound::apply(wp, parseTorsionSpringAnchorCompound(p));
+    };
+    t[sk::leaf_spring_anchor::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::leaf_spring_anchor::apply(wp, parseLeafSpringAnchor(p));
+    };
+
+    // ── Slice 16/smart-spec/PCB-electronics compound features ────────────
+    // ISO bore fit family
+    t[sk::iso_h7_bore_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::iso_h7_bore_spec::apply(wp, parseIsoH7BoreSpec(p));
+    };
+    t[sk::press_fit_p7_bore_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::press_fit_p7_bore_spec::apply(wp, parsePressFitP7BoreSpec(p));
+    };
+    t[sk::slip_fit_h11_bore_spec::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::slip_fit_h11_bore_spec::apply(wp, parseSlipFitH11BoreSpec(p));
+    };
+    t[sk::dowel_pin_h6_bore::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::dowel_pin_h6_bore::apply(wp, parseDowelPinH6Bore(p));
+    };
+    t[sk::locating_g6_bore::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::locating_g6_bore::apply(wp, parseLocatingG6Bore(p));
+    };
+    // Parametric rib / wall
+    t[sk::parametric_rib_array::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::parametric_rib_array::apply(wp, parseParametricRibArray(p));
+    };
+    t[sk::draft_wall_with_radius::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::draft_wall_with_radius::apply(wp, parseDraftWallWithRadius(p));
+    };
+    t[sk::top_face_recess_with_walls::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::top_face_recess_with_walls::apply(wp, parseTopFaceRecessWithWalls(p));
+    };
+    t[sk::partition_wall_with_passthrough::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::partition_wall_with_passthrough::apply(wp, parsePartitionWallWithPassthrough(p));
+    };
+    t[sk::curved_lip_around_face::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::curved_lip_around_face::apply(wp, parseCurvedLipAroundFace(p));
+    };
+    // Heat / vent (electronics)
+    t[sk::heat_sink_fin_array::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::heat_sink_fin_array::apply(wp, parseHeatSinkFinArray(p));
+    };
+    t[sk::vent_slot_array::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::vent_slot_array::apply(wp, parseVentSlotArray(p));
+    };
+    t[sk::louvered_vent::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::louvered_vent::apply(wp, parseLouveredVent(p));
+    };
+    t[sk::perforated_grille_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::perforated_grille_pattern::apply(wp, parsePerforatedGrillePattern(p));
+    };
+    t[sk::breather_vent_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::breather_vent_compound::apply(wp, parseBreatherVentCompound(p));
+    };
+    // PCB / electronics mounting
+    t[sk::pcb_standoff_array_under_board::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::pcb_standoff_array_under_board::apply(wp, parsePcbStandoffArrayUnderBoard(p));
+    };
+    t[sk::connector_cutout_with_keepout::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::connector_cutout_with_keepout::apply(wp, parseConnectorCutoutWithKeepout(p));
+    };
+    t[sk::cable_grommet_pass_through::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::cable_grommet_pass_through::apply(wp, parseCableGrommetPassThrough(p));
+    };
+    t[sk::isolator_grommet_seat::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::isolator_grommet_seat::apply(wp, parseIsolatorGrommetSeat(p));
+    };
+    t[sk::tilt_post_for_lcd_panel::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::tilt_post_for_lcd_panel::apply(wp, parseTiltPostForLcdPanel(p));
+    };
+    // Connector cutouts (slice 16)
+    t[sk::din_rail_clip_slot::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::din_rail_clip_slot::apply(wp, parseDinRailClipSlot(p));
+    };
+    t[sk::banana_jack_receptacle::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::banana_jack_receptacle::apply(wp, parseBananaJackReceptacle(p));
+    };
+    t[sk::rj45_socket_cutout::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::rj45_socket_cutout::apply(wp, parseRj45SocketCutout(p));
+    };
+    // Sliding / pivot mechanisms (smart-spec)
+    t[sk::linear_slider_track::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::linear_slider_track::apply(wp, parseLinearSliderTrack(p));
+    };
+    t[sk::pivot_pin_clevis_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::pivot_pin_clevis_compound::apply(wp, parsePivotPinClevisCompound(p));
+    };
+    t[sk::cam_actuated_slider::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::cam_actuated_slider::apply(wp, parseCamActuatedSlider(p));
+    };
+    t[sk::over_center_toggle_pocket::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::over_center_toggle_pocket::apply(wp, parseOverCenterTogglePocket(p));
+    };
+    t[sk::detented_position_slider::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::detented_position_slider::apply(wp, parseDetentedPositionSlider(p));
+    };
+    // Watch + hinge (slice 16)
+    t[sk::bezel_groove_assembly::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::bezel_groove_assembly::apply(wp, parseBezelGrooveAssembly(p));
+    };
+    t[sk::lug_with_spring_bar_holes::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::lug_with_spring_bar_holes::apply(wp, parseLugWithSpringBarHoles(p));
+    };
+    t[sk::crown_stem_cavity_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::crown_stem_cavity_compound::apply(wp, parseCrownStemCavityCompound(p));
+    };
+
+    // ── Slice 9: context-aware / morph / sheet / heat-exchanger / misc ────
+    // Context-aware auto-synthesis
+    t[sk::auto_boss_under_hole::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::auto_boss_under_hole::apply(wp, parseAutoBossUnderHole(p));
+    };
+    t[sk::auto_standoff_floating_point::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::auto_standoff_floating_point::apply(wp, parseAutoStandoffFloatingPoint(p));
+    };
+    t[sk::auto_rib_between_two_walls::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::auto_rib_between_two_walls::apply(wp, parseAutoRibBetweenTwoWalls(p));
+    };
+    t[sk::auto_gusset_corner_brace::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::auto_gusset_corner_brace::apply(wp, parseAutoGussetCornerBrace(p));
+    };
+    t[sk::auto_chamfer_all_outer_edges::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::auto_chamfer_all_outer_edges::apply(wp, parseAutoChamferAllOuterEdges(p));
+    };
+    // Morphing (single-workpiece)
+    t[sk::blend_morph_two_shapes::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::blend_morph_two_shapes::apply(wp, parseBlendMorphTwoShapes(p));
+    };
+    t[sk::parametric_sweep_morph::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::parametric_sweep_morph::apply(wp, parseParametricSweepMorph(p));
+    };
+    t[sk::deformation_warp::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::deformation_warp::apply(wp, parseDeformationWarp(p));
+    };
+    // Sheet variants
+    t[sk::lance::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::lance::apply(wp, parseLance(p));
+    };
+    t[sk::beading::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::beading::apply(wp, parseBeading(p));
+    };
+    // Heat exchanger geometric
+    t[sk::shell_roll::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::shell_roll::apply(wp, parseShellRoll(p));
+    };
+    t[sk::hemispherical_head_form::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::hemispherical_head_form::apply(wp, parseHemisphericalHeadForm(p));
+    };
+    t[sk::expand_tube::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::expand_tube::apply(wp, parseExpandTube(p));
+    };
+    t[sk::tube_to_tubesheet_weld::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::tube_to_tubesheet_weld::apply(wp, parseTubeToTubesheetWeld(p));
+    };
+    t[sk::tube_swage::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::tube_swage::apply(wp, parseTubeSwage(p));
+    };
+    // Misc structural connections
+    t[sk::bolted_flange_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::bolted_flange_compound::apply(wp, parseBoltedFlangeCompound(p));
+    };
+    t[sk::pinned_clevis_joint::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::pinned_clevis_joint::apply(wp, parsePinnedClevisJoint(p));
+    };
+    t[sk::expansion_joint_bellows_stub::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::expansion_joint_bellows_stub::apply(wp, parseExpansionJointBellowsStub(p));
+    };
+    t[sk::anchor_pad_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::anchor_pad_compound::apply(wp, parseAnchorPadCompound(p));
+    };
+    t[sk::flange_face_with_gasket_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::flange_face_with_gasket_groove::apply(wp, parseFlangeFaceWithGasketGroove(p));
+    };
+
+    // ── Slice 9: valve / electrical / tooling / machine / hinge ──────────
+    // Valve seats
+    t[sk::gate_valve_seat_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::gate_valve_seat_compound::apply(wp, parseGateValveSeatCompound(p));
+    };
+    t[sk::ball_valve_seat_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::ball_valve_seat_compound::apply(wp, parseBallValveSeatCompound(p));
+    };
+    t[sk::butterfly_valve_disc_seat::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::butterfly_valve_disc_seat::apply(wp, parseButterflyValveDiscSeat(p));
+    };
+    t[sk::check_valve_seat_with_stop::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::check_valve_seat_with_stop::apply(wp, parseCheckValveSeatWithStop(p));
+    };
+    t[sk::needle_valve_seat::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::needle_valve_seat::apply(wp, parseNeedleValveSeat(p));
+    };
+    // Electrical contacts
+    t[sk::banana_socket_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::banana_socket_compound::apply(wp, parseBananaSocketCompound(p));
+    };
+    t[sk::spring_contact_clip::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::spring_contact_clip::apply(wp, parseSpringContactClip(p));
+    };
+    t[sk::terminal_block_post::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::terminal_block_post::apply(wp, parseTerminalBlockPost(p));
+    };
+    t[sk::busbar_lap_joint::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::busbar_lap_joint::apply(wp, parseBusbarLapJoint(p));
+    };
+    t[sk::pcb_card_edge_socket::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::pcb_card_edge_socket::apply(wp, parsePcbCardEdgeSocket(p));
+    };
+    // Tooling / jig
+    t[sk::jig_plate_with_drill_bushings::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::jig_plate_with_drill_bushings::apply(wp, parseJigPlateWithDrillBushings(p));
+    };
+    t[sk::locator_pin_set::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::locator_pin_set::apply(wp, parseLocatorPinSet(p));
+    };
+    t[sk::gauge_block_step::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::gauge_block_step::apply(wp, parseGaugeBlockStep(p));
+    };
+    t[sk::vise_jaw_with_v_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::vise_jaw_with_v_groove::apply(wp, parseViseJawWithVGroove(p));
+    };
+    t[sk::pin_and_diamond_locating_set::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::pin_and_diamond_locating_set::apply(wp, parsePinAndDiamondLocatingSet(p));
+    };
+    // Machine elements
+    t[sk::cam_with_profile::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::cam_with_profile::apply(wp, parseCamWithProfile(p));
+    };
+    t[sk::cam_follower_roller_seat::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::cam_follower_roller_seat::apply(wp, parseCamFollowerRollerSeat(p));
+    };
+    t[sk::eccentric_shaft_collar::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::eccentric_shaft_collar::apply(wp, parseEccentricShaftCollar(p));
+    };
+    t[sk::flywheel_with_balance::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::flywheel_with_balance::apply(wp, parseFlywheelWithBalance(p));
+    };
+    t[sk::governor_arm_with_pivot::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::governor_arm_with_pivot::apply(wp, parseGovernorArmWithPivot(p));
+    };
+    t[sk::spur_gear_with_real_teeth::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::spur_gear_with_real_teeth::apply(wp, parseSpurGearWithRealTeeth(p));
+    };
+    t[sk::helical_gear_teeth::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::helical_gear_teeth::apply(wp, parseHelicalGearTeeth(p));
+    };
+    t[sk::sprocket_with_chain_teeth::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::sprocket_with_chain_teeth::apply(wp, parseSprocketWithChainTeeth(p));
+    };
+    t[sk::spline_shaft_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::spline_shaft_compound::apply(wp, parseSplineShaftCompound(p));
+    };
+    t[sk::ratchet_pawl_set::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::ratchet_pawl_set::apply(wp, parseRatchetPawlSet(p));
+    };
+    // Hinge / latch
+    t[sk::piano_hinge_strip::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::piano_hinge_strip::apply(wp, parsePianoHingeStrip(p));
+    };
+    t[sk::overcenter_latch::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::overcenter_latch::apply(wp, parseOvercenterLatch(p));
+    };
+    t[sk::snap_action_lock_pocket::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::snap_action_lock_pocket::apply(wp, parseSnapActionLockPocket(p));
+    };
+    t[sk::gas_strut_hinge_compound::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::gas_strut_hinge_compound::apply(wp, parseGasStrutHingeCompound(p));
+    };
+    t[sk::spring_loaded_door_latch::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::spring_loaded_door_latch::apply(wp, parseSpringLoadedDoorLatch(p));
+    };
+    t[sk::cam_lock_cavity::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::cam_lock_cavity::apply(wp, parseCamLockCavity(p));
     };
 
     return t;

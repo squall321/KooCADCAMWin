@@ -328,6 +328,20 @@ bool parallelAxis(const gp_Ax1& a, const gp_Ax1& b)
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
+
+    // Metadata replay first — highest confidence.  Other path may also
+    // produce candidates; this gives a guaranteed exact answer when history
+    // is available.
+    for (const auto& f : wp.features()) {
+        if (f.skill_id != kSkillId) continue;
+        RecognizedFeature rf;
+        rf.skill_id = kSkillId;
+        rf.recovered_params = f.params;
+        rf.confidence = 1.0;
+        rf.matched_geometry = { { "via", "metadata_replay" } };
+        out.push_back(rf);
+    }
+
     const auto cyls = collectCylinders(wp);
     if (cyls.size() < 5) return out;  // central bore + ≥4 bolt holes minimum
 
@@ -421,25 +435,6 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "via",            "geometric_primary" },
         };
         out.push_back(RecognizedFeature{ kSkillId, recovered, conf, matched });
-    }
-
-    // Metadata fallback: replay from any FeatureSignature with kSkillId in
-    // the workpiece's feature history.
-    for (const auto& f : wp.features()) {
-        if (f.skill_id != kSkillId) continue;
-        // Only emit a replay candidate if no geometric one already covered it.
-        bool already = false;
-        for (const auto& r : out) {
-            if (r.recovered_params.value("bolt_count", 0) ==
-                f.params.value("bolt_count", -1)) { already = true; break; }
-        }
-        if (already) continue;
-        RecognizedFeature rf;
-        rf.skill_id = kSkillId;
-        rf.recovered_params = f.params;
-        rf.confidence = 1.0;
-        rf.matched_geometry = { { "via", "metadata_replay" } };
-        out.push_back(rf);
     }
 
     return out;

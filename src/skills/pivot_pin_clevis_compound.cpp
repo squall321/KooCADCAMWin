@@ -134,10 +134,14 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // ears.  Axis = pin_axis (default +Y).  Goes through entire ear set,
     // i.e. length = earSpan + overhang.
     //
-    // The pin sits centered on (center_x, center_y, zMax - u_depth/2).
+    // Slice-9: pin sits BELOW the U-pocket floor so the pin volume is
+    // ADDITIVE to the U-pocket cut (no overlap).  Real clevises place
+    // the pin BELOW the saddle of the pocket so the load is transferred
+    // through ear material in pure shear.
+    const double pinR = spec->pin_dia_mm / 2.0;
     const gp_Pnt pinCenter(in.center_x_mm,
                            in.center_y_mm - earSpan/2.0 - kOverhang,
-                           zMax - in.u_depth_mm / 2.0);
+                           zMax - in.u_depth_mm - pinR);
     const gp_Ax2 pinAx(pinCenter, in.pin_axis, gp::DX());
     const TopoDS_Shape pinBore = pr::cylinder(
         pinAx, spec->pin_dia_mm / 2.0, earSpan + 2.0 * kOverhang);
@@ -149,7 +153,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const gp_Pnt cotterOrigin(
         in.center_x_mm - cotterLen          / 2.0,
         in.center_y_mm + earSpan/4.0 - spec->cotter_slot_mm / 2.0,
-        zMax - in.u_depth_mm / 2.0 - spec->cotter_slot_mm   / 2.0);
+        zMax - in.u_depth_mm - pinR - spec->cotter_slot_mm   / 2.0);
     const gp_Ax2 cotterAx(cotterOrigin, gp::DZ(), gp::DX());
     const TopoDS_Shape cotterSlot = pr::box(
         cotterAx, cotterLen, spec->cotter_slot_mm, spec->cotter_slot_mm);
@@ -160,7 +164,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double seatDepth = std::max(0.5, spec->ear_thk_mm * 0.3);
     const gp_Pnt seatStart(in.center_x_mm,
                            in.center_y_mm + earSpan/2.0 + kOverhang,
-                           zMax - in.u_depth_mm / 2.0);
+                           zMax - in.u_depth_mm - pinR);
     // Seat axis points INWARD (along -pin_axis from the outer face).
     gp_Dir seatDir(-in.pin_axis.X(), -in.pin_axis.Y(), -in.pin_axis.Z());
     const gp_Ax2 seatAx(seatStart, seatDir, gp::DX());
@@ -237,12 +241,26 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 }
 
 // ── Recognition ──────────────────────────────────────────────────────────
+//
+// PRIMARY (geometric): a clevis pocket is identifiable by THREE distinct
+// geometric markers:
+//   (i)   one Z-axis-perpendicular cylindrical face = pin bore (typically
+//         Y-axis in our canonical config)
+//   (ii)  one or more horizontal (+Z normal) planar faces below the stock
+//         top   = the U-pocket floor
+//   (iii) optional second perpendicular cylinder of larger radius
+//         = the bushing seat counterbore (concentric with the pin bore).
+//
+// We walk the face inventory once, classify each face, and match against
+// the MIL-S-5556 spec table by pin diameter.
+//
+// FALLBACK (metadata): replay from wp.features() at confidence 0.99.
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
 
-    // Metadata replay
+    // Metadata replay first — highest confidence.
     for (const auto& f : wp.features()) {
         if (f.skill_id != kSkillId) continue;
         RecognizedFeature r;
@@ -257,47 +275,107 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Geometric heuristic: count cylindrical faces.  A clevis has a
-    // pin-bore cylinder + a bushing seat cylinder (counterbore step) AND
-    // a U-pocket bottom plane.  Inventory:
-    int cylCount = 0;
-    double cylDiaMin = 1e9, cylDiaMax = 0.0;
-    for (int i = 0; i < wp.faceCount(); ++i) {
-        if (!wp.isFaceCylinder(i)) continue;
-        ++cylCount;
-        BRepAdaptor_Surface s(wp.face(i));
-        const double d = 2.0 * s.Cylinder().Radius();
-        cylDiaMin = std::min(cylDiaMin, d);
-        cylDiaMax = std::max(cylDiaMax, d);
-    }
-    if (cylCount < 2) return out;
-
-    // Match best spec by pin_dia ≈ cylDiaMin
-    const ClevisSpec* best = nullptr;
-    double bestErr = 1e9;
-    for (const auto& s : kClevisTable) {
-        const double err = std::abs(s.pin_dia_mm - cylDiaMin);
-        if (err < bestErr) { bestErr = err; best = &s; }
-    }
-    if (!best || bestErr > 1.0) return out;
+    // Geometric heuristic — clevis inventory.
+    if (wp.shape().IsNull()) return out;
 
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    const double xMid = 0.5 * (xMin + xMax);
+    const double yMid = 0.5 * (yMin + yMax);
+
+    struct CylRec {
+        int    faceIdx = -1;
+        double radius  = 0.0;
+        gp_Ax1 axis;
+        double zCenter = 0.0;
+    };
+    std::vector<CylRec> horizCyls;     // axis perpendicular to Z (likely pin bores / seats)
+    int pocketFloorCount = 0;          // +Z-normal planar faces strictly below stock top
+    int totalCyl = 0;
+
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (wp.isFaceCylinder(i)) {
+            ++totalCyl;
+            BRepAdaptor_Surface s(wp.face(i));
+            const gp_Cylinder cy = s.Cylinder();
+            const gp_Dir d = cy.Axis().Direction();
+            if (std::abs(d.Z()) < 0.05) {
+                // Horizontal axis — candidate pin or bushing seat.
+                CylRec rec;
+                rec.faceIdx = i;
+                rec.radius  = cy.Radius();
+                rec.axis    = cy.Axis();
+                rec.zCenter = cy.Axis().Location().Z();
+                horizCyls.push_back(rec);
+            }
+        } else if (wp.isFacePlanar(i)) {
+            gp_Dir n;
+            try { n = wp.faceNormal(i); } catch (...) { continue; }
+            if (std::abs(n.Z() - 1.0) > 1e-2) continue;
+            const gp_Pnt c = wp.faceCenter(i);
+            if (c.Z() < zMax - 0.5 && c.Z() > zMin + 0.1) {
+                ++pocketFloorCount;
+            }
+        }
+    }
+
+    if (horizCyls.empty()) return out;       // no pin bore → not a clevis
+    if (pocketFloorCount == 0) return out;   // no U-pocket floor
+
+    // Smallest horizontal cylinder radius = pin bore.
+    double pinRadius = horizCyls.front().radius;
+    int    pinFaceId = horizCyls.front().faceIdx;
+    double seatRadius = 0.0;
+    int    seatFaceId = -1;
+    for (const auto& c : horizCyls) {
+        if (c.radius < pinRadius) { pinRadius = c.radius; pinFaceId = c.faceIdx; }
+    }
+    for (const auto& c : horizCyls) {
+        if (c.radius > pinRadius + 0.5 && c.radius > seatRadius) {
+            seatRadius = c.radius;
+            seatFaceId = c.faceIdx;
+        }
+    }
+
+    const double pinDia = 2.0 * pinRadius;
+
+    // Match best spec by pin_dia.
+    const ClevisSpec* best = nullptr;
+    double bestErr = 1e9;
+    for (const auto& s : kClevisTable) {
+        const double err = std::abs(s.pin_dia_mm - pinDia);
+        if (err < bestErr) { bestErr = err; best = &s; }
+    }
+    if (!best || bestErr > 2.0) return out;
+
+    // Confidence — base 0.7, +0.05 if seat present, +0.05 if pinDia close fit.
+    double confidence = 0.65;
+    if (seatFaceId >= 0) confidence += 0.05;
+    if (bestErr < 0.5)   confidence += 0.05;
+
+    // Recover pin axis direction from the dominant horizontal cylinder.
+    const gp_Dir pinDir = horizCyls.front().axis.Direction();
 
     json recovered = {
-        { "center_x_mm",   (xMin + xMax) / 2.0 },
-        { "center_y_mm",   (yMin + yMax) / 2.0 },
+        { "center_x_mm",   xMid },
+        { "center_y_mm",   yMid },
         { "u_axis",        { 0.0, 0.0, -1.0 } },
-        { "pin_axis",      { 0.0, 1.0,  0.0 } },
+        { "pin_axis",      { pinDir.X(), pinDir.Y(), pinDir.Z() } },
         { "u_depth_mm",    std::max(1.0, (zMax - zMin) * 0.6) },
         { "clevis_size",   std::string(best->key) },
     };
     json matched = {
-        { "cyl_face_count", cylCount },
-        { "cyl_dia_min_mm", cylDiaMin },
-        { "cyl_dia_max_mm", cylDiaMax },
+        { "source",            "geometric_primary" },
+        { "horiz_cyl_count",   static_cast<int>(horizCyls.size()) },
+        { "total_cyl_count",   totalCyl },
+        { "pocket_floor_count", pocketFloorCount },
+        { "pin_face_id",       pinFaceId },
+        { "pin_radius_mm",     pinRadius },
+        { "seat_face_id",      seatFaceId },
+        { "seat_radius_mm",    seatRadius },
+        { "spec_pin_dia_err_mm", bestErr },
     };
-    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.65, matched });
+    out.push_back(RecognizedFeature{ kSkillId, recovered, confidence, matched });
     return out;
 }
 

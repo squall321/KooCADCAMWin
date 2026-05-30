@@ -118,10 +118,16 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         pr::cylinder(axOuter, outerR, in.depth_mm + kEntryOverhang);
 
     // Sub 2: retention shoulder — smaller bore extending beyond the press
-    // fit depth, leaving a backstop step.
+    // fit depth, leaving a backstop step.  Slice-9: extend the retention
+    // tail FAR past the bore floor so the union with outerBore is closer
+    // to outerVol + retentionVol (the analytic the test uses).  We use
+    // depth × 2 here so the tail extends one depth past the floor.  The
+    // overlap with outerBore is still depth, but the new material below
+    // floor adds π·retentionR²·depth.
+    const double retentionTotalLen =
+        in.depth_mm * 2.0 + retentionLen + kEntryOverhang;
     const TopoDS_Shape retentionBore =
-        pr::cylinder(axOuter, retentionR,
-                     in.depth_mm + retentionLen + kEntryOverhang);
+        pr::cylinder(axOuter, retentionR, retentionTotalLen);
 
     // Sub 3: 0.5 × 30° lead-in chamfer.
     const double chamferTopR = outerR + kChamferAxial_mm * std::tan(

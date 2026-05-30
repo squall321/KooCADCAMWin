@@ -23,6 +23,7 @@
 #include "adapt/EditOp.hpp"
 #include "adapt/LlmBridge.hpp"
 
+#include <cstdlib>   // _putenv_s, _dupenv_s, std::free, ::unsetenv
 #include <string>
 
 using namespace koocadcam;
@@ -162,4 +163,82 @@ TEST(LayerFiveLlmBridge, FallbackPathInvoked)
 
     // No real LLM was called, so token_count should be zero.
     EXPECT_EQ(resp.token_count, 0);
+}
+
+// ── 5. MockFallbackWhenNoApiKey ──────────────────────────────────────────
+//
+// sendPrompt() must NEVER touch the network when ANTHROPIC_API_KEY is
+// unset (CI / offline guarantee).  It returns a deterministic string
+// starting with the literal marker "[mock]" so callers/tests can detect
+// "no real LLM was called".
+//
+// We explicitly unset the env var here in case the developer running
+// this test has one in their shell.  This keeps the test reproducible
+// across machines.
+TEST(LlmBridge, MockFallbackWhenNoApiKey)
+{
+    // Unset the key for this test scope.  Restore-on-exit not strictly
+    // necessary — gtest runs each TEST in process scope, but other tests
+    // in this binary do not depend on the env var.
+#if defined(_WIN32)
+    ::_putenv_s("ANTHROPIC_API_KEY", "");
+#else
+    ::unsetenv("ANTHROPIC_API_KEY");
+#endif
+
+    const std::string reply =
+        adapt::LlmBridge::sendPrompt("hello, are you online?");
+
+    // The mock string format is part of the public contract — callers
+    // (and Tests in other binaries) rely on the "[mock]" prefix to
+    // recognize the offline branch.
+    EXPECT_FALSE(reply.empty());
+    EXPECT_EQ(reply.rfind("[mock]", 0), 0u)
+        << "without API key, sendPrompt() must return a string starting "
+           "with the literal marker '[mock]'; got: " << reply;
+}
+
+// ── 6. RealHttpCallWhenApiKeySet (DISABLED) ─────────────────────────────
+//
+// Gated DISABLED because CI cannot ship a real API key.  Documents the
+// real-call path: when ANTHROPIC_API_KEY is set and the network is
+// reachable, sendPrompt() POSTs to https://api.anthropic.com/v1/messages
+// and returns the model's text reply.  The reply should NOT begin with
+// the "[mock]" marker.
+//
+// To run locally:
+//   $env:ANTHROPIC_API_KEY = "<your key>"
+//   .\build\tests\Debug\llm_bridge_test.exe --gtest_also_run_disabled_tests
+TEST(LlmBridge, DISABLED_RealHttpCallWhenApiKeySet)
+{
+#if defined(_WIN32)
+    // Read the developer's real key from the environment — we will NOT
+    // set one for them; if it's missing the test deliberately fails.
+    char* buf = nullptr;
+    size_t len = 0;
+    const bool present =
+        (_dupenv_s(&buf, &len, "ANTHROPIC_API_KEY") == 0
+         && buf != nullptr && std::string(buf).size() > 0);
+    if (buf) std::free(buf);
+    ASSERT_TRUE(present)
+        << "DISABLED_RealHttpCallWhenApiKeySet requires a real "
+           "ANTHROPIC_API_KEY in the environment.  Set it and re-run "
+           "with --gtest_also_run_disabled_tests.";
+#else
+    GTEST_SKIP() << "real HTTP path is Windows-only (WinHTTP).";
+#endif
+
+    adapt::LlmConfig cfg;
+    cfg.provider = "anthropic";
+    cfg.model    = "claude-sonnet-4-6";
+    cfg.api_key_env_var = "ANTHROPIC_API_KEY";
+
+    const std::string reply = adapt::LlmBridge::sendPrompt(
+        "Reply with the single word OK.", cfg);
+
+    EXPECT_FALSE(reply.empty());
+    // A real model reply must NOT carry the offline marker.
+    EXPECT_NE(reply.rfind("[mock]", 0), 0u)
+        << "real LLM call must not return the mock-fallback string; "
+           "got: " << reply;
 }

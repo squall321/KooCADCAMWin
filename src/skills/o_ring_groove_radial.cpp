@@ -6,8 +6,15 @@
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
 #include <gp.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pnt.hxx>
 
 #include <nlohmann/json.hpp>
@@ -16,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -162,24 +170,25 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double draftH   = std::min(0.5, width_W * 0.15);
     const double draftRad = draftH * std::tan(draftAng);
 
-    // Upper draft: cone frustum r1 (bottom) = grooveR, r2 (top) = grooveR + draftRad
+    // Upper / lower side-draft chamfer.  Slice-9: original code passed both
+    // outer radii equal to (shaftR + overhang), triggering OCCT's
+    // "cone with two identic radii" error.  Since outer is constant, this
+    // is really a cylindrical annular ring — use annularRing.
     const double zUpDraft = in.position_z_mm + width_W / 2.0 - draftH;
     const gp_Ax2 axUp(gp_Pnt(0.0, 0.0, zUpDraft), gp::DZ());
-    const TopoDS_Shape upperDraft = pr::annularConeRing(
+    const TopoDS_Shape upperDraft = pr::annularRing(
         axUp,
-        /*outerR1Bottom=*/ shaftR + overhangR,
-        /*outerR2Top  =*/ shaftR + overhangR,
-        /*innerR      =*/ grooveR + draftRad,
-        /*height      =*/ draftH);
+        /*outerR=*/ shaftR + overhangR,
+        /*innerR=*/ grooveR + draftRad,
+        /*height=*/ draftH);
 
     const double zDnDraft = in.position_z_mm - width_W / 2.0;
     const gp_Ax2 axDn(gp_Pnt(0.0, 0.0, zDnDraft), gp::DZ());
-    const TopoDS_Shape lowerDraft = pr::annularConeRing(
+    const TopoDS_Shape lowerDraft = pr::annularRing(
         axDn,
-        /*outerR1Bottom=*/ shaftR + overhangR,
-        /*outerR2Top  =*/ shaftR + overhangR,
-        /*innerR      =*/ grooveR + draftRad,
-        /*height      =*/ draftH);
+        /*outerR=*/ shaftR + overhangR,
+        /*innerR=*/ grooveR + draftRad,
+        /*height=*/ draftH);
 
     // ── Fuse all sub-feature cutters then single boolean cut ────────────
     //
@@ -248,14 +257,140 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition ──────────────────────────────────────────────────────────
+// ── Recognition: metadata replay + geometric fallback ────────────────────
 //
-// Compound features are hard to fingerprint from raw geometry alone (the
-// 3 sub-features fuse into one annular cavity that looks topologically
-// similar to a plain groove + a few extra bevel faces).  We rely on
-// METADATA REPLAY: if the workpiece's feature history contains an
-// o_ring_groove_radial signature, report it with confidence 1.0.  No
-// geometric inference is attempted for slice-1.
+// Geometric signature of a radial O-ring groove on a shaft:
+//   - TWO coaxial cylindrical faces sharing the same axis line:
+//       * "shaft" cylinder (larger radius = bore_or_shaft_dia/2);
+//       * "groove bottom" cylinder (smaller radius = shaft_r − G);
+//   - the GROOVE BOTTOM cylinder has narrow axial extent (≈ groove width
+//     W) compared to the shaft cylinder which extends past the groove;
+//   - axial position of the groove center matches position_z_mm.
+// Cone sidewalls (5° draft) are tolerated but not required.
+
+namespace {
+
+struct CylInfo {
+    int    faceIdx;
+    gp_Ax1 axis;
+    double radius;
+    double axialMin;
+    double axialMax;
+    gp_Pnt midPnt;
+};
+
+bool axesColinear(const gp_Ax1& a, const gp_Ax1& b,
+                  double angTolDeg = 0.5, double posTolMm = 0.05)
+{
+    const gp_Dir da = a.Direction(), db = b.Direction();
+    const double dot = std::abs(da.X()*db.X() + da.Y()*db.Y() + da.Z()*db.Z());
+    if (dot < std::cos(angTolDeg * M_PI / 180.0)) return false;
+    gp_Vec v(a.Location(), b.Location());
+    gp_Vec axV(da.X(), da.Y(), da.Z());
+    gp_Vec perp = v - axV * v.Dot(axV);
+    return perp.Magnitude() < posTolMm;
+}
+
+std::vector<CylInfo> collectCyls(const Workpiece& wp)
+{
+    std::vector<CylInfo> out;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface surf(wp.face(i));
+        const gp_Cylinder cyl = surf.Cylinder();
+        CylInfo info;
+        info.faceIdx = i;
+        info.axis    = cyl.Axis();
+        info.radius  = cyl.Radius();
+        double aMin = std::numeric_limits<double>::max();
+        double aMax = std::numeric_limits<double>::lowest();
+        const gp_Dir adir = info.axis.Direction();
+        const gp_Pnt aOrg = info.axis.Location();
+        bool any = false;
+        for (TopExp_Explorer exp(wp.face(i), TopAbs_EDGE); exp.More(); exp.Next()) {
+            BRepAdaptor_Curve crv(TopoDS::Edge(exp.Current()));
+            if (crv.GetType() != GeomAbs_Circle) continue;
+            const gp_Circ c = crv.Circle();
+            if (std::abs(std::abs(c.Axis().Direction().Dot(adir)) - 1.0) > 1e-3)
+                continue;
+            const gp_Pnt p = c.Location();
+            const double proj = (p.X()-aOrg.X())*adir.X()
+                              + (p.Y()-aOrg.Y())*adir.Y()
+                              + (p.Z()-aOrg.Z())*adir.Z();
+            aMin = std::min(aMin, proj);
+            aMax = std::max(aMax, proj);
+            any  = true;
+        }
+        if (!any) continue;
+        info.axialMin = aMin;
+        info.axialMax = aMax;
+        info.midPnt = gp_Pnt(
+            aOrg.X() + adir.X() * (aMin + aMax) * 0.5,
+            aOrg.Y() + adir.Y() * (aMin + aMax) * 0.5,
+            aOrg.Z() + adir.Z() * (aMin + aMax) * 0.5);
+        out.push_back(info);
+    }
+    return out;
+}
+
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    const auto cyls = collectCyls(wp);
+    if (cyls.size() < 2) return out;
+
+    for (size_t i = 0; i < cyls.size(); ++i) {
+        for (size_t j = 0; j < cyls.size(); ++j) {
+            if (i == j) continue;
+            const CylInfo& shaft  = cyls[i];     // larger radius
+            const CylInfo& bottom = cyls[j];     // smaller radius
+            if (!axesColinear(shaft.axis, bottom.axis)) continue;
+            if (bottom.radius + 0.05 >= shaft.radius) continue;
+            const double depth = shaft.radius - bottom.radius;
+            if (depth < 0.5 || depth > 8.0) continue;     // AS568 CS range
+            const double widthB = bottom.axialMax - bottom.axialMin;
+            const double widthS = shaft.axialMax - shaft.axialMin;
+            if (widthB < 0.5 || widthB > 12.0) continue;
+            if (widthS < widthB * 1.5) continue;          // shaft extends past groove
+            // Reject if 1mm wall rule is broken (bottom radius too small).
+            if (bottom.radius < 1.0) continue;
+            // AS568 nominal: G ≈ 0.74·CS → CS ≈ G / 0.74; pick best dash.
+            const double csEst = depth / 0.74;
+            std::string bestSize = "-110";
+            double bestErr = std::numeric_limits<double>::max();
+            for (const auto& e : kAS568Table) {
+                const double err = std::abs(e.cs_mm - csEst);
+                if (err < bestErr) { bestErr = err; bestSize = e.dash; }
+            }
+            if (bestErr > 1.0) continue;
+
+            const gp_Dir adir = shaft.axis.Direction();
+            const gp_Pnt mid  = bottom.midPnt;
+            const double position_z =
+                std::abs(adir.Z()) > 0.5 ? mid.Z() :
+                std::abs(adir.Y()) > 0.5 ? mid.Y() : mid.X();
+
+            json recovered = {
+                { "bore_or_shaft_dia_mm", 2.0 * shaft.radius },
+                { "position_z_mm",        position_z },
+                { "o_ring_size",          bestSize },
+            };
+            json matched = {
+                { "source",               "geometric_fallback" },
+                { "shaft_face_id",        shaft.faceIdx },
+                { "groove_bottom_face_id", bottom.faceIdx },
+                { "groove_depth_mm",      depth },
+                { "groove_width_mm",      widthB },
+                { "as568_match_err",      bestErr },
+            };
+            out.push_back(RecognizedFeature{ kSkillId, recovered, 0.55, matched });
+            return out;
+        }
+    }
+    return out;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -271,6 +406,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "pattern", feat.pattern },
         };
         out.push_back(r);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

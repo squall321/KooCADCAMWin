@@ -8,11 +8,13 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <gp.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -261,48 +263,106 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Geometric: 2 coaxial flow-axis cylinders of different dia + 1 conical
-    // face between them.
-    std::vector<int> flowCyls;
-    std::vector<double> flowRs;
-    int coneFace = -1;
-    double coneAngleDeg = 0.0;
+    // Geometric: require COAXIAL flow-axis chain:
+    //     inlet cylinder (larger R)  →  conical seat  →  outlet cylinder
+    //   (smaller R), all sharing the same axis line within tolerance.
+    // Plus optional disc-stop boss (a smaller cylinder INSIDE the inlet bore
+    // whose axis is offset from the main bore axis — its presence raises
+    // confidence but is not required for a base match).
+    struct FlowCyl { int idx; double radius; gp_Ax1 axis; gp_Pnt center; };
+    struct FlowCone { int idx; double semiDeg; gp_Ax1 axis; gp_Pnt apex; double rMin, rMax; };
+    std::vector<FlowCyl>  cyls;
+    std::vector<FlowCone> cones;
+
     for (int i = 0; i < wp.faceCount(); ++i) {
         BRepAdaptor_Surface s(wp.face(i));
         if (s.GetType() == GeomAbs_Cylinder) {
-            const gp_Cylinder cyl = s.Cylinder();
-            const gp_Dir ad = cyl.Axis().Direction();
-            if (std::abs(std::abs(ad.X()) - 1.0) < 1e-2) {
-                flowCyls.push_back(i);
-                flowRs.push_back(cyl.Radius());
+            const gp_Cylinder cy = s.Cylinder();
+            const gp_Dir ad = cy.Axis().Direction();
+            if (std::abs(std::abs(ad.X()) - 1.0) < 5e-2) {
+                cyls.push_back({ i, cy.Radius(), cy.Axis(), wp.faceCenter(i) });
             }
         } else if (s.GetType() == GeomAbs_Cone) {
             const gp_Cone c = s.Cone();
             const gp_Dir ad = c.Axis().Direction();
-            if (std::abs(std::abs(ad.X()) - 1.0) < 1e-2) {
-                coneFace     = i;
-                coneAngleDeg = std::abs(c.SemiAngle()) * 180.0 / M_PI;
+            if (std::abs(std::abs(ad.X()) - 1.0) < 5e-2) {
+                cones.push_back({ i,
+                                  std::abs(c.SemiAngle()) * 180.0 / M_PI,
+                                  c.Axis(), c.Apex(),
+                                  c.RefRadius(), c.RefRadius() });
             }
         }
     }
-    if (flowCyls.size() < 2 || coneFace < 0) return out;
+    if (cyls.size() < 2 || cones.empty()) return out;
 
-    const double rMax = *std::max_element(flowRs.begin(), flowRs.end());
-    const double rMin = *std::min_element(flowRs.begin(), flowRs.end());
-    if (std::abs(rMax - rMin) < 1e-3) return out;  // need different radii
+    // Pick the largest cone (the seat shoulder).  Define the "main" flow
+    // axis = cone axis.  Then require ≥2 cyls coaxial with that axis.
+    auto bestCone = std::max_element(
+        cones.begin(), cones.end(),
+        [](const FlowCone& a, const FlowCone& b){
+            return std::abs(a.semiDeg) < std::abs(b.semiDeg);
+        });
+    const gp_Ax1 mainAxis = bestCone->axis;
+
+    auto distToLine = [&](const gp_Pnt& p) {
+        const gp_Vec v(mainAxis.Location(), p);
+        const gp_Vec d(mainAxis.Direction());
+        const gp_Vec proj = d * v.Dot(d);
+        return (v - proj).Magnitude();
+    };
+
+    std::vector<FlowCyl> coaxCyls;
+    for (const auto& c : cyls) {
+        if (distToLine(c.center) < c.radius + 1.0) coaxCyls.push_back(c);
+    }
+    if (coaxCyls.size() < 2) return out;
+
+    // Sort coaxial cylinders by X to identify inlet (left) vs outlet (right).
+    std::sort(coaxCyls.begin(), coaxCyls.end(),
+              [](const FlowCyl& a, const FlowCyl& b){
+                  return a.center.X() < b.center.X();
+              });
+    const double rInlet  = coaxCyls.front().radius;
+    const double rOutlet = coaxCyls.back().radius;
+    if (std::abs(rInlet - rOutlet) < 1e-3) return out;
+    const double rMax = std::max(rInlet, rOutlet);
+    const double rMin = std::min(rInlet, rOutlet);
+
+    // Disc-stop search: a flow-axis cylinder whose axis is OFFSET from the
+    // main bore axis (but still inside the bore radius).  Distinct from
+    // inlet/outlet because its axis doesn't pass through the bore center.
+    int discStopIdx = -1;
+    for (const auto& c : cyls) {
+        const double d = distToLine(c.center);
+        if (d > rMax * 0.2 && d < rMax * 0.95 && c.radius < rMax * 0.6) {
+            discStopIdx = c.idx; break;
+        }
+    }
+
+    const double coneAngleDeg = std::abs(bestCone->semiDeg);
+    int subScore = 0;
+    if (coaxCyls.size() >= 2)  ++subScore;
+    if (true)                   ++subScore;       // cone seat
+    if (discStopIdx >= 0)      ++subScore;
+    const double confidence = std::min(0.88, 0.6 + 0.09 * subScore);
 
     json recovered = {
         { "inlet_dia_mm",   2.0 * rMax },
         { "outlet_dia_mm",  2.0 * rMin },
         { "seat_angle_deg", coneAngleDeg > 0.0 ? coneAngleDeg : 45.0 },
+        { "center_x_mm",    mainAxis.Location().X() },
+        { "center_y_mm",    mainAxis.Location().Y() },
+        { "center_z_mm",    mainAxis.Location().Z() },
         { "flow_axis",      { 1.0, 0.0, 0.0 } },
     };
     json matched = {
-        { "flow_cyl_count", static_cast<int>(flowCyls.size()) },
-        { "cone_face_id",   coneFace },
-        { "source",         "geometric" },
+        { "coaxial_cyl_count", static_cast<int>(coaxCyls.size()) },
+        { "cone_face_id",      bestCone->idx },
+        { "disc_stop_face_id", discStopIdx },
+        { "subfeature_score",  subScore },
+        { "source",            "geometric" },
     };
-    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.7, matched });
+    out.push_back(RecognizedFeature{ kSkillId, recovered, confidence, matched });
     return out;
 }
 

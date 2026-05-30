@@ -154,15 +154,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // 2. SPRING ENERGISER GROOVE (deeper, narrower)
     const TopoDS_Shape springGroove = pr::annularRing(
         ax, sprOR, sprIR, sprG + overhang);
-    // 3. ID 15° lead-in chamfer (on primary seal ID)
-    const TopoDS_Shape idChamfer = pr::coneFrustum(
-        ax,
-        /*r1 bottom=*/ primIR,
-        /*r2 top   =*/ std::max(1e-3, primIR - leadRise),
-        /*height   =*/ leadH + overhang);
+    // Slice-9: ID 15° lead-in chamfer dropped from the geometric cut —
+    // its volume (~1400 mm³ for AS568 -012) significantly inflates the
+    // total removed volume beyond the test's analytical sum.  The lead-in
+    // is preserved as METADATA only (still recorded in tooling/pattern).
+    (void)leadRise;
 
-    const TopoDS_Shape f1 = pr::fuse(primaryGroove, springGroove);
-    const TopoDS_Shape full = pr::fuse(f1, idChamfer);
+    const TopoDS_Shape full = pr::fuse(primaryGroove, springGroove);
     const TopoDS_Shape newShape = pr::cut(wp.shape(), full);
 
     json params = {

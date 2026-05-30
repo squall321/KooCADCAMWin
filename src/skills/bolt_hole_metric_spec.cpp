@@ -10,7 +10,13 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -299,6 +305,28 @@ struct CylInfo
     gp_Pnt entryCenter;
 };
 
+struct ConeInfo
+{
+    int    faceIdx = -1;
+    gp_Ax1 axis;
+    double rSmall = 0.0;
+    double rLarge = 0.0;
+    double semiAngleRad = 0.0;
+    gp_Pnt cLarge;
+};
+
+bool sameAxisInfinite(const gp_Ax1& a, const gp_Ax1& b,
+                      double angTolDeg = 0.5, double posTolMm = 0.05)
+{
+    const gp_Dir da = a.Direction(), db = b.Direction();
+    const double dot = std::abs(da.X()*db.X() + da.Y()*db.Y() + da.Z()*db.Z());
+    if (dot < std::cos(angTolDeg * M_PI / 180.0)) return false;
+    gp_Vec v(a.Location(), b.Location());
+    gp_Vec axV(da.X(), da.Y(), da.Z());
+    gp_Vec perp = v - axV * v.Dot(axV);
+    return perp.Magnitude() < posTolMm;
+}
+
 std::vector<CylInfo> collectCylinders(const Workpiece& wp)
 {
     std::vector<CylInfo> out;
@@ -338,6 +366,40 @@ std::vector<CylInfo> collectCylinders(const Workpiece& wp)
     return out;
 }
 
+std::vector<ConeInfo> collectCones(const Workpiece& wp)
+{
+    std::vector<ConeInfo> out;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        BRepAdaptor_Surface surf(wp.face(i));
+        if (surf.GetType() != GeomAbs_Cone) continue;
+        const gp_Cone cn = surf.Cone();
+        ConeInfo d;
+        d.faceIdx = i;
+        d.axis    = cn.Axis();
+        d.semiAngleRad = std::abs(cn.SemiAngle());
+        std::vector<std::pair<double, gp_Pnt>> circs;
+        for (TopExp_Explorer exp(wp.face(i), TopAbs_EDGE); exp.More(); exp.Next()) {
+            BRepAdaptor_Curve crv(TopoDS::Edge(exp.Current()));
+            if (crv.GetType() != GeomAbs_Circle) continue;
+            const gp_Circ c = crv.Circle();
+            if (std::abs(std::abs(c.Axis().Direction().Dot(d.axis.Direction())) - 1.0) > 1e-3)
+                continue;
+            circs.emplace_back(c.Radius(), c.Location());
+        }
+        if (circs.size() < 2) continue;
+        auto mn = std::min_element(circs.begin(), circs.end(),
+            [](const auto& a, const auto& b){ return a.first < b.first; });
+        auto mx = std::max_element(circs.begin(), circs.end(),
+            [](const auto& a, const auto& b){ return a.first < b.first; });
+        if (std::abs(mx->first - mn->first) < 0.05) continue;
+        d.rSmall = mn->first;
+        d.rLarge = mx->first;
+        d.cLarge = mx->second;
+        out.push_back(d);
+    }
+    return out;
+}
+
 }  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
@@ -356,29 +418,60 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Pass 2: geometric heuristic — match cylinder dia to ISO 273.
-    const auto cyls = collectCylinders(wp);
+    // Pass 2: geometric fallback — match cylinder dia to ISO 273; if a
+    // coaxial conical face is present at the cyl entry, recover the chamfer
+    // (leg, angle) directly from the cone semi-angle and radius pair.
+    const auto cyls  = collectCylinders(wp);
+    const auto cones = collectCones(wp);
     for (const auto& c : cyls) {
         const double dia = 2.0 * c.radius;
         const ReverseMatch m = closestSpecMatch(dia, 0.15);
         if (m.size.empty()) continue;
 
+        // Find a coaxial chamfer cone whose small radius matches the cyl.
+        double chamfer_leg = 0.5;
+        double chamfer_angle_deg = 30.0;
+        int    cone_face_id = -1;
+        bool   chamfer_found = false;
+        for (const auto& cn : cones) {
+            if (!sameAxisInfinite(c.axis, cn.axis)) continue;
+            if (std::abs(cn.rSmall - c.radius) > 0.2) continue;
+            chamfer_leg       = std::max(0.0, cn.rLarge - cn.rSmall);
+            chamfer_angle_deg = 90.0 - cn.semiAngleRad * 180.0 / M_PI;
+            if (chamfer_angle_deg < 15.0 || chamfer_angle_deg > 75.0) continue;
+            cone_face_id      = cn.faceIdx;
+            chamfer_found     = true;
+            break;
+        }
+
         const gp_Dir adir = c.axis.Direction();
+        // Back-mapped spec-table key: "<size>-<fit>" e.g. "M6-medium".
+        const std::string specKeyTable = m.size + std::string("-") + m.fit;
         json params = {
             { "position_x_mm",     c.entryCenter.X() },
             { "position_y_mm",     c.entryCenter.Y() },
             { "axis_dir",          { adir.X(), adir.Y(), adir.Z() } },
             { "thread_size",       m.size },
             { "fit_class",         m.fit },
-            { "chamfer_size_mm",   0.5 },
-            { "chamfer_angle_deg", 30.0 },
+            { "spec_key_table",    specKeyTable },
+            { "chamfer_size_mm",   chamfer_leg },
+            { "chamfer_angle_deg", chamfer_angle_deg },
             { "clearance_dia_mm",  dia },
+            { "fit_match_err_mm",  m.err },
         };
-        const double conf = 0.78 - std::min(0.2, m.err);
-        out.push_back(RecognizedFeature{
-            kSkillId, params, conf,
-            { { "cyl_face_id", c.faceIdx }, { "iso", "ISO 273" } }
-        });
+        // Confidence higher when chamfer cone was geometrically matched.
+        const double base = chamfer_found ? 0.78 : 0.65;
+        const double conf = base - std::min(0.2, m.err);
+        json matched = {
+            { "cyl_face_id",     c.faceIdx },
+            { "iso",             "ISO 273" },
+            { "spec_key_table",  specKeyTable },
+            { "source",          chamfer_found ? "geometric_fallback" : "cyl_only" },
+            { "chamfer_found",   chamfer_found },
+            { "fit_err_mm",      m.err },
+        };
+        if (chamfer_found) matched["cone_face_id"] = cone_face_id;
+        out.push_back(RecognizedFeature{ kSkillId, params, conf, matched });
     }
     return out;
 }

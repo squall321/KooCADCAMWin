@@ -16,6 +16,160 @@
 #include "skills/mill_rect_pocket.hpp"
 #include "skills/mill_slot.hpp"
 
+// ── Wave 16+ compound feature recognizers ────────────────────────────────
+// Bearing / seal / fastener compounds.
+#include "skills/radial_bearing_seat_with_snapring.hpp"
+#include "skills/thrust_bearing_seat_compound.hpp"
+#include "skills/plain_bushing_bore_with_lube_groove.hpp"
+#include "skills/sealed_bearing_seat_with_shield_relief.hpp"
+#include "skills/needle_bearing_seat_press_fit.hpp"
+#include "skills/o_ring_groove_radial.hpp"
+#include "skills/o_ring_groove_face.hpp"
+#include "skills/o_ring_groove_as568_spec.hpp"
+#include "skills/x_ring_groove.hpp"
+#include "skills/x_ring_groove_spec.hpp"
+#include "skills/lip_seal_seat.hpp"
+#include "skills/spiral_back_up_ring_groove.hpp"
+#include "skills/dust_lip_seal_seat_compound.hpp"
+#include "skills/face_seal_compound_compression.hpp"
+#include "skills/gasket_face_with_drain_groove.hpp"
+#include "skills/countersunk_bolt_seat.hpp"
+#include "skills/socket_head_bolt_seat.hpp"
+#include "skills/helicoil_pilot_compound.hpp"
+#include "skills/captive_nut_pocket.hpp"
+#include "skills/blind_threaded_insert_seat.hpp"
+#include "skills/bolt_hole_metric_spec.hpp"
+#include "skills/tapped_hole_metric_spec.hpp"
+#include "skills/unc_unf_hole_spec.hpp"
+#include "skills/threaded_through_with_chamfers.hpp"
+#include "skills/captive_screw_pocket_spec.hpp"
+
+// Mechanical structures.
+#include "skills/i_beam_compound_section.hpp"
+#include "skills/box_section_with_endplate.hpp"
+#include "skills/gusset_plate_compound.hpp"
+#include "skills/lifting_lug_pad_eye.hpp"
+#include "skills/base_bracket_compound.hpp"
+#include "skills/vibration_isolator_seat.hpp"
+#include "skills/rubber_grommet_seat.hpp"
+#include "skills/din_rail_mount_slot.hpp"
+#include "skills/dovetail_mount_compound.hpp"
+#include "skills/t_slot_table_groove.hpp"
+#include "skills/pulley_with_keyway_compound.hpp"
+#include "skills/sprocket_blank_with_bore.hpp"
+#include "skills/gear_blank_with_hub_step.hpp"
+#include "skills/shaft_with_keyway_step.hpp"
+#include "skills/flywheel_blank_with_balance_drills.hpp"
+#include "skills/linear_rail_seat_compound.hpp"
+#include "skills/ball_screw_nut_pocket.hpp"
+#include "skills/lead_screw_anti_backlash_pocket.hpp"
+#include "skills/linear_bushing_seat.hpp"
+#include "skills/cam_follower_threaded_seat.hpp"
+#include "skills/manifold_cross_drill_compound.hpp"
+#include "skills/threaded_npt_port.hpp"
+#include "skills/jic_flare_port_seat.hpp"
+#include "skills/banjo_fitting_seat.hpp"
+
+// Valves / electrical / tooling / machine / hinges.
+#include "skills/gate_valve_seat_compound.hpp"
+#include "skills/ball_valve_seat_compound.hpp"
+#include "skills/butterfly_valve_disc_seat.hpp"
+#include "skills/check_valve_seat_with_stop.hpp"
+#include "skills/needle_valve_seat.hpp"
+#include "skills/banana_socket_compound.hpp"
+#include "skills/spring_contact_clip.hpp"
+#include "skills/terminal_block_post.hpp"
+#include "skills/busbar_lap_joint.hpp"
+#include "skills/pcb_card_edge_socket.hpp"
+#include "skills/jig_plate_with_drill_bushings.hpp"
+#include "skills/locator_pin_set.hpp"
+#include "skills/gauge_block_step.hpp"
+#include "skills/vise_jaw_with_v_groove.hpp"
+#include "skills/pin_and_diamond_locating_set.hpp"
+#include "skills/cam_with_profile.hpp"
+#include "skills/cam_follower_roller_seat.hpp"
+#include "skills/eccentric_shaft_collar.hpp"
+#include "skills/flywheel_with_balance.hpp"
+#include "skills/governor_arm_with_pivot.hpp"
+#include "skills/spur_gear_with_real_teeth.hpp"
+#include "skills/helical_gear_teeth.hpp"
+#include "skills/sprocket_with_chain_teeth.hpp"
+#include "skills/spline_shaft_compound.hpp"
+#include "skills/ratchet_pawl_set.hpp"
+#include "skills/piano_hinge_strip.hpp"
+#include "skills/overcenter_latch.hpp"
+#include "skills/snap_action_lock_pocket.hpp"
+#include "skills/gas_strut_hinge_compound.hpp"
+#include "skills/spring_loaded_door_latch.hpp"
+#include "skills/butt_hinge_pocket.hpp"
+#include "skills/magnetic_latch_pocket.hpp"
+#include "skills/cam_lock_cavity.hpp"
+
+// ISO fit / parametric walls / PCB / heat & vent / smart-spec.
+#include "skills/iso_h7_bore_spec.hpp"
+#include "skills/press_fit_p7_bore_spec.hpp"
+#include "skills/slip_fit_h11_bore_spec.hpp"
+#include "skills/dowel_pin_h6_bore.hpp"
+#include "skills/locating_g6_bore.hpp"
+#include "skills/parametric_rib_array.hpp"
+#include "skills/draft_wall_with_radius.hpp"
+#include "skills/top_face_recess_with_walls.hpp"
+#include "skills/partition_wall_with_passthrough.hpp"
+#include "skills/curved_lip_around_face.hpp"
+#include "skills/heat_sink_fin_array.hpp"
+#include "skills/vent_slot_array.hpp"
+#include "skills/louvered_vent.hpp"
+#include "skills/perforated_grille_pattern.hpp"
+#include "skills/breather_vent_compound.hpp"
+#include "skills/pcb_standoff_array_under_board.hpp"
+#include "skills/connector_cutout_with_keepout.hpp"
+#include "skills/cable_grommet_pass_through.hpp"
+#include "skills/isolator_grommet_seat.hpp"
+#include "skills/tilt_post_for_lcd_panel.hpp"
+#include "skills/din_rail_clip_slot.hpp"
+#include "skills/banana_jack_receptacle.hpp"
+#include "skills/rj45_socket_cutout.hpp"
+#include "skills/usb_c_port_cutout.hpp"
+#include "skills/linear_slider_track.hpp"
+#include "skills/pivot_pin_clevis_compound.hpp"
+#include "skills/cam_actuated_slider.hpp"
+#include "skills/over_center_toggle_pocket.hpp"
+#include "skills/detented_position_slider.hpp"
+#include "skills/bezel_groove_assembly.hpp"
+#include "skills/lug_with_spring_bar_holes.hpp"
+#include "skills/crown_stem_cavity_compound.hpp"
+#include "skills/caseback_o_ring_groove.hpp"
+#include "skills/sapphire_glass_seat.hpp"
+
+// Context-aware auto / sheet-metal / heat-exchanger / structural geom.
+#include "skills/auto_boss_under_hole.hpp"
+#include "skills/auto_standoff_floating_point.hpp"
+#include "skills/auto_rib_between_two_walls.hpp"
+#include "skills/auto_gusset_corner_brace.hpp"
+#include "skills/auto_chamfer_all_outer_edges.hpp"
+#include "skills/notch.hpp"
+#include "skills/lance.hpp"
+#include "skills/beading.hpp"
+#include "skills/coining.hpp"
+#include "skills/draw_bead.hpp"
+#include "skills/shell_roll.hpp"
+#include "skills/hemispherical_head_form.hpp"
+#include "skills/expand_tube.hpp"
+#include "skills/tube_to_tubesheet_weld.hpp"
+#include "skills/tube_swage.hpp"
+#include "skills/bolted_flange_compound.hpp"
+#include "skills/pinned_clevis_joint.hpp"
+#include "skills/expansion_joint_bellows_stub.hpp"
+#include "skills/anchor_pad_compound.hpp"
+#include "skills/flange_face_with_gasket_groove.hpp"
+#include "skills/leaf_spring_anchor.hpp"
+#include "skills/leaf_spring_anchor_compound.hpp"
+#include "skills/torsion_spring_anchor_compound.hpp"
+#include "skills/adjuster_screw_pocket_compound.hpp"
+#include "skills/tab_lock_anti_rotation.hpp"
+#include "skills/set_screw_anti_rotation_pocket.hpp"
+#include "skills/eccentric_bushing_seat.hpp"
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
@@ -55,6 +209,166 @@ std::vector<RecognizeFn> buildRegistry()
     // Edge operations.
     reg.emplace_back(&skill::fillet_edge::recognize);
     reg.emplace_back(&skill::chamfer_edge::recognize);
+
+    // ── Wave 16+ compound recognizers ────────────────────────────────────
+    // The registry order is informational only; inferProcessPlan() buckets
+    // candidates by skill_id via classify().  Compound features (most of
+    // these) fall through to Group::Unknown today and are appended after
+    // edge ops — promoting them to dedicated buckets is future work.
+
+    // Bearing / seal / fastener compounds (25).
+    reg.emplace_back(&skill::radial_bearing_seat_with_snapring::recognize);
+    reg.emplace_back(&skill::thrust_bearing_seat_compound::recognize);
+    reg.emplace_back(&skill::plain_bushing_bore_with_lube_groove::recognize);
+    reg.emplace_back(&skill::sealed_bearing_seat_with_shield_relief::recognize);
+    reg.emplace_back(&skill::needle_bearing_seat_press_fit::recognize);
+    reg.emplace_back(&skill::o_ring_groove_radial::recognize);
+    reg.emplace_back(&skill::o_ring_groove_face::recognize);
+    reg.emplace_back(&skill::o_ring_groove_as568_spec::recognize);
+    reg.emplace_back(&skill::x_ring_groove::recognize);
+    reg.emplace_back(&skill::x_ring_groove_spec::recognize);
+    reg.emplace_back(&skill::lip_seal_seat::recognize);
+    reg.emplace_back(&skill::spiral_back_up_ring_groove::recognize);
+    reg.emplace_back(&skill::dust_lip_seal_seat_compound::recognize);
+    reg.emplace_back(&skill::face_seal_compound_compression::recognize);
+    reg.emplace_back(&skill::gasket_face_with_drain_groove::recognize);
+    reg.emplace_back(&skill::countersunk_bolt_seat::recognize);
+    reg.emplace_back(&skill::socket_head_bolt_seat::recognize);
+    reg.emplace_back(&skill::helicoil_pilot_compound::recognize);
+    reg.emplace_back(&skill::captive_nut_pocket::recognize);
+    reg.emplace_back(&skill::blind_threaded_insert_seat::recognize);
+    reg.emplace_back(&skill::bolt_hole_metric_spec::recognize);
+    reg.emplace_back(&skill::tapped_hole_metric_spec::recognize);
+    reg.emplace_back(&skill::unc_unf_hole_spec::recognize);
+    reg.emplace_back(&skill::threaded_through_with_chamfers::recognize);
+    reg.emplace_back(&skill::captive_screw_pocket_spec::recognize);
+
+    // Mechanical structures (24).
+    reg.emplace_back(&skill::i_beam_compound_section::recognize);
+    reg.emplace_back(&skill::box_section_with_endplate::recognize);
+    reg.emplace_back(&skill::gusset_plate_compound::recognize);
+    reg.emplace_back(&skill::lifting_lug_pad_eye::recognize);
+    reg.emplace_back(&skill::base_bracket_compound::recognize);
+    reg.emplace_back(&skill::vibration_isolator_seat::recognize);
+    reg.emplace_back(&skill::rubber_grommet_seat::recognize);
+    reg.emplace_back(&skill::din_rail_mount_slot::recognize);
+    reg.emplace_back(&skill::dovetail_mount_compound::recognize);
+    reg.emplace_back(&skill::t_slot_table_groove::recognize);
+    reg.emplace_back(&skill::pulley_with_keyway_compound::recognize);
+    reg.emplace_back(&skill::sprocket_blank_with_bore::recognize);
+    reg.emplace_back(&skill::gear_blank_with_hub_step::recognize);
+    reg.emplace_back(&skill::shaft_with_keyway_step::recognize);
+    reg.emplace_back(&skill::flywheel_blank_with_balance_drills::recognize);
+    reg.emplace_back(&skill::linear_rail_seat_compound::recognize);
+    reg.emplace_back(&skill::ball_screw_nut_pocket::recognize);
+    reg.emplace_back(&skill::lead_screw_anti_backlash_pocket::recognize);
+    reg.emplace_back(&skill::linear_bushing_seat::recognize);
+    reg.emplace_back(&skill::cam_follower_threaded_seat::recognize);
+    reg.emplace_back(&skill::manifold_cross_drill_compound::recognize);
+    reg.emplace_back(&skill::threaded_npt_port::recognize);
+    reg.emplace_back(&skill::jic_flare_port_seat::recognize);
+    reg.emplace_back(&skill::banjo_fitting_seat::recognize);
+
+    // Valves / electrical / tooling / machine / hinges (33).
+    reg.emplace_back(&skill::gate_valve_seat_compound::recognize);
+    reg.emplace_back(&skill::ball_valve_seat_compound::recognize);
+    reg.emplace_back(&skill::butterfly_valve_disc_seat::recognize);
+    reg.emplace_back(&skill::check_valve_seat_with_stop::recognize);
+    reg.emplace_back(&skill::needle_valve_seat::recognize);
+    reg.emplace_back(&skill::banana_socket_compound::recognize);
+    reg.emplace_back(&skill::spring_contact_clip::recognize);
+    reg.emplace_back(&skill::terminal_block_post::recognize);
+    reg.emplace_back(&skill::busbar_lap_joint::recognize);
+    reg.emplace_back(&skill::pcb_card_edge_socket::recognize);
+    reg.emplace_back(&skill::jig_plate_with_drill_bushings::recognize);
+    reg.emplace_back(&skill::locator_pin_set::recognize);
+    reg.emplace_back(&skill::gauge_block_step::recognize);
+    reg.emplace_back(&skill::vise_jaw_with_v_groove::recognize);
+    reg.emplace_back(&skill::pin_and_diamond_locating_set::recognize);
+    reg.emplace_back(&skill::cam_with_profile::recognize);
+    reg.emplace_back(&skill::cam_follower_roller_seat::recognize);
+    reg.emplace_back(&skill::eccentric_shaft_collar::recognize);
+    reg.emplace_back(&skill::flywheel_with_balance::recognize);
+    reg.emplace_back(&skill::governor_arm_with_pivot::recognize);
+    reg.emplace_back(&skill::spur_gear_with_real_teeth::recognize);
+    reg.emplace_back(&skill::helical_gear_teeth::recognize);
+    reg.emplace_back(&skill::sprocket_with_chain_teeth::recognize);
+    reg.emplace_back(&skill::spline_shaft_compound::recognize);
+    reg.emplace_back(&skill::ratchet_pawl_set::recognize);
+    reg.emplace_back(&skill::piano_hinge_strip::recognize);
+    reg.emplace_back(&skill::overcenter_latch::recognize);
+    reg.emplace_back(&skill::snap_action_lock_pocket::recognize);
+    reg.emplace_back(&skill::gas_strut_hinge_compound::recognize);
+    reg.emplace_back(&skill::spring_loaded_door_latch::recognize);
+    reg.emplace_back(&skill::butt_hinge_pocket::recognize);
+    reg.emplace_back(&skill::magnetic_latch_pocket::recognize);
+    reg.emplace_back(&skill::cam_lock_cavity::recognize);
+
+    // ISO fit / parametric walls / PCB / heat & vent / smart-spec (33).
+    reg.emplace_back(&skill::iso_h7_bore_spec::recognize);
+    reg.emplace_back(&skill::press_fit_p7_bore_spec::recognize);
+    reg.emplace_back(&skill::slip_fit_h11_bore_spec::recognize);
+    reg.emplace_back(&skill::dowel_pin_h6_bore::recognize);
+    reg.emplace_back(&skill::locating_g6_bore::recognize);
+    reg.emplace_back(&skill::parametric_rib_array::recognize);
+    reg.emplace_back(&skill::draft_wall_with_radius::recognize);
+    reg.emplace_back(&skill::top_face_recess_with_walls::recognize);
+    reg.emplace_back(&skill::partition_wall_with_passthrough::recognize);
+    reg.emplace_back(&skill::curved_lip_around_face::recognize);
+    reg.emplace_back(&skill::heat_sink_fin_array::recognize);
+    reg.emplace_back(&skill::vent_slot_array::recognize);
+    reg.emplace_back(&skill::louvered_vent::recognize);
+    reg.emplace_back(&skill::perforated_grille_pattern::recognize);
+    reg.emplace_back(&skill::breather_vent_compound::recognize);
+    reg.emplace_back(&skill::pcb_standoff_array_under_board::recognize);
+    reg.emplace_back(&skill::connector_cutout_with_keepout::recognize);
+    reg.emplace_back(&skill::cable_grommet_pass_through::recognize);
+    reg.emplace_back(&skill::isolator_grommet_seat::recognize);
+    reg.emplace_back(&skill::tilt_post_for_lcd_panel::recognize);
+    reg.emplace_back(&skill::din_rail_clip_slot::recognize);
+    reg.emplace_back(&skill::banana_jack_receptacle::recognize);
+    reg.emplace_back(&skill::rj45_socket_cutout::recognize);
+    reg.emplace_back(&skill::usb_c_port_cutout::recognize);
+    reg.emplace_back(&skill::linear_slider_track::recognize);
+    reg.emplace_back(&skill::pivot_pin_clevis_compound::recognize);
+    reg.emplace_back(&skill::cam_actuated_slider::recognize);
+    reg.emplace_back(&skill::over_center_toggle_pocket::recognize);
+    reg.emplace_back(&skill::detented_position_slider::recognize);
+    reg.emplace_back(&skill::bezel_groove_assembly::recognize);
+    reg.emplace_back(&skill::lug_with_spring_bar_holes::recognize);
+    reg.emplace_back(&skill::crown_stem_cavity_compound::recognize);
+    reg.emplace_back(&skill::caseback_o_ring_groove::recognize);
+    reg.emplace_back(&skill::sapphire_glass_seat::recognize);
+
+    // Context-aware auto / sheet-metal / heat-exchanger / structural (27).
+    reg.emplace_back(&skill::auto_boss_under_hole::recognize);
+    reg.emplace_back(&skill::auto_standoff_floating_point::recognize);
+    reg.emplace_back(&skill::auto_rib_between_two_walls::recognize);
+    reg.emplace_back(&skill::auto_gusset_corner_brace::recognize);
+    reg.emplace_back(&skill::auto_chamfer_all_outer_edges::recognize);
+    reg.emplace_back(&skill::notch::recognize);
+    reg.emplace_back(&skill::lance::recognize);
+    reg.emplace_back(&skill::beading::recognize);
+    reg.emplace_back(&skill::coining::recognize);
+    reg.emplace_back(&skill::draw_bead::recognize);
+    reg.emplace_back(&skill::shell_roll::recognize);
+    reg.emplace_back(&skill::hemispherical_head_form::recognize);
+    reg.emplace_back(&skill::expand_tube::recognize);
+    reg.emplace_back(&skill::tube_to_tubesheet_weld::recognize);
+    reg.emplace_back(&skill::tube_swage::recognize);
+    reg.emplace_back(&skill::bolted_flange_compound::recognize);
+    reg.emplace_back(&skill::pinned_clevis_joint::recognize);
+    reg.emplace_back(&skill::expansion_joint_bellows_stub::recognize);
+    reg.emplace_back(&skill::anchor_pad_compound::recognize);
+    reg.emplace_back(&skill::flange_face_with_gasket_groove::recognize);
+    reg.emplace_back(&skill::leaf_spring_anchor::recognize);
+    reg.emplace_back(&skill::leaf_spring_anchor_compound::recognize);
+    reg.emplace_back(&skill::torsion_spring_anchor_compound::recognize);
+    reg.emplace_back(&skill::adjuster_screw_pocket_compound::recognize);
+    reg.emplace_back(&skill::tab_lock_anti_rotation::recognize);
+    reg.emplace_back(&skill::set_screw_anti_rotation_pocket::recognize);
+    reg.emplace_back(&skill::eccentric_bushing_seat::recognize);
+
     return reg;
 }
 

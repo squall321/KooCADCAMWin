@@ -11,6 +11,8 @@
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
@@ -143,13 +145,18 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         (yMin + yMax) / 2.0,
         (zMin + zMax) / 2.0);
 
-    // ── Walk every edge, collect outer convex ones ──────────────────────
+    // ── Walk every UNIQUE edge, collect outer convex ones ──────────────
+    // Slice-9 fix: TopExp_Explorer with TopAbs_EDGE on a solid visits each
+    // edge once PER ADJACENT FACE — for a cuboid that's 2× per edge.  Use
+    // TopExp::MapShapes to deduplicate before counting.
     BRepFilletAPI_MakeChamfer chamfer(wp.shape());
     int chamferedCount = 0;
     int outerCount = 0;
 
-    for (TopExp_Explorer exp(wp.shape(), TopAbs_EDGE); exp.More(); exp.Next()) {
-        const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edgeMap;
+    TopExp::MapShapes(wp.shape(), TopAbs_EDGE, edgeMap);
+    for (int i = 1; i <= edgeMap.Extent(); ++i) {
+        const TopoDS_Edge& e = TopoDS::Edge(edgeMap(i));
         BRepAdaptor_Curve curve(e);
         const double mid = (curve.FirstParameter() + curve.LastParameter()) / 2.0;
         gp_Pnt midPt;

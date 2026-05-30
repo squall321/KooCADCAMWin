@@ -9,13 +9,19 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
@@ -270,7 +276,78 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition (metadata replay) ────────────────────────────────────────
+// ── Recognition (metadata replay + geometric fallback) ──────────────────
+//
+// Geometric signature of a gusset plate:
+//   - Flat plate (small extent along one axis, the plate thickness, vs. legs).
+//   - Triangular footprint: 3 plate-edge planar walls (the two legs + the
+//     bevel-trimmed hypotenuse), all with Z-normal = 0.
+//   - At least one cylindrical face axis ∥ Z (the lift hole).
+//   - Optional small cyl faces (notches) along plate edges.
+
+namespace {
+
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    if (wp.shape().IsNull()) return out;
+
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    const double extX = xMax - xMin;
+    const double extY = yMax - yMin;
+    const double extZ = zMax - zMin;
+    if (extX <= 0.0 || extY <= 0.0 || extZ <= 0.0) return out;
+
+    // Plate: thickness (Z) much smaller than legs (X, Y).
+    if (extZ >= std::min(extX, extY) * 0.5) return out;
+
+    // Collect Z-axis cylindrical faces (lift hole + corner notches).
+    std::vector<double> zCylRadii;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface surf(wp.face(i));
+        const gp_Cylinder cy = surf.Cylinder();
+        const gp_Dir axDir = cy.Axis().Direction();
+        if (std::abs(std::abs(axDir.Z()) - 1.0) > 1e-3) continue;
+        zCylRadii.push_back(cy.Radius());
+    }
+    if (zCylRadii.empty()) return out;
+    // Largest Z-cyl is the lift hole.
+    std::sort(zCylRadii.begin(), zCylRadii.end());
+    const double liftR = zCylRadii.back();
+    if (liftR * 2.0 < 6.0) return out;  // must be at least 6 mm (sub-DFM check)
+
+    // Count planar perimeter walls (Z-normal = 0).
+    int perimWalls = 0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        gp_Dir n;
+        try { n = wp.faceNormal(i); } catch (...) { continue; }
+        if (std::abs(n.Z()) > 1e-2) continue;
+        ++perimWalls;
+    }
+    if (perimWalls < 3) return out;  // triangle has ≥ 3 walls
+
+    json recovered = {
+        { "leg_a_mm",          extX },
+        { "leg_b_mm",          extY },
+        { "plate_t_mm",        extZ },
+        { "lift_hole_dia_mm",  2.0 * liftR },
+        { "bevel_mm",          0.0 },
+        { "notch_r_mm",        (zCylRadii.size() >= 2) ? zCylRadii.front() : 0.0 },
+    };
+    json matched = {
+        { "source",         "geometric_fallback" },
+        { "z_cyl_count",    static_cast<int>(zCylRadii.size()) },
+        { "perim_walls",    perimWalls },
+        { "lift_radius",    liftR },
+    };
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.60, matched });
+    return out;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -284,6 +361,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         rf.matched_geometry = { { "source", "metadata" },
                                 { "is_compound", true } };
         out.push_back(rf);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

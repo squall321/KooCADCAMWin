@@ -258,20 +258,34 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// PRIMARY (geometric): look for a long X-axis cylindrical face (the pin
-// bore) and count >= 4 small Z-axis circular edges (mounting holes).
+// PRIMARY (geometric):
+//   1. Find the longest X-axis cylindrical face — that is the pin bore.
+//      Its radius gives pin_dia_mm; its X-extent gives strip_length_mm.
+//   2. Cluster Z-axis mounting-hole edges by X coordinate; each X cluster
+//      corresponds to one knuckle row (~2 holes, one per side).
+//   3. knuckle_count = number of X clusters; knuckle_pitch ≈ mean spacing.
+//
 // FALLBACK (metadata replay): scan wp.features() for a matching skill_id.
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
 
+    // FALLBACK FIRST: metadata replay (highest confidence) ────────────────
+    for (const auto& f : wp.features()) {
+        if (f.skill_id != kSkillId) continue;
+        out.push_back(RecognizedFeature{
+            kSkillId, f.params, 1.0,
+            { { "via", "metadata_replay" } }
+        });
+    }
+    if (!out.empty()) return out;
+
     // PRIMARY: geometric heuristic ─────────────────────────────────────
     int xCylCount = 0;
-    int zSmallCircleCount = 0;
     double pinDiaGuess = 0.0;
     gp_Pnt pinCenter(0, 0, 0);
-    bool pinFound = false;
+    bool   pinFound = false;
 
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
@@ -282,7 +296,6 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         BRepAdaptor_Surface surf(wp.face(i));
         const gp_Cylinder c = surf.Cylinder();
         const gp_Dir axDir = c.Axis().Direction();
-        // X-axis cylinder = pin bore candidate
         if (std::abs(std::abs(axDir.X()) - 1.0) < 1e-2) {
             xCylCount++;
             if (c.Radius() > pinDiaGuess / 2.0) {
@@ -293,21 +306,47 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         }
     }
 
-    // Count small Z-axis circular edges (mounting holes top circles)
+    // Collect small Z-axis circular edge centers (top X coordinate of each
+    // mounting hole).  Cluster by X coordinate at ±2 mm tolerance to merge
+    // the top and bottom circles of the same hole, and to merge the two
+    // mounting holes (left/right side) belonging to the same knuckle row.
+    std::vector<double> mountX;
     for (int e = 0; e < wp.edgeCount(); ++e) {
         if (!wp.isEdgeCircle(e)) continue;
         BRepAdaptor_Curve crv(wp.edge(e));
         const gp_Circ ce = crv.Circle();
         const gp_Dir d = ce.Axis().Direction();
         if (std::abs(std::abs(d.Z()) - 1.0) > 1e-2) continue;
-        // small radius
-        if (ce.Radius() > 4.0) continue;
-        zSmallCircleCount++;
+        if (ce.Radius() > 4.0) continue;  // mounting holes are small
+        mountX.push_back(ce.Location().X());
+    }
+    std::sort(mountX.begin(), mountX.end());
+
+    // Cluster by X with 3 mm tolerance — knuckle slots are wider than
+    // mount-hole pitch within a single knuckle row.
+    std::vector<double> knuckleX;
+    for (double x : mountX) {
+        if (knuckleX.empty() || std::abs(x - knuckleX.back()) > 3.0) {
+            knuckleX.push_back(x);
+        }
     }
 
-    if (pinFound && xCylCount >= 1 && zSmallCircleCount >= 4) {
-        const int mountHoleCount = zSmallCircleCount;  // each hole contributes 1-2 edges
-        const int knuckleGuess   = std::max(2, mountHoleCount / 4);
+    const int knuckleGuess = std::max(2, static_cast<int>(knuckleX.size()));
+    double pitchGuess = 25.0;
+    if (knuckleX.size() >= 2) {
+        double sumSpacing = 0.0;
+        for (size_t k = 1; k < knuckleX.size(); ++k) {
+            sumSpacing += knuckleX[k] - knuckleX[k - 1];
+        }
+        pitchGuess = sumSpacing / static_cast<double>(knuckleX.size() - 1);
+    }
+
+    if (pinFound && xCylCount >= 1 && mountX.size() >= 4) {
+        // Confidence: base 0.7, +0.05 if pin axis spans the full strip,
+        // +0.05 if at least 2 knuckle clusters detected.
+        double confidence = 0.70;
+        if (pinDiaGuess > 0.5 && stripLen / pinDiaGuess > 5.0) confidence += 0.05;
+        if (knuckleX.size() >= 2) confidence += 0.05;
 
         json recovered = {
             { "origin_x_mm",            xMin },
@@ -317,23 +356,17 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "strip_width_mm",         yMax - yMin },
             { "strip_thickness_mm",     zMax - zMin },
             { "knuckle_count",          knuckleGuess },
+            { "knuckle_pitch_mm",       pitchGuess },
             { "pin_dia_mm",             pinDiaGuess },
         };
         json matched = {
+            { "source",                "geometric_primary" },
             { "x_axis_cyl_face_count", xCylCount },
-            { "small_z_circle_count",  zSmallCircleCount },
-            { "pin_center", { pinCenter.X(), pinCenter.Y(), pinCenter.Z() } },
+            { "mount_hole_edge_count", static_cast<int>(mountX.size()) },
+            { "knuckle_cluster_count", static_cast<int>(knuckleX.size()) },
+            { "pin_center",            { pinCenter.X(), pinCenter.Y(), pinCenter.Z() } },
         };
-        out.push_back(RecognizedFeature{ kSkillId, recovered, 0.7, matched });
-    }
-
-    // FALLBACK: metadata replay ────────────────────────────────────────
-    for (const auto& f : wp.features()) {
-        if (f.skill_id != kSkillId) continue;
-        out.push_back(RecognizedFeature{
-            kSkillId, f.params, 1.0,
-            { { "via", "metadata_replay" } }
-        });
+        out.push_back(RecognizedFeature{ kSkillId, recovered, confidence, matched });
     }
     return out;
 }

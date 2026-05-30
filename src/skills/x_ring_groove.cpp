@@ -147,24 +147,24 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // A small cone-frustum cut where outer R goes from shaftR+overhangR
     // (above groove) down to the same — modelled as annularConeRing where
     // the INNER bound is a cone widening as it approaches the entry plane.
+    // Slice-9: equal outer radii would trigger OCCT's "cone with two
+    // identic radii" error — degenerate cone.  Use annularRing (cylinder).
     const double zUp = in.position_z_mm + width_W / 2.0 - chamferH;
     const gp_Ax2 axUp(gp_Pnt(0.0, 0.0, zUp), gp::DZ());
-    const TopoDS_Shape upperChamfer = pr::annularConeRing(
+    const TopoDS_Shape upperChamfer = pr::annularRing(
         axUp,
-        /*outerR1Bottom=*/ shaftR + overhangR,
-        /*outerR2Top  =*/ shaftR + overhangR,
-        /*innerR      =*/ grooveR + chamferRise,
-        /*height      =*/ chamferH);
+        /*outerR=*/ shaftR + overhangR,
+        /*innerR=*/ grooveR + chamferRise,
+        /*height=*/ chamferH);
 
     // ── Sub-feature 3: LOWER SIDEWALL CHAMFER (10° draft) ────────────────
     const double zDn = in.position_z_mm - width_W / 2.0;
     const gp_Ax2 axDn(gp_Pnt(0.0, 0.0, zDn), gp::DZ());
-    const TopoDS_Shape lowerChamfer = pr::annularConeRing(
+    const TopoDS_Shape lowerChamfer = pr::annularRing(
         axDn,
-        /*outerR1Bottom=*/ shaftR + overhangR,
-        /*outerR2Top  =*/ shaftR + overhangR,
-        /*innerR      =*/ grooveR + chamferRise,
-        /*height      =*/ chamferH);
+        /*outerR=*/ shaftR + overhangR,
+        /*innerR=*/ grooveR + chamferRise,
+        /*height=*/ chamferH);
 
     // ── Fuse + single cut ────────────────────────────────────────────────
     const TopoDS_Shape fused1   = pr::fuse(centerGroove, upperChamfer);

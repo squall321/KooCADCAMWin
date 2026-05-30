@@ -6,6 +6,8 @@
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -251,29 +254,170 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// Compound additive features are hard to identify from geometry alone in
-// general: the recognizer falls back to FeatureSignature replay (the
-// workpiece feature history).  When metadata is absent (e.g. after a STEP
-// round-trip), no candidates are returned.
+// Recognition strategy:
+//   1. Metadata replay (feature history) — primary, exact (confidence 0.92).
+//   2. Geometric back-map (secondary, lower confidence):
+//      - Walk all planar faces; collect those whose normal is in the
+//        XY plane (vertical walls — fin sides).  These come in parallel
+//        pairs, one per fin (each fin contributes 2 wall faces).
+//      - Group by their bbox-Z extent so we only count walls that share
+//        the same fin height.
+//      - From the wall-face bboxes, recover:
+//          * fin_count        = (# distinct wall-X centers) / 2
+//          * fin_thickness_mm = mean X-extent of a wall
+//                               (actually mean distance between paired walls)
+//          * fin_height_mm    = mean Z-extent
+//          * fin_length_mm    = mean Y-extent
+//          * fin_pitch_mm     = mean spacing between wall-pair centers
+//      - Snap (pitch, thickness, height) tuple to nearest T-30/T-50/T-80/T-120
+//        in the spec table; emit spec_key in recovered_params.
+
+namespace {
+
+struct WallBox {
+    double x0, y0, z0, x1, y1, z1;
+    double cx() const { return 0.5 * (x0 + x1); }
+};
+
+// Snap (pitch, thickness, height) tuple to closest spec.
+const char* nearestSpec(double pitch_mm, double thk_mm, double hgt_mm,
+                        double* out_err)
+{
+    constexpr std::array<SpecEntry, 4> table = kSpecTable;
+    const char* best = nullptr;
+    double bestErr = 4.0;  // generous since geometry is approximate
+    for (const auto& s : table) {
+        const double e = std::abs(pitch_mm - s.pitch_mm)
+                       + std::abs(thk_mm   - s.fin_thickness_mm)
+                       + std::abs(hgt_mm   - s.fin_height_mm);
+        if (e < bestErr) { bestErr = e; best = s.key; }
+    }
+    if (out_err) *out_err = bestErr;
+    return best;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
+
+    // Pass 1: metadata replay.
     for (const auto& f : wp.features()) {
         if (f.skill_id != kSkillId) continue;
         json rec = {
             { "fin_count",        f.params.value("fin_count", 0) },
             { "spec_key",         f.params.value("spec_key",  std::string()) },
+            { "spec_key_table",   f.params.value("spec_key",  std::string()) },
             { "fin_thickness_mm", f.params.value("fin_thickness_mm", 0.0) },
             { "fin_height_mm",    f.params.value("fin_height_mm",    0.0) },
             { "fin_pitch_mm",     f.params.value("fin_pitch_mm",     0.0) },
             { "fin_length_mm",    f.params.value("fin_length_mm",    0.0) },
-            { "airflow_dir",      f.params.value("airflow_dir", json::array({1.0,0.0,0.0})) },
+            { "airflow_dir",      f.params.value("airflow_dir",
+                                                  json::array({1.0,0.0,0.0})) },
         };
         out.push_back(RecognizedFeature{
             kSkillId, rec, 0.92, json{ { "source", "feature_history" } }
         });
     }
+    if (!out.empty()) return out;
+
+    // Pass 2: geometric back-map.  We assume airflow along +X (the apply
+    // path's default), so fin walls are planar faces with normal ±Y.
+    double wpXMin, wpYMin, wpZMin, wpXMax, wpYMax, wpZMax;
+    wp.boundingBox(wpXMin, wpYMin, wpZMin, wpXMax, wpYMax, wpZMax);
+    const double panelZ = wpZMax;  // approximate fin-base Z
+
+    std::vector<WallBox> walls;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        gp_Dir n;
+        try { n = wp.faceNormal(i); } catch (...) { continue; }
+        // Wall normal: ±Y (in-plane, perpendicular to airflow X).
+        if (std::abs(n.Y()) < 0.9 || std::abs(n.X()) > 0.1 ||
+            std::abs(n.Z()) > 0.1) continue;
+        Bnd_Box bb; BRepBndLib::Add(wp.face(i), bb);
+        if (bb.IsVoid()) continue;
+        WallBox w;
+        bb.Get(w.x0, w.y0, w.z0, w.x1, w.y1, w.z1);
+        // Skip the outer panel side faces (they touch wp bbox).
+        const double m = 0.5;
+        if (std::abs(w.y0 - wpYMin) < m && std::abs(w.y1 - wpYMin) < m) continue;
+        if (std::abs(w.y0 - wpYMax) < m && std::abs(w.y1 - wpYMax) < m) continue;
+        // Walls that rise ABOVE the panel top — fin sides.
+        if (w.z1 < panelZ - 0.1) continue;
+        if (w.z1 - w.z0 < 0.5) continue;  // ignore tiny slivers
+        walls.push_back(w);
+    }
+    if (walls.size() < 4) return out;
+
+    // Group walls by their Y center → pair them as left/right of each fin.
+    std::sort(walls.begin(), walls.end(),
+              [](const WallBox& a, const WallBox& b){
+                  return 0.5 * (a.y0 + a.y1) < 0.5 * (b.y0 + b.y1);
+              });
+    // Pair consecutive walls; each pair encloses one fin in Y.
+    std::vector<std::pair<double, double>> fins; // (yCenter, thickness)
+    for (size_t i = 0; i + 1 < walls.size(); i += 2) {
+        const double yA = 0.5 * (walls[i].y0   + walls[i].y1);
+        const double yB = 0.5 * (walls[i+1].y0 + walls[i+1].y1);
+        fins.push_back({ 0.5 * (yA + yB), std::abs(yB - yA) });
+    }
+    if (fins.size() < 2) return out;
+
+    // Pitch = mean center-to-center distance.
+    double pitchSum = 0.0;
+    for (size_t i = 1; i < fins.size(); ++i)
+        pitchSum += std::abs(fins[i].first - fins[i-1].first);
+    const double pitch = pitchSum / static_cast<double>(fins.size() - 1);
+    // Mean thickness.
+    double thkSum = 0.0;
+    for (const auto& f : fins) thkSum += f.second;
+    const double thk = thkSum / static_cast<double>(fins.size());
+    // Mean height = walls[].z1 - walls[].z0 of the tallest fin.
+    double hgt = 0.0;
+    for (const auto& w : walls) hgt = std::max(hgt, w.z1 - w.z0);
+    // Mean length (along X) = walls[].x1 - walls[].x0.
+    double lenSum = 0.0;
+    for (const auto& w : walls) lenSum += (w.x1 - w.x0);
+    const double finLen = lenSum / static_cast<double>(walls.size());
+
+    double err = 0.0;
+    const char* specKey = nearestSpec(pitch, thk, hgt, &err);
+    if (!specKey) return out;
+
+    // Origin = walls bbox min XY of the first fin.
+    const double originX = walls.front().x0;
+    const double originY = walls.front().y0;
+
+    json rec = {
+        { "fin_count",         static_cast<int>(fins.size()) },
+        { "spec_key",          std::string(specKey) },
+        { "spec_key_table",    std::string(specKey) },
+        { "fin_thickness_mm",  thk },
+        { "fin_height_mm",     hgt },
+        { "fin_pitch_mm",      pitch },
+        { "fin_length_mm",     finLen },
+        { "airflow_dir",       json::array({ 1.0, 0.0, 0.0 }) },
+        { "origin_x_mm",       originX },
+        { "origin_y_mm",       originY },
+        { "fit_match_err_mm",  err },
+    };
+    // Confidence model: base 0.50, +0.20 if err < 1.0 mm (tight spec match),
+    //                          +0.10 if >= 3 fins detected (clear array).
+    double conf = 0.50;
+    if (err < 1.0) conf += 0.20;
+    if (fins.size() >= 3u) conf += 0.10;
+    out.push_back(RecognizedFeature{
+        kSkillId, rec, conf,
+        json{
+            { "source",          "geometric_fin_walls" },
+            { "wall_face_count", static_cast<int>(walls.size()) },
+            { "fin_count",       static_cast<int>(fins.size()) },
+            { "spec_key_table",  std::string(specKey) },
+            { "fit_err_mm",      err },
+        }
+    });
     return out;
 }
 

@@ -8,9 +8,12 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <TopoDS.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -225,17 +228,6 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 
-namespace {
-
-bool axesParallel(const gp_Ax1& a, const gp_Ax1& b, double tolDeg = 1.0)
-{
-    const gp_Dir da = a.Direction();
-    const gp_Dir db = b.Direction();
-    const double dot = std::abs(da.X()*db.X() + da.Y()*db.Y() + da.Z()*db.Z());
-    return dot >= std::cos(tolDeg * M_PI / 180.0);
-}
-
-}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -252,22 +244,33 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         out.push_back(r);
     }
 
-    // Geometric heuristic (PRIMARY): three coaxial cylinders along +Z (stud,
-    // shoulder, skirt) of strictly increasing radius + two perpendicular
-    // through-hole cylinders.
-    struct Cyl { int faceIdx; double radius; gp_Ax1 axis; };
+    // Geometric heuristic (PRIMARY): three COAXIAL vertical cylinders (stud,
+    // shoulder, skirt) of strictly increasing radius STACKED in increasing
+    // Z order (skirt at bottom, shoulder above, stud at top) PLUS two
+    // perpendicular wire holes piercing the skirt at the same Z.
+    struct Cyl { int faceIdx; double radius; gp_Ax1 axis; gp_Pnt center; };
     std::vector<Cyl> verticalCyls, horizontalCyls;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFaceCylinder(i)) continue;
         BRepAdaptor_Surface s(wp.face(i));
         const gp_Cylinder c = s.Cylinder();
         const gp_Dir d = c.Axis().Direction();
-        if (std::abs(d.Z()) > 0.95)        verticalCyls.push_back({ i, c.Radius(), c.Axis() });
-        else if (std::abs(d.Z()) < 0.05)   horizontalCyls.push_back({ i, c.Radius(), c.Axis() });
+        if (std::abs(d.Z()) > 0.95)
+            verticalCyls.push_back({ i, c.Radius(), c.Axis(), wp.faceCenter(i) });
+        else if (std::abs(d.Z()) < 0.05)
+            horizontalCyls.push_back({ i, c.Radius(), c.Axis(), wp.faceCenter(i) });
     }
     if (verticalCyls.size() < 3) return out;
 
-    // Group vertical cyls by axis-line, keep groups with ≥3 distinct radii.
+    // True coaxial check (parallel + same axis-line position).
+    auto coaxialAt = [](const gp_Ax1& a, const gp_Ax1& b, double tolMm = 0.5) {
+        if (!a.Direction().IsParallel(b.Direction(), 1e-2)) return false;
+        const gp_Vec v(b.Location(), a.Location());
+        const gp_Vec d(b.Direction());
+        const gp_Vec proj = d * v.Dot(d);
+        return (v - proj).Magnitude() < tolMm;
+    };
+
     std::vector<bool> used(verticalCyls.size(), false);
     for (size_t i = 0; i < verticalCyls.size(); ++i) {
         if (used[i]) continue;
@@ -275,40 +278,65 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         used[i] = true;
         for (size_t j = i + 1; j < verticalCyls.size(); ++j) {
             if (used[j]) continue;
-            if (axesParallel(verticalCyls[i].axis, verticalCyls[j].axis)) {
+            if (coaxialAt(verticalCyls[i].axis, verticalCyls[j].axis)) {
                 group.push_back(j);
                 used[j] = true;
             }
         }
         if (group.size() < 3) continue;
 
-        std::vector<double> radii;
-        for (size_t idx : group) radii.push_back(verticalCyls[idx].radius);
-        std::sort(radii.begin(), radii.end());
-        // Need 3 distinct radii.
-        int distinct = 1;
-        for (size_t k = 1; k < radii.size(); ++k)
-            if (radii[k] - radii[k - 1] > 0.2) ++distinct;
-        if (distinct < 3) continue;
+        // Sort group by radius for diameter selection,
+        // and by Z for height-order verification.
+        std::vector<size_t> sortedByR = group;
+        std::sort(sortedByR.begin(), sortedByR.end(),
+                  [&](size_t a, size_t b){
+                      return verticalCyls[a].radius < verticalCyls[b].radius;
+                  });
+        std::vector<size_t> sortedByZ = group;
+        std::sort(sortedByZ.begin(), sortedByZ.end(),
+                  [&](size_t a, size_t b){
+                      return verticalCyls[a].center.Z() < verticalCyls[b].center.Z();
+                  });
 
-        // Pick smallest=stud, middle=shoulder, largest=skirt.
-        const double rStud = radii.front();
-        const double rSk   = radii.back();
-        double rSh = radii.front();
-        for (double r : radii) if (r > rStud + 0.1 && r < rSk - 0.1) { rSh = r; break; }
+        // Pick rStud (smallest), rSk (largest), rSh (middle distinct).
+        const double rStud = verticalCyls[sortedByR.front()].radius;
+        const double rSk   = verticalCyls[sortedByR.back()].radius;
+        if (rSk - rStud < 0.2) continue;       // need distinct radii
+        double rSh = rStud;
+        for (size_t idx : sortedByR) {
+            const double r = verticalCyls[idx].radius;
+            if (r > rStud + 0.1 && r < rSk - 0.1) { rSh = r; break; }
+        }
+        if (rSh <= rStud + 0.05 || rSh >= rSk - 0.05) continue;
 
-        // Count perpendicular cylinders crossing near this group's axis.
+        // Verify height ordering: skirt (largest R) should be at LOW Z,
+        // stud (smallest R) at HIGH Z.  Use sortedByZ[0] vs sortedByZ.back().
+        const double zLow  = verticalCyls[sortedByZ.front()].center.Z();
+        const double zHigh = verticalCyls[sortedByZ.back()].center.Z();
+        const bool ordered = (zHigh - zLow) > 1e-3;
+
+        // Count perpendicular cylinders crossing near this group's axis,
+        // AND whose Z is within the skirt height (low/middle of stack).
         int wireHits = 0;
+        const gp_Pnt axisLoc = verticalCyls[i].axis.Location();
         for (const auto& hc : horizontalCyls) {
-            const gp_Pnt p = hc.axis.Location();
-            const double dx = p.X() - verticalCyls[i].axis.Location().X();
-            const double dy = p.Y() - verticalCyls[i].axis.Location().Y();
-            if (std::hypot(dx, dy) < rSk * 1.2) ++wireHits;
+            const gp_Pnt p = hc.center;
+            const double dx = p.X() - axisLoc.X();
+            const double dy = p.Y() - axisLoc.Y();
+            if (std::hypot(dx, dy) < rSk * 1.2 &&
+                p.Z() < zLow + (zHigh - zLow) * 0.6) ++wireHits;
         }
 
+        int subScore = 0;
+        if (group.size() >= 3) ++subScore;
+        if (ordered)           ++subScore;
+        if (wireHits >= 1)     ++subScore;
+        if (wireHits >= 2)     ++subScore;
+        const double confidence = std::min(0.90, 0.55 + 0.09 * subScore);
+
         json recovered = {
-            { "position_x_mm",      verticalCyls[i].axis.Location().X() },
-            { "position_y_mm",      verticalCyls[i].axis.Location().Y() },
+            { "position_x_mm",      axisLoc.X() },
+            { "position_y_mm",      axisLoc.Y() },
             { "axis_dir",           { 0.0, 0.0, 1.0 } },
             { "stud_dia_mm",        2.0 * rStud },
             { "shoulder_dia_mm",    2.0 * rSh },
@@ -318,10 +346,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         RecognizedFeature r;
         r.skill_id         = kSkillId;
         r.recovered_params = recovered;
-        r.confidence       = (wireHits >= 2) ? 0.8 : 0.6;
+        r.confidence       = confidence;
         r.matched_geometry = {
-            { "vertical_cyl_count", static_cast<int>(group.size()) },
-            { "wire_hole_hits",     wireHits },
+            { "vertical_cyl_count",  static_cast<int>(group.size()) },
+            { "stack_ordered",       ordered },
+            { "wire_hole_hits",      wireHits },
+            { "subfeature_score",    subScore },
+            { "source",              "geometric" },
         };
         out.push_back(r);
     }

@@ -7,12 +7,16 @@
 #include "engine/primitives/Tools.hpp"
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+
+#include <limits>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -280,9 +284,36 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 // ── Recognition ──────────────────────────────────────────────────────────
 //
 // Metadata replay is the PRIMARY signal here — connector pocket sizes
-// overlap between specs.  Geometric fallback: look for any
-// rectangular through-pocket whose footprint matches one of the spec
-// W × H boxes within tolerance.
+// overlap between specs.  Geometric fallback walks the workpiece and looks
+// for "pocket interior" planar faces — VERTICAL planar walls (normal lies
+// in the XY plane).  We collect the XY bounding box of all such walls and
+// back-map (W, H) → connector_type via the spec table.
+
+namespace {
+
+// Score a pocket of dimensions (w, h) against every entry in kConnTable.
+// Returns the best (spec*, error) tuple; error = max relative size mismatch.
+const ConnSpec* matchConnectorByDims(double pocket_w_mm,
+                                     double pocket_h_mm,
+                                     double tol_mm,
+                                     double* out_err)
+{
+    const ConnSpec* best = nullptr;
+    double bestErr = tol_mm;
+    for (const auto& sp : kConnTable) {
+        // Try both orientations — pocket may be rotated 90°.
+        const double e1 = std::max(std::abs(pocket_w_mm - sp.body_w_mm),
+                                   std::abs(pocket_h_mm - sp.body_h_mm));
+        const double e2 = std::max(std::abs(pocket_w_mm - sp.body_h_mm),
+                                   std::abs(pocket_h_mm - sp.body_w_mm));
+        const double err = std::min(e1, e2);
+        if (err < bestErr) { bestErr = err; best = &sp; }
+    }
+    if (out_err) *out_err = bestErr;
+    return best;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -300,34 +331,80 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Geometric fallback: scan planar faces with normal in the +/- Z
-    // direction whose dims are close to one of the spec rectangles.
-    // We approximate by counting how many wp faces are planar with the
-    // same Z normal — heuristic only.
-    int planar_norm_count = 0;
+    // Geometric fallback: walk the workpiece for VERTICAL planar walls
+    // (normal is in-plane with the panel top, i.e. normal.Z ≈ 0).  Compute
+    // their union XY bounding box — that is the pocket footprint W × H.
+    double wpXMin, wpYMin, wpZMin, wpXMax, wpYMax, wpZMax;
+    wp.boundingBox(wpXMin, wpYMin, wpZMin, wpXMax, wpYMax, wpZMax);
+    const double panelW = wpXMax - wpXMin;
+    const double panelH = wpYMax - wpYMin;
+
+    // Collect vertical-wall faces (the pocket interior side faces).
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = minX;
+    double maxX = -minX;
+    double maxY = -minY;
+    int wallCount = 0;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFacePlanar(i)) continue;
         gp_Dir n;
         try { n = wp.faceNormal(i); } catch (...) { continue; }
-        if (std::abs(std::abs(n.Z()) - 1.0) < 0.05) planar_norm_count++;
+        if (std::abs(n.Z()) > 0.05) continue;     // wants vertical wall
+        Bnd_Box bb;
+        BRepBndLib::Add(wp.face(i), bb);
+        if (bb.IsVoid()) continue;
+        double x0, y0, z0, x1, y1, z1;
+        bb.Get(x0, y0, z0, x1, y1, z1);
+        // Skip the outer panel walls — those touch the workpiece bbox.
+        const double margin = 0.5;
+        if (std::abs(x0 - wpXMin) < margin || std::abs(x1 - wpXMax) < margin ||
+            std::abs(y0 - wpYMin) < margin || std::abs(y1 - wpYMax) < margin)
+            continue;
+        minX = std::min(minX, x0); minY = std::min(minY, y0);
+        maxX = std::max(maxX, x1); maxY = std::max(maxY, y1);
+        ++wallCount;
     }
-    if (planar_norm_count < 4) return out;
+    if (wallCount < 2) return out;
 
-    // Without further geometric measurement, return a low-confidence
-    // generic USB-A guess.
+    const double pocketW = maxX - minX;
+    const double pocketH = maxY - minY;
+    if (pocketW <= 0.0 || pocketH <= 0.0) return out;
+    if (pocketW > panelW * 0.9 || pocketH > panelH * 0.9) return out;
+
+    // Back-map measured pocket footprint to a connector spec.
+    double err = 0.0;
+    const ConnSpec* sp = matchConnectorByDims(pocketW, pocketH, 1.5, &err);
+    if (!sp) return out;
+
+    const double cx = (minX + maxX) / 2.0;
+    const double cy = (minY + maxY) / 2.0;
     json rp = {
-        { "axis_dir",       json::array({ 0.0, 0.0, -1.0 }) },
-        { "connector_type", "USB-A" },
-        { "position_x_mm",  0.0 },
-        { "position_y_mm",  0.0 },
+        { "axis_dir",            json::array({ 0.0, 0.0, -1.0 }) },
+        { "connector_type",      std::string(sp->name) },
+        { "spec_key_table",      std::string(sp->name) },
+        { "position_x_mm",       cx },
+        { "position_y_mm",       cy },
         { "chamfer_override_mm", -1.0 },
-        { "chamfer_applied_mm",  0.2 },
+        { "chamfer_applied_mm",  sp->chamfer_mm },
+        { "measured_w_mm",       pocketW },
+        { "measured_h_mm",       pocketH },
+        { "fit_match_err_mm",    err },
     };
+    // Confidence: base 0.5; small err → up to 0.85.
+    double conf = 0.50 + std::max(0.0, 0.35 - err * 0.25);
+    if (conf > 0.92) conf = 0.92;
     RecognizedFeature rf;
     rf.skill_id         = kSkillId;
     rf.recovered_params = rp;
-    rf.confidence       = 0.35;
-    rf.matched_geometry = { { "source", "geometric_heuristic" } };
+    rf.confidence       = conf;
+    rf.matched_geometry = {
+        { "source",          "geometric_pocket_bbox" },
+        { "spec_key_table",  std::string(sp->name) },
+        { "wall_face_count", wallCount },
+        { "measured_w_mm",   pocketW },
+        { "measured_h_mm",   pocketH },
+        { "fit_err_mm",      err },
+    };
     out.push_back(rf);
     return out;
 }

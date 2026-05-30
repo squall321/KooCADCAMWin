@@ -335,11 +335,30 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// Geometric heuristic: find groups of cylindrical faces sharing an axis
-// where the OUTER cyl matches `boss_od` and an INNER cyl matches one of
-// the known pilot diameters from the screw table.
+// Geometric heuristic: collect cylindrical faces, group them by (X, Y) axis
+// location, classify each group as { boss-only, pilot-only, boss+pilot }
+// then back-map the inner pilot diameter to the closest ScrewSpec to recover
+// the screw_size key.  Also recovers boss_od when both cylinders are
+// present at the same site.
 //
-// FALLBACK: metadata replay.
+// FALLBACK: metadata replay (1.0 confidence).
+
+namespace {
+
+// Snap a measured inner-cyl Ø to the closest pilot in the ScrewSpec table.
+const ScrewSpec* snapToScrew(double dia_mm, double tol_mm, double* out_err)
+{
+    const ScrewSpec* best = nullptr;
+    double bestErr = tol_mm;
+    for (const auto& s : kScrewTable) {
+        const double err = std::abs(dia_mm - s.pilot_dia_mm);
+        if (err < bestErr) { bestErr = err; best = &s; }
+    }
+    if (out_err) *out_err = bestErr;
+    return best;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -358,57 +377,101 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Geometric heuristic: count cylindrical faces that match a known
-    // pilot Ø in the screw table.
-    struct CylKey { double r; gp_Pnt loc; };
-    std::vector<CylKey> matches;
+    // Geometric pass: walk every cylindrical face, harvest (radius, axisXY).
+    // We separate into "pilot candidates" (small radius, matches a screw
+    // table pilot) and "boss candidates" (larger radius, matches one of the
+    // boss_od values associated with a known screw size).
+    struct Cyl { double r; double x; double y; };
+    std::vector<Cyl> all;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFaceCylinder(i)) continue;
         BRepAdaptor_Surface surf(wp.face(i));
         const gp_Cylinder cyl = surf.Cylinder();
-        const double dia = 2.0 * cyl.Radius();
-        for (const auto& s : kScrewTable) {
-            if (std::abs(dia - s.pilot_dia_mm) < 0.15) {
-                matches.push_back({ cyl.Radius(), cyl.Axis().Location() });
+        all.push_back({ cyl.Radius(), cyl.Axis().Location().X(),
+                                       cyl.Axis().Location().Y() });
+    }
+    if (all.empty()) return out;
+
+    // Group by (x, y) proximity — 0.5 mm tolerance.
+    struct Site { double x; double y; std::vector<double> radii; };
+    std::vector<Site> sites;
+    for (const auto& c : all) {
+        bool absorbed = false;
+        for (auto& s : sites) {
+            const double dx = s.x - c.x;
+            const double dy = s.y - c.y;
+            if (std::sqrt(dx * dx + dy * dy) < 0.6) {
+                s.radii.push_back(c.r);
+                absorbed = true;
                 break;
             }
         }
+        if (!absorbed) sites.push_back({ c.x, c.y, { c.r } });
     }
-    if (matches.empty()) return out;
 
-    // Group by axis location XY (within tolerance) — but cheap: just count.
+    // For each site, classify cyls into inner (pilot) vs outer (boss); pick
+    // the *smallest* radius that snaps to a known screw pilot diameter.
     json sitesJson = json::array();
-    for (const auto& m : matches) {
-        bool dup = false;
-        for (const auto& s : sitesJson) {
-            const double dx = s["x_mm"].get<double>() - m.loc.X();
-            const double dy = s["y_mm"].get<double>() - m.loc.Y();
-            if (std::sqrt(dx * dx + dy * dy) < 0.5) { dup = true; break; }
+    const ScrewSpec* siteScrew = nullptr;
+    double avgBossOd  = 0.0;
+    int    bossCount  = 0;
+    int    pilotMatchCount = 0;
+    double bestSiteErr = 1e9;
+    for (const auto& s : sites) {
+        if (s.radii.empty()) continue;
+        // Smallest radius is the pilot candidate.
+        const double rMin = *std::min_element(s.radii.begin(), s.radii.end());
+        const double rMax = *std::max_element(s.radii.begin(), s.radii.end());
+        double err = 0.0;
+        const ScrewSpec* sp = snapToScrew(2.0 * rMin, 0.20, &err);
+        if (!sp) continue;
+        if (!siteScrew || err < bestSiteErr) { siteScrew = sp; bestSiteErr = err; }
+        // Boss radius candidate: any radius > pilot + 0.5 mm.
+        if (rMax > rMin + 0.5) {
+            avgBossOd += 2.0 * rMax;
+            ++bossCount;
         }
-        if (!dup) {
-            sitesJson.push_back({ { "x_mm", m.loc.X() }, { "y_mm", m.loc.Y() } });
-        }
+        sitesJson.push_back({ { "x_mm", s.x }, { "y_mm", s.y } });
+        ++pilotMatchCount;
     }
+
     if (sitesJson.empty()) return out;
+
+    // Back-map: screw_size is the table key for the dominant pilot dia.
+    const std::string screwSize = siteScrew ? siteScrew->size : std::string("M3");
+    const double bossOdRecovered = (bossCount > 0)
+        ? (avgBossOd / static_cast<double>(bossCount))
+        : (siteScrew ? siteScrew->min_boss_od_mm : 5.0);
 
     json rp = {
         { "axis_dir",            json::array({ 0.0, 0.0, 1.0 }) },
-        { "screw_size",          "M3" },
+        { "screw_size",          screwSize },
+        { "spec_key_table",      screwSize },
         { "standoff_height_mm",  4.0 },
-        { "boss_od_mm",          5.0 },
+        { "boss_od_mm",          bossOdRecovered },
         { "pilot_extra_depth_mm", 1.0 },
         { "PCB_thickness_mm",    0.0 },
         { "plate_margin_mm",     3.0 },
         { "plate_thickness_mm",  2.0 },
         { "sites",               sitesJson },
+        { "fit_match_err_mm",    bestSiteErr },
     };
+
+    // Confidence model:
+    //   base 0.55, +0.10 if boss cyl recovered too, +0.05 if pilot fit < 0.05.
+    double conf = 0.55;
+    if (bossCount > 0)         conf += 0.10;
+    if (bestSiteErr < 0.05)    conf += 0.05;
+    if (pilotMatchCount >= 2)  conf += 0.05;
+
     RecognizedFeature rf;
     rf.skill_id         = kSkillId;
     rf.recovered_params = rp;
-    rf.confidence       = 0.6;
-    rf.matched_geometry = { { "matched_pilot_count",
-                              static_cast<int>(sitesJson.size()) },
-                            { "source", "geometric" } };
+    rf.confidence       = conf;
+    rf.matched_geometry = { { "matched_pilot_count", pilotMatchCount },
+                            { "matched_boss_count",  bossCount },
+                            { "spec_key_table",      screwSize },
+                            { "source",              "geometric" } };
     out.push_back(rf);
     return out;
 }

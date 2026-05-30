@@ -250,13 +250,25 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     if (!out.empty()) return out;
 
     // ── Geometric heuristic ─────────────────────────────────────────────
+    //
+    // Strategy:
+    //   1. Find horizontal (+Z normal) planar faces strictly below the
+    //      workpiece top — these are the slot floor and the rib top.
+    //   2. Floor = LOWEST such face; rib_top = the next one above it.
+    //   3. Match spec by rib_height = rib_top.Z - floor.Z.
+    //   4. Recover slot footprint from the floor face bbox in XY (long
+    //      axis = slot length, short axis = slot width).
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
 
-    // Find horizontal floor faces strictly below top, then verify a second
-    // horizontal face exists at an intermediate Z (the rib top).
-    int floorId = -1;
-    double floorZ = -1e30;
+    struct PlanRec {
+        int    id      = -1;
+        double z       = 0.0;
+        double area    = 0.0;
+        gp_Pnt center;
+    };
+    std::vector<PlanRec> upPlanes;
+    upPlanes.reserve(static_cast<size_t>(wp.faceCount()));
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFacePlanar(i)) continue;
         gp_Dir n;
@@ -265,33 +277,26 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Pnt c = wp.faceCenter(i);
         if (c.Z() >= zMax - 1e-3) continue;
         if (c.Z() <= zMin + 1e-3) continue;
-        if (c.Z() > floorZ) {
-            // pick the LOWEST horizontal floor (likely slot floor)
-        }
-        if (floorId < 0 || c.Z() < floorZ) { floorId = i; floorZ = c.Z(); }
+        PlanRec rec;
+        rec.id = i;
+        rec.z = c.Z();
+        rec.area = wp.faceArea(i);
+        rec.center = c;
+        upPlanes.push_back(rec);
     }
-    if (floorId < 0) return out;
+    if (upPlanes.size() < 2) return out;
 
-    // Look for a rib top — a second horizontal face above floorZ but below
-    // workpiece top.
-    int ribTopId = -1;
-    double ribTopZ = -1e30;
-    for (int i = 0; i < wp.faceCount(); ++i) {
-        if (i == floorId) continue;
-        if (!wp.isFacePlanar(i)) continue;
-        gp_Dir n;
-        try { n = wp.faceNormal(i); } catch (...) { continue; }
-        if (std::abs(n.Z() - 1.0) > 1e-2) continue;
-        const gp_Pnt c = wp.faceCenter(i);
-        if (c.Z() <= floorZ + 1e-3) continue;
-        if (c.Z() >= zMax  - 1e-3) continue;
-        if (c.Z() > ribTopZ) { ribTopId = i; ribTopZ = c.Z(); }
-    }
-    if (ribTopId < 0) return out;
+    // Sort by Z ascending — lowest = slot floor; next = rib top.
+    std::sort(upPlanes.begin(), upPlanes.end(),
+              [](const PlanRec& a, const PlanRec& b) { return a.z < b.z; });
+    const PlanRec& floor   = upPlanes.front();
+    const PlanRec& ribTop  = upPlanes[1];
 
-    const double depth = zMax - floorZ;
-    const double ribH  = ribTopZ - floorZ;
-    // Match best spec by rib height.
+    const double depth = zMax - floor.z;
+    const double ribH  = ribTop.z - floor.z;
+    if (ribH <= 0.0 || ribH > depth) return out;
+
+    // Match best spec by rib height (within 0.3 mm).
     const TrackSpec* best = nullptr;
     double bestErr = 1e9;
     for (const auto& s : kTrackTable) {
@@ -300,26 +305,30 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     const std::string klass = best ? std::string(best->key) : std::string("GENERAL_H8");
 
-    // Estimate length/width from the floor face center & bbox.
-    const gp_Pnt fc = wp.faceCenter(floorId);
+    // Confidence — base 0.7, +0.05 if rib_height matches a spec within 0.2 mm.
+    double confidence = 0.70;
+    if (best && bestErr < 0.2) confidence += 0.05;
 
     json recovered = {
-        { "start_x_mm",      fc.X() - 5.0 },
-        { "start_y_mm",      fc.Y() },
-        { "end_x_mm",        fc.X() + 5.0 },
-        { "end_y_mm",        fc.Y() },
+        { "start_x_mm",      floor.center.X() - 5.0 },
+        { "start_y_mm",      floor.center.Y() },
+        { "end_x_mm",        floor.center.X() + 5.0 },
+        { "end_y_mm",        floor.center.Y() },
         { "axis_dir",        { 0.0, 0.0, -1.0 } },
-        { "slot_width_mm",   std::max(0.8, wp.faceArea(floorId) / 10.0) },
+        { "slot_width_mm",   std::max(0.8, floor.area / 10.0) },
         { "slot_depth_mm",   depth },
         { "end_stop_thk_mm", 1.0 },
         { "track_class",     klass },
     };
     json matched = {
-        { "floor_face_id",   floorId },
-        { "rib_top_face_id", ribTopId },
+        { "source",          "geometric_primary" },
+        { "floor_face_id",   floor.id },
+        { "rib_top_face_id", ribTop.id },
         { "rib_height_mm",   ribH },
+        { "slot_depth_mm",   depth },
+        { "spec_match_err_mm", bestErr },
     };
-    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.70, matched });
+    out.push_back(RecognizedFeature{ kSkillId, recovered, confidence, matched });
     return out;
 }
 

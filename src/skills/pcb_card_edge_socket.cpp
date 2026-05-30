@@ -234,9 +234,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         out.push_back(r);
     }
 
-    // Geometric heuristic: count small-radius vertical cylinders.  A
-    // card-edge socket leaves N coplanar finger pockets — distinctive
-    // signature is "many small-radius vertical cyls in a co-linear row".
+    // Geometric heuristic: card-edge socket leaves N coplanar finger
+    // pockets — distinctive signature is "many small-radius vertical cyls
+    // in a COLLINEAR row at a UNIFORM pitch".  We additionally verify:
+    //   (a) finger radius is uniform within tolerance,
+    //   (b) finger centers lie on a single line (perpendicular residual ≤ pitch/2),
+    //   (c) pitch is one of JEDEC MO-189 values { 1.27, 2.0, 2.54 } ± 0.1 mm.
     struct Cyl { double radius; gp_Pnt loc; };
     std::vector<Cyl> verticalCyls;
     for (int i = 0; i < wp.faceCount(); ++i) {
@@ -267,22 +270,64 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (bestCount < 3) return out;
 
-    // Collect the matching cylinders and check colinearity / pitch.
+    // Collect the matching cylinders.
     std::vector<gp_Pnt> pts;
     for (const auto& vc : verticalCyls) {
         if (std::abs(vc.radius - bestRadius) < 0.15) pts.push_back(vc.loc);
     }
-    // Sort by X primarily, Y secondarily.
+    if (pts.size() < 3) return out;
+
+    // Sort along the dominant axis direction.
     std::sort(pts.begin(), pts.end(),
               [](const gp_Pnt& a, const gp_Pnt& b){
                   if (std::abs(a.X() - b.X()) > 1e-3) return a.X() < b.X();
                   return a.Y() < b.Y();
               });
-    if (pts.size() < 3) return out;
     const double dx = pts.back().X() - pts.front().X();
     const double dy = pts.back().Y() - pts.front().Y();
-    const double pitch = (pts.size() > 1)
-        ? std::hypot(dx, dy) / (pts.size() - 1) : 0.0;
+    const double span = std::hypot(dx, dy);
+    const double pitch = (pts.size() > 1) ? span / (pts.size() - 1) : 0.0;
+    if (pitch < 0.5) return out;          // implausibly fine
+
+    // Collinearity: max perpendicular residual to the line {pts.front, pts.back}.
+    const double ux = dx / span;
+    const double uy = dy / span;
+    double maxResid = 0.0;
+    for (const auto& p : pts) {
+        const double px = p.X() - pts.front().X();
+        const double py = p.Y() - pts.front().Y();
+        const double t  = px * ux + py * uy;
+        const double rx = px - t * ux;
+        const double ry = py - t * uy;
+        maxResid = std::max(maxResid, std::hypot(rx, ry));
+    }
+    const bool collinear = (maxResid < pitch * 0.5 + 0.2);
+
+    // Pitch consistency vs the JEDEC MO-189 family.
+    bool jedecPitch = false;
+    for (double p : { 1.27, 2.0, 2.54 }) {
+        if (std::abs(p - pitch) < 0.15) { jedecPitch = true; break; }
+    }
+
+    // Per-step pitch uniformity check.
+    double maxStepDev = 0.0;
+    for (size_t k = 1; k < pts.size(); ++k) {
+        const double step = std::hypot(pts[k].X() - pts[k-1].X(),
+                                       pts[k].Y() - pts[k-1].Y());
+        maxStepDev = std::max(maxStepDev, std::abs(step - pitch));
+    }
+    const bool uniformPitch = (maxStepDev < pitch * 0.3);
+
+    // Reject obviously bad clusters.
+    if (!collinear) return out;
+
+    int subScore = 0;
+    if (pts.size() >= 3)  ++subScore;
+    if (collinear)        ++subScore;
+    if (uniformPitch)     ++subScore;
+    if (jedecPitch)       ++subScore;
+    const double confidence = std::min(0.96, 0.50 + 0.02 * pts.size()
+                                            + 0.05 * subScore);
 
     json recovered = {
         { "start_x_mm",       pts.front().X() },
@@ -297,11 +342,15 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     RecognizedFeature r;
     r.skill_id         = kSkillId;
     r.recovered_params = recovered;
-    // Confidence rises with finger count.
-    r.confidence       = std::min(0.95, 0.5 + 0.02 * pts.size());
+    r.confidence       = confidence;
     r.matched_geometry = {
-        { "finger_count",  static_cast<int>(pts.size()) },
-        { "pitch_mm",      pitch },
+        { "finger_count",        static_cast<int>(pts.size()) },
+        { "pitch_mm",            pitch },
+        { "max_perp_residual",   maxResid },
+        { "max_pitch_deviation", maxStepDev },
+        { "jedec_pitch",         jedecPitch },
+        { "subfeature_score",    subScore },
+        { "source",              "geometric" },
     };
     out.push_back(r);
     return out;

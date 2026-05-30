@@ -6,7 +6,13 @@
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pnt.hxx>
 
 #include <nlohmann/json.hpp>
@@ -15,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <vector>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -202,7 +209,128 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     return SkillOutput{ wpNew, sig };
 }
 
-// ── Recognition (metadata replay) ────────────────────────────────────────
+// ── Recognition (metadata replay + geometric fallback) ──────────────────
+//
+// Geometric signature of a wave-spring groove cut on the inside of a bore:
+//   - 1 cylindrical face with axis along the bore (the bore wall).
+//   - At least 1 LARGER coaxial cylindrical face (groove root) with radius
+//     greater than the bore wall by groove_depth, AND with finite axial
+//     extent (the groove width).
+//   - Optional second larger coaxial cyl face (the relief).
+//   - 2 planar annular side walls bracketing the groove.
+
+namespace {
+
+struct CylBand {
+    int    faceIdx;
+    gp_Pnt axisLoc;
+    gp_Dir axDir;
+    double radius;
+    double axialMin;
+    double axialMax;
+};
+
+std::vector<CylBand> collectCoaxialCyls(const Workpiece& wp)
+{
+    std::vector<CylBand> out;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        BRepAdaptor_Surface surf(wp.face(i));
+        const gp_Cylinder cy = surf.Cylinder();
+        CylBand d;
+        d.faceIdx = i;
+        d.axisLoc = cy.Axis().Location();
+        d.axDir   = cy.Axis().Direction();
+        d.radius  = cy.Radius();
+
+        // Extract axial range from circular edges.
+        std::vector<double> projs;
+        for (TopExp_Explorer exp(wp.face(i), TopAbs_EDGE); exp.More(); exp.Next()) {
+            BRepAdaptor_Curve crv(TopoDS::Edge(exp.Current()));
+            if (crv.GetType() != GeomAbs_Circle) continue;
+            const gp_Circ c = crv.Circle();
+            if (std::abs(std::abs(c.Axis().Direction().Dot(d.axDir)) - 1.0) > 1e-3) continue;
+            const gp_Pnt p = c.Location();
+            const double proj = (p.X() - d.axisLoc.X()) * d.axDir.X()
+                              + (p.Y() - d.axisLoc.Y()) * d.axDir.Y()
+                              + (p.Z() - d.axisLoc.Z()) * d.axDir.Z();
+            projs.push_back(proj);
+        }
+        if (projs.size() < 2) continue;
+        std::sort(projs.begin(), projs.end());
+        d.axialMin = projs.front();
+        d.axialMax = projs.back();
+        out.push_back(d);
+    }
+    return out;
+}
+
+std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+    if (wp.shape().IsNull()) return out;
+
+    const auto cyls = collectCoaxialCyls(wp);
+    if (cyls.size() < 2) return out;
+
+    // Find pair (bore wall + groove root) sharing an axis.  Groove root has
+    // larger radius than bore wall by groove depth, AND a narrower axial
+    // extent (groove width).
+    for (size_t i = 0; i < cyls.size(); ++i) {
+        for (size_t j = 0; j < cyls.size(); ++j) {
+            if (i == j) continue;
+            const CylBand& bore   = cyls[i];
+            const CylBand& groove = cyls[j];
+            if (groove.radius <= bore.radius) continue;
+            if (std::abs(std::abs(bore.axDir.Dot(groove.axDir)) - 1.0) > 1e-3) continue;
+            const gp_Vec d(bore.axisLoc, groove.axisLoc);
+            const gp_Vec ax(bore.axDir.X(), bore.axDir.Y(), bore.axDir.Z());
+            const gp_Vec perp = d - ax * d.Dot(ax);
+            if (perp.Magnitude() > 0.1) continue;
+            const double depth = groove.radius - bore.radius;
+            // groove depth gate — Smalley range, but relaxed at both ends to
+            // accommodate the synthesis-generates-inside-solid case where the
+            // observed step is only the relief radial offset (reliefR ≈ 0.15
+            // × design depth).  We accept any positive step up to a generous
+            // 50% of bore diameter.
+            const double boreDia = 2.0 * bore.radius;
+            if (depth < 0.05 || depth > boreDia * 0.5) continue;
+            const double width = groove.axialMax - groove.axialMin;
+            const double boreLen = bore.axialMax - bore.axialMin;
+            if (width <= 0.0 || width >= boreLen * 1.5) continue;
+
+            const double meanDia    = 2.0 * groove.radius;
+            const double springID   = 2.0 * bore.radius;
+            const double springH    = width / 1.05;
+            const double axialMidProj = (groove.axialMin + groove.axialMax) / 2.0;
+
+            json recovered = {
+                { "bore_axis_origin", { bore.axisLoc.X(),
+                                        bore.axisLoc.Y(),
+                                        bore.axisLoc.Z() } },
+                { "bore_axis_dir",    { bore.axDir.X(),
+                                        bore.axDir.Y(),
+                                        bore.axDir.Z() } },
+                { "mean_dia",         meanDia },
+                { "wave_spring_id",   springID },
+                { "wave_spring_height", springH },
+                { "axial_position_mm", axialMidProj },
+            };
+            json matched = {
+                { "source",          "geometric_fallback" },
+                { "bore_face_id",    bore.faceIdx },
+                { "groove_face_id",  groove.faceIdx },
+                { "groove_depth_mm", depth },
+                { "groove_width_mm", width },
+            };
+            out.push_back(RecognizedFeature{ kSkillId, recovered, 0.65, matched });
+            return out;
+        }
+    }
+    return out;
+}
+
+}  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
@@ -219,6 +347,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "subfeature_count", 2 },
         };
         out.push_back(r);
+    }
+    if (out.empty()) {
+        out = geometric_fallback(wp);
     }
     return out;
 }

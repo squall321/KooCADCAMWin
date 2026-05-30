@@ -278,36 +278,48 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 }
 
 // ── Recognition ──────────────────────────────────────────────────────────
+//
+// Strengthened geometric recognition: walk every face once, classify by
+// (kind, axis), then spatially correlate the 5 expected sub-features:
+//
+//   (a) ≥2 flow-axial conical faces (left + right seat rings), coaxial with
+//       the flow bore; we recover the seat taper angle from the cone's
+//       semi-angle (not a hard-coded constant).
+//   (b) ≥1 flow-axial cylindrical face — the through bore — coaxial with
+//       the cones (lateral distance ≤ bore radius + slack).
+//   (c) ≥1 stem-axial cylindrical face whose XY position is on the bore
+//       centerline (stem MUST drop into the bore — that's the kinematic
+//       constraint of a gate valve).
+//   (d) ≥1 perpendicular planar-wall PAIR forming the gate slot (face
+//       normals along ±X, lying between the two seat cones along X, with
+//       the same Z-range as the bore).
+//
+// Confidence scales with how many of (a..d) are present.
 
 namespace {
 
-// Determine if a face is conical with X-aligned axis (matches our flow axis).
-struct ConicalInfo
-{
-    int    faceIdx;
-    double minR, maxR;
-    double axialLen;
+struct ConeFlow {
+    int    faceIdx{ -1 };
+    gp_Cone cone;
+    double semiAngleDeg{ 0.0 };
+    gp_Pnt apex;
+};
+
+struct CylInfo {
+    int    faceIdx{ -1 };
+    gp_Cylinder cyl;
     gp_Pnt center;
 };
 
-std::vector<ConicalInfo> collectConicalFlowFaces(const Workpiece& wp)
+bool coaxialFlow(const gp_Ax1& a, const gp_Pnt& probe, double tolMm)
 {
-    std::vector<ConicalInfo> out;
-    for (int i = 0; i < wp.faceCount(); ++i) {
-        BRepAdaptor_Surface s(wp.face(i));
-        if (s.GetType() != GeomAbs_Cone) continue;
-        const gp_Cone c = s.Cone();
-        const gp_Dir axDir = c.Axis().Direction();
-        if (std::abs(std::abs(axDir.X()) - 1.0) > 1e-2) continue;  // not flow-axial
-        ConicalInfo info;
-        info.faceIdx = i;
-        info.minR    = c.RefRadius();
-        info.maxR    = info.minR;  // simplified — will be refined by face area
-        info.axialLen = 0.0;
-        info.center   = wp.faceCenter(i);
-        out.push_back(info);
-    }
-    return out;
+    // Distance from `probe` to flow-axis line `a`.
+    const gp_Pnt o = a.Location();
+    const gp_Dir d = a.Direction();
+    const gp_Vec v(o, probe);
+    const gp_Vec proj = gp_Vec(d) * (v.Dot(gp_Vec(d)));
+    const gp_Vec perp = v - proj;
+    return perp.Magnitude() <= tolMm;
 }
 
 }  // namespace
@@ -316,7 +328,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
 
-    // First, try metadata replay (fallback path = 1.0 confidence).
+    // ─ (0) Metadata replay (preferred — exact recovery) ──────────────────
     for (const auto& f : wp.features()) {
         if (f.skill_id == kSkillId) {
             RecognizedFeature r;
@@ -329,62 +341,139 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Geometric: count flow-axial conical faces + a perpendicular vertical
-    // stem cylinder + a horizontal through-cyl (the bore).
-    auto cones = collectConicalFlowFaces(wp);
-    int  stemCyl = -1;
-    int  flowCyl = -1;
-    int  recessCyl = -1;
+    // ─ (1) Walk faces once, classify ──────────────────────────────────────
+    std::vector<ConeFlow>  flowCones;
+    std::vector<CylInfo>   flowCyls, stemCyls;
+    int slotWallPlusX  = -1;   // wall with normal +X (slot left face)
+    int slotWallMinusX = -1;   // wall with normal -X (slot right face)
+
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
 
     for (int i = 0; i < wp.faceCount(); ++i) {
-        if (!wp.isFaceCylinder(i)) continue;
         BRepAdaptor_Surface s(wp.face(i));
-        const gp_Cylinder cyl = s.Cylinder();
-        const gp_Dir axDir = cyl.Axis().Direction();
-        const double r = cyl.Radius();
-        if (std::abs(std::abs(axDir.Z()) - 1.0) < 1e-2) {
-            // vertical (stem axis)
-            const gp_Pnt c = wp.faceCenter(i);
-            // top one = stem; bottom one = recess
-            double xMin, yMin, zMin, xMax, yMax, zMax;
-            wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
-            if (c.Z() > (zMin + zMax) / 2.0) {
-                if (stemCyl < 0 || wp.faceCenter(stemCyl).Z() < c.Z()) stemCyl = i;
-            } else {
-                if (recessCyl < 0) recessCyl = i;
+        const GeomAbs_SurfaceType st = s.GetType();
+        if (st == GeomAbs_Cone) {
+            const gp_Cone c = s.Cone();
+            const gp_Dir ad = c.Axis().Direction();
+            if (std::abs(std::abs(ad.X()) - 1.0) < 5e-2) {
+                ConeFlow cf;
+                cf.faceIdx     = i;
+                cf.cone        = c;
+                cf.semiAngleDeg = std::abs(c.SemiAngle()) * 180.0 / M_PI;
+                cf.apex        = c.Apex();
+                flowCones.push_back(cf);
             }
-            (void)r;
-        } else if (std::abs(std::abs(axDir.X()) - 1.0) < 1e-2) {
-            // horizontal flow bore
-            if (flowCyl < 0) flowCyl = i;
+        } else if (st == GeomAbs_Cylinder) {
+            const gp_Cylinder cyl = s.Cylinder();
+            const gp_Dir ad = cyl.Axis().Direction();
+            CylInfo ci;
+            ci.faceIdx = i;
+            ci.cyl     = cyl;
+            ci.center  = wp.faceCenter(i);
+            if (std::abs(std::abs(ad.X()) - 1.0) < 5e-2) flowCyls.push_back(ci);
+            else if (std::abs(std::abs(ad.Z()) - 1.0) < 5e-2) stemCyls.push_back(ci);
+        } else if (st == GeomAbs_Plane) {
+            gp_Dir n;
+            try { n = wp.faceNormal(i); } catch (...) { continue; }
+            // ±X-normal vertical wall — candidate slot wall.  Must lie
+            // strictly inside the stock (not the outer end faces).
+            if (std::abs(std::abs(n.X()) - 1.0) < 5e-2 &&
+                std::abs(n.Y()) < 5e-2 && std::abs(n.Z()) < 5e-2) {
+                const gp_Pnt c = wp.faceCenter(i);
+                if (c.X() > xMin + 1.0 && c.X() < xMax - 1.0) {
+                    if (n.X() > 0 && slotWallPlusX  < 0) slotWallPlusX  = i;
+                    if (n.X() < 0 && slotWallMinusX < 0) slotWallMinusX = i;
+                }
+            }
         }
     }
 
-    if (cones.size() >= 2 && stemCyl >= 0 && flowCyl >= 0) {
-        BRepAdaptor_Surface stemSurf(wp.face(stemCyl));
-        BRepAdaptor_Surface flowSurf(wp.face(flowCyl));
-        const double stemDia = 2.0 * stemSurf.Cylinder().Radius();
-        const double flowDia = 2.0 * flowSurf.Cylinder().Radius();
+    if (flowCones.size() < 2 || flowCyls.empty() || stemCyls.empty()) return out;
 
-        json recovered = {
-            { "center_x_mm",        wp.faceCenter(stemCyl).X() },
-            { "center_y_mm",        wp.faceCenter(stemCyl).Y() },
-            { "center_z_mm",        wp.faceCenter(flowCyl).Z() },
-            { "flow_axis",          { 1.0, 0.0, 0.0 } },
-            { "stem_axis",          { 0.0, 0.0, 1.0 } },
-            { "seat_bore_dia_mm",   flowDia },
-            { "stem_bore_dia_mm",   stemDia },
-            { "seat_taper_deg",     15.0 },          // best-guess (geometric heuristic)
-        };
-        json matched = {
-            { "conical_seat_count", static_cast<int>(cones.size()) },
-            { "stem_cyl_face_id",   stemCyl },
-            { "flow_cyl_face_id",   flowCyl },
-            { "recess_cyl_face_id", recessCyl },
-            { "source",             "geometric" },
-        };
-        out.push_back(RecognizedFeature{ kSkillId, recovered, 0.72, matched });
+    // ─ (2) Pick the largest-radius flow cylinder as the through bore ─────
+    auto flowCylIt = std::max_element(
+        flowCyls.begin(), flowCyls.end(),
+        [](const CylInfo& a, const CylInfo& b) {
+            return a.cyl.Radius() < b.cyl.Radius();
+        });
+    const CylInfo& flowCyl = *flowCylIt;
+    const gp_Ax1 boreAxis = flowCyl.cyl.Axis();
+    const double boreR    = flowCyl.cyl.Radius();
+
+    // ─ (3) Filter cones: those whose axes are coaxial with the bore ─────
+    std::vector<ConeFlow> coaxCones;
+    for (const auto& cf : flowCones) {
+        if (coaxialFlow(boreAxis, cf.apex, boreR * 3.0 + 5.0)) {
+            coaxCones.push_back(cf);
+        }
     }
+    if (coaxCones.size() < 2) return out;
+
+    // Sort coaxial cones by apex X to get left/right seat pair.
+    std::sort(coaxCones.begin(), coaxCones.end(),
+              [](const ConeFlow& a, const ConeFlow& b) {
+                  return a.apex.X() < b.apex.X();
+              });
+    const double seatTaperDeg = (coaxCones.front().semiAngleDeg
+                               + coaxCones.back().semiAngleDeg) * 0.5;
+
+    // ─ (4) Stem cylinder: one whose XY lies on the bore axis line ────────
+    const CylInfo* stem = nullptr;
+    for (const auto& c : stemCyls) {
+        if (coaxialFlow(boreAxis, c.center, boreR * 1.5 + 2.0)) {
+            if (!stem || c.center.Z() > stem->center.Z()) stem = &c;
+        }
+    }
+    if (!stem) return out;
+    const double stemDia = 2.0 * stem->cyl.Radius();
+
+    // ─ (5) Slot wall pair — promotes confidence ──────────────────────────
+    const bool slotPresent = (slotWallPlusX >= 0 && slotWallMinusX >= 0);
+    double slotWidth = 0.0;
+    if (slotPresent) {
+        const gp_Pnt cL = wp.faceCenter(slotWallPlusX);
+        const gp_Pnt cR = wp.faceCenter(slotWallMinusX);
+        slotWidth = std::abs(cR.X() - cL.X());
+    }
+
+    // ─ (6) Recess cylinder — vertical, below body centerline ─────────────
+    int recessIdx = -1;
+    for (const auto& c : stemCyls) {
+        if (c.faceIdx == stem->faceIdx) continue;
+        if (c.center.Z() < boreAxis.Location().Z()) { recessIdx = c.faceIdx; break; }
+    }
+
+    // ─ (7) Score ──────────────────────────────────────────────────────────
+    int subfeatureScore = 0;
+    if (coaxCones.size() >= 2) ++subfeatureScore;       // left + right seats
+    if (true)                   ++subfeatureScore;       // through bore
+    if (stem)                   ++subfeatureScore;       // stem bore
+    if (slotPresent)            ++subfeatureScore;       // gate slot
+    if (recessIdx >= 0)         ++subfeatureScore;       // recess
+    const double confidence = std::min(0.92, 0.55 + 0.07 * subfeatureScore);
+
+    json recovered = {
+        { "center_x_mm",      stem->center.X() },
+        { "center_y_mm",      stem->center.Y() },
+        { "center_z_mm",      boreAxis.Location().Z() },
+        { "flow_axis",        { 1.0, 0.0, 0.0 } },
+        { "stem_axis",        { 0.0, 0.0, 1.0 } },
+        { "seat_bore_dia_mm", 2.0 * boreR },
+        { "stem_bore_dia_mm", stemDia },
+        { "seat_taper_deg",   seatTaperDeg },
+        { "slot_width_mm",    slotWidth },
+    };
+    json matched = {
+        { "conical_seat_count",  static_cast<int>(coaxCones.size()) },
+        { "flow_cyl_face_id",    flowCyl.faceIdx },
+        { "stem_cyl_face_id",    stem->faceIdx },
+        { "recess_cyl_face_id",  recessIdx },
+        { "slot_walls_present",  slotPresent },
+        { "subfeature_score",    subfeatureScore },
+        { "source",              "geometric" },
+    };
+    out.push_back(RecognizedFeature{ kSkillId, recovered, confidence, matched });
     return out;
 }
 

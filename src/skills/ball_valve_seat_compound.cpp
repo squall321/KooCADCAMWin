@@ -9,10 +9,13 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <gp.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Sphere.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -344,59 +347,116 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // 2) Geometric heuristic — count spherical face + flow-axis cylinder +
-    //    vertical stem cylinder.
-    int sphericalFaces = 0;
-    int flowCylIdx     = -1;
-    int stemCylIdx     = -1;
-    double flowDia     = 0.0;
-    double stemDia     = 0.0;
+    // 2) Geometric heuristic — spatially correlate:
+    //    spherical cavity center ↔ flow-axis cylinder axis ↔ vertical stem.
+    //
+    // The ball-valve signature requires the spherical cavity CENTER to be
+    // on the flow-bore axis line, AND the stem cylinder axis to pass
+    // through that same point.  These coaxiality constraints distinguish
+    // a real ball-valve cavity from an unrelated sphere + cylinder pair.
+    struct SphInfo { int idx; gp_Pnt center; double radius; };
+    std::vector<SphInfo> spheres;
+    std::vector<int> flowCyls;
+    std::vector<double> flowR;
+    std::vector<int> stemCyls;
+    std::vector<double> stemR;
+    std::vector<gp_Pnt> stemCenters;
+    std::vector<gp_Ax1> flowAxes;
 
     for (int i = 0; i < wp.faceCount(); ++i) {
         BRepAdaptor_Surface s(wp.face(i));
-        if (s.GetType() == GeomAbs_Sphere) {
-            ++sphericalFaces;
-        } else if (s.GetType() == GeomAbs_Cylinder) {
+        const GeomAbs_SurfaceType st = s.GetType();
+        if (st == GeomAbs_Sphere) {
+            const gp_Sphere sph = s.Sphere();
+            spheres.push_back({ i, sph.Location(), sph.Radius() });
+        } else if (st == GeomAbs_Cylinder) {
             const gp_Cylinder cyl = s.Cylinder();
             const gp_Dir ad = cyl.Axis().Direction();
-            if (std::abs(std::abs(ad.X()) - 1.0) < 1e-2) {
-                if (flowCylIdx < 0 || cyl.Radius() < flowDia / 2.0) {
-                    flowCylIdx = i;
-                    flowDia    = 2.0 * cyl.Radius();
-                }
-            } else if (std::abs(std::abs(ad.Z()) - 1.0) < 1e-2) {
-                if (stemCylIdx < 0) {
-                    stemCylIdx = i;
-                    stemDia    = 2.0 * cyl.Radius();
-                }
+            if (std::abs(std::abs(ad.X()) - 1.0) < 5e-2) {
+                flowCyls.push_back(i);
+                flowR.push_back(cyl.Radius());
+                flowAxes.push_back(cyl.Axis());
+            } else if (std::abs(std::abs(ad.Z()) - 1.0) < 5e-2) {
+                stemCyls.push_back(i);
+                stemR.push_back(cyl.Radius());
+                stemCenters.push_back(wp.faceCenter(i));
             }
         }
     }
-    if (sphericalFaces < 1 || flowCylIdx < 0 || stemCylIdx < 0) return out;
+    if (spheres.empty() || flowCyls.empty() || stemCyls.empty()) return out;
 
-    // Best-fit spec — pick the size whose port_dia is closest to flowDia.
+    // Pick the LARGEST sphere (the ball cavity, not chamfer fillets).
+    auto biggestSph = std::max_element(
+        spheres.begin(), spheres.end(),
+        [](const SphInfo& a, const SphInfo& b){ return a.radius < b.radius; });
+    const gp_Pnt sphCenter = biggestSph->center;
+    const double sphRadius = biggestSph->radius;
+
+    // Pick the flow cylinder whose axis comes closest to sphCenter
+    // (coaxiality is what defines the ball-cavity / port-bore topology).
+    auto distToLine = [](const gp_Pnt& p, const gp_Ax1& ax) {
+        const gp_Vec v(ax.Location(), p);
+        const gp_Vec d(ax.Direction());
+        const gp_Vec proj = d * v.Dot(d);
+        return (v - proj).Magnitude();
+    };
+    int bestFlow = -1;
+    double bestFlowDist = 1e30;
+    for (size_t k = 0; k < flowCyls.size(); ++k) {
+        const double dd = distToLine(sphCenter, flowAxes[k]);
+        if (dd < bestFlowDist) { bestFlowDist = dd; bestFlow = static_cast<int>(k); }
+    }
+    if (bestFlow < 0 || bestFlowDist > sphRadius + 5.0) return out;
+    const double portDia = 2.0 * flowR[static_cast<size_t>(bestFlow)];
+
+    // Pick the stem cylinder whose XY position is closest to (sphCenter.X,
+    // sphCenter.Y).  That's the kinematic requirement of a ball valve: stem
+    // drops onto the ball center.
+    int bestStem = -1;
+    double bestStemXY = 1e30;
+    for (size_t k = 0; k < stemCyls.size(); ++k) {
+        const double dxy = std::hypot(
+            stemCenters[k].X() - sphCenter.X(),
+            stemCenters[k].Y() - sphCenter.Y());
+        if (dxy < bestStemXY) { bestStemXY = dxy; bestStem = static_cast<int>(k); }
+    }
+    if (bestStem < 0 || bestStemXY > sphRadius + 5.0) return out;
+    const double stemDia = 2.0 * stemR[static_cast<size_t>(bestStem)];
+
+    // Best-fit spec — pick the size whose ball_dia is closest to 2*sphRadius
+    // (more reliable than port-based match because the cavity has clearance).
     const BallValveSpec* best = &kBallValveTable.front();
-    double bestErr = std::abs(best->port_dia - flowDia);
+    double bestErr = std::abs(best->ball_dia - 2.0 * sphRadius);
     for (const auto& s : kBallValveTable) {
-        const double err = std::abs(s.port_dia - flowDia);
+        const double err = std::abs(s.ball_dia - 2.0 * sphRadius);
         if (err < bestErr) { best = &s; bestErr = err; }
     }
 
+    // Confidence rises with coaxial consistency.
+    const double coaxQuality =
+        std::max(0.0, 1.0 - (bestFlowDist + bestStemXY) / (sphRadius + 1e-3));
+    const double confidence = std::min(0.90, 0.62 + 0.15 * coaxQuality);
+
     json recovered = {
         { "size_spec",        std::string(best->size) },
-        { "ball_dia_mm",      best->ball_dia },
-        { "port_dia_mm",      flowDia },
+        { "ball_dia_mm",      2.0 * sphRadius },
+        { "port_dia_mm",      portDia },
         { "stem_bore_dia_mm", stemDia },
+        { "center_x_mm",      sphCenter.X() },
+        { "center_y_mm",      sphCenter.Y() },
+        { "center_z_mm",      sphCenter.Z() },
         { "flow_axis",        { 1.0, 0.0, 0.0 } },
         { "stem_axis",        { 0.0, 0.0, 1.0 } },
     };
     json matched = {
-        { "spherical_face_count", sphericalFaces },
-        { "flow_cyl_face_id",     flowCylIdx },
-        { "stem_cyl_face_id",     stemCylIdx },
-        { "source",               "geometric" },
+        { "spherical_face_count",  static_cast<int>(spheres.size()) },
+        { "flow_cyl_face_id",      flowCyls[static_cast<size_t>(bestFlow)] },
+        { "stem_cyl_face_id",      stemCyls[static_cast<size_t>(bestStem)] },
+        { "ball_axis_offset_mm",   bestFlowDist },
+        { "stem_axis_offset_mm",   bestStemXY },
+        { "source",                "geometric" },
     };
-    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.74, matched });
+    out.push_back(RecognizedFeature{ kSkillId, recovered, confidence, matched });
     return out;
 }
 
