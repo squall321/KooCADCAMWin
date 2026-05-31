@@ -919,9 +919,5 @@ target_link_libraries(integration_bearing_housing PRIVATE
     koo_skills koo_process koo_re koo_io koo_engine)
 target_include_directories(integration_bearing_housing SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_bearing_housing)
-# TODO(slice-9): integration_bearing_housing now dispatches all 6 compound
-# skills (work 1 dispatch + work 3 activation), but step 7 chamfer_edge
-# fails OCCT chamfer build after the previous compound ops mutated the
-# rim topology.  Fix chamfer_edge selector or add a fallback rim-pick.
-# add_test(NAME integration_bearing_housing COMMAND integration_bearing_housing)
-# set_tests_properties(integration_bearing_housing PROPERTIES TIMEOUT 240)
+add_test(NAME integration_bearing_housing COMMAND integration_bearing_housing)
+set_tests_properties(integration_bearing_housing PROPERTIES TIMEOUT 240)
