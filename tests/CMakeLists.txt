@@ -621,7 +621,7 @@ koo_add_skill_test(cable_grommet_pass_through)
 koo_add_skill_test(cam_actuated_slider)
 koo_add_skill_test(cam_follower_roller_seat)
 koo_add_skill_test(cam_follower_threaded_seat)
-# TODO(slice-9): koo_add_skill_test(cam_lock_cavity) -- ApplyProducesValidShape — removed exceeds expected by ~896 mm³ (~11%, just over 10% tol).  Body bore + slot + cap volumes add up to expected ≈ 8060, actual ≈ 8956.  Source of extra 11% not obvious from a quick read — needs deeper diff (possibly OCCT cap-overlap rounding or undocumented sub-feature).
+koo_add_skill_test(cam_lock_cavity)
 koo_add_skill_test(cam_with_profile)
 koo_add_skill_test(captive_nut_pocket)
 koo_add_skill_test(captive_screw_pocket_spec)
@@ -711,7 +711,7 @@ koo_add_skill_test(shaft_with_keyway_step)
 koo_add_skill_test(shape_morph_interpolate)
 koo_add_skill_test(shim_pocket)
 koo_add_skill_test(slip_fit_h11_bore_spec)
-# TODO(slice-9): koo_add_skill_test(slot_weld_slot) -- removed off by 301 mm³ (~22%), tolerance 15%.  Geometry math (stadium × plate_thickness) appears correct in apply, so the diff likely comes from over-extent or overlap; needs OCCT-level inspection.
+koo_add_skill_test(slot_weld_slot)
 
 koo_add_skill_test(snap_action_lock_pocket)
 koo_add_skill_test(socket_head_bolt_seat)
@@ -731,7 +731,7 @@ koo_add_skill_test(threaded_npt_port)
 koo_add_skill_test(threaded_through_with_chamfers)
 koo_add_skill_test(thrust_bearing_seat_compound)
 koo_add_skill_test(tilt_post_for_lcd_panel)
-# TODO(slice-9): koo_add_skill_test(top_face_recess_with_walls) -- delta off by 52 mm³ (tolerance ~25 mm³).  Corner fillets etc consume more than the test's allowance; needs precise wall corner geometry tuning.
+koo_add_skill_test(top_face_recess_with_walls)
 
 koo_add_skill_test(torsion_spring_anchor_compound)
 koo_add_skill_test(unc_unf_hole_spec)
