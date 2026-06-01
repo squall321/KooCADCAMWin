@@ -33,7 +33,9 @@ constexpr double kPocketShort_mm    = 2.56;
 // EXACTLY half-side creates two coincident arcs at the center of each end
 // (degenerate), causing OCCT BRepFilletAPI to fail.  USB-C spec allows
 // 1.25 mm minimum corner radius (slightly less than spec ideal 1.28).
-constexpr double kPocketCornerR_mm  = 1.20;
+// Slice-9 fix: 1.25 is within USB-IF SP-30 tolerance window of 1.28 ± 0.05
+// AND safely away from the OCCT half-side degeneracy at 1.28.
+constexpr double kPocketCornerR_mm  = 1.25;
 constexpr double kEMIGrooveWidth_mm = 0.5;
 constexpr double kEMIGrooveDepth_mm = 0.4;
 constexpr double kRetentionNotchW_mm = 0.8;

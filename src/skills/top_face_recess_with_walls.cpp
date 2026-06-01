@@ -319,8 +319,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         if (c.Z() < floorZ) { floorZ = c.Z(); floorId = i; }
     }
 
-    // Find wall-top faces above zMax of the "main" body — heuristic only.
+    // Find upward-facing planar faces near the top of the workpiece, then
+    // group them by Z level.  A real "recess with walls" produces TWO
+    // distinct upward Zs (the panel top and the surrounding wall top); a
+    // pristine cuboid has only ONE (the single top face at zMax).
     std::vector<int> wallTops;
+    std::vector<double> upZs;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFacePlanar(i)) continue;
         gp_Dir n;
@@ -329,9 +333,24 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Pnt c = wp.faceCenter(i);
         if (c.Z() <= zMax - 1e-3) continue;
         wallTops.push_back(i);
+        upZs.push_back(c.Z());
+    }
+    // Count distinct upward Z levels (tolerance 1e-3).
+    std::sort(upZs.begin(), upZs.end());
+    int distinctUpZ = 0;
+    double lastZ = -1e30;
+    for (double z : upZs) {
+        if (z - lastZ > 1e-3) { ++distinctUpZ; lastZ = z; }
     }
 
-    if (floorId < 0 && wallTops.empty()) return out;
+    // Slice-9 bare-stock fix: a "recess WITH WALLS" requires BOTH a
+    // recessed floor below the panel top AND a TWO-level upward profile
+    // (panel top + wall top at a strictly higher Z).  A pristine cuboid
+    // has its single top face at zMax — which the wall-top scan picks up
+    // as a lone wall-top, giving a false positive.  Demanding two
+    // distinct upward Zs rejects the cuboid while still matching real
+    // recessed-panel geometry.
+    if (floorId < 0 || distinctUpZ < 2) return out;
 
     const auto floorBb = (floorId >= 0) ? pr::optimalBbox(wp.face(floorId))
                                         : pr::Bbox3d{};

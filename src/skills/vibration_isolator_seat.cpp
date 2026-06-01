@@ -56,6 +56,34 @@ const StudSpec* findStud(const std::string& size)
 
 }  // namespace
 
+// ── Geometry-formula helpers ─────────────────────────────────────────────
+//
+// Single source of truth for the 3 stacked-seat depth constants.  Tests
+// MUST call these helpers rather than hard-coding 0.4 / 0.6 / +1.0 so the
+// formulas stay in lock-step with apply()/validate().
+
+double bushingSeatDepth(double bushing_od_mm)
+{
+    return bushing_od_mm * 0.4;
+}
+
+double reliefDepth()
+{
+    return 0.6;
+}
+
+double cbDepth(const std::string& stud_M)
+{
+    const StudSpec* s = findStud(stud_M);
+    if (!s) return 0.0;
+    return s->nut_height_mm + 1.0;  // +1 mm head clearance
+}
+
+double totalSeatDepth(const std::string& stud_M, double bushing_od_mm)
+{
+    return bushingSeatDepth(bushing_od_mm) + reliefDepth() + cbDepth(stud_M);
+}
+
 // ── Validation ───────────────────────────────────────────────────────────
 
 DFMReport validate(const Workpiece& wp, const Input& in)
@@ -100,10 +128,11 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     }
 
     // Total seat depth: bushing_seat_depth + cb_depth + lockwasher_relief
-    // depth.  Must be < plate_thick.
-    const double bushing_seat_depth = in.bushing_od_mm * 0.4;
-    const double cb_depth           = stud->nut_height_mm + 1.0;  // +1 mm clearance
-    const double relief_depth       = 0.6;
+    // depth.  Must be < plate_thick.  Helpers below are also exposed for
+    // test reuse so the 0.4 / 0.6 / +1.0 formula constants live in ONE place.
+    const double bushing_seat_depth = bushingSeatDepth(in.bushing_od_mm);
+    const double cb_depth           = cbDepth(in.stud_M);
+    const double relief_depth       = reliefDepth();
     const double total_seat_depth   = bushing_seat_depth + relief_depth + cb_depth;
 
     if (in.plate_thick_mm <= 0.0) {
@@ -151,11 +180,11 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // ── Sub-feature derived dimensions ─────────────────────────────────
     const double pilot_dia    = stud->pilot_dia_mm;
     const double cb_dia       = stud->nut_head_dia_mm;
-    const double cb_depth     = stud->nut_height_mm + 1.0;
+    const double cb_depth     = cbDepth(in.stud_M);
     const double relief_od    = cb_dia + 1.5;
     const double relief_id    = cb_dia;
-    const double relief_depth = 0.6;
-    const double bushing_seat_depth = in.bushing_od_mm * 0.4;
+    const double relief_depth = reliefDepth();
+    const double bushing_seat_depth = bushingSeatDepth(in.bushing_od_mm);
 
     // Cylinder layout — all concentric on axis_dir, around (px, py).
     // Top of stock = zMax.

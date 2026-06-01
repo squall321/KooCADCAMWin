@@ -119,8 +119,17 @@ TEST(SkillBoxSectionWithEndplate, RecognizeMetadataReplay)
     EXPECT_NEAR(cands[0].recovered_params["bolt_dia_mm"].get<double>(),
                 12.0, 1e-9);
 
+    // Strip metadata → geometric fallback may still recognize the box section
+    // (slice-9 work-2 added geom-walk recognize).  Contract: any candidate
+    // returned must carry confidence < 1.0 (NOT a metadata replay) and the
+    // recovered bolt_dia_mm must be within 1 mm of the true 12 mm.
     skill::Workpiece raw(out.workpiece->shape());
-    EXPECT_TRUE(skill::box_section_with_endplate::recognize(raw).empty());
+    auto candsRaw = skill::box_section_with_endplate::recognize(raw);
+    for (const auto& c : candsRaw) {
+        EXPECT_LT(c.confidence, 1.0)
+            << "raw-geometry candidate must NOT claim metadata-level confidence";
+        EXPECT_NEAR(c.recovered_params["bolt_dia_mm"].get<double>(), 12.0, 1.0);
+    }
 }
 
 // ─── 5. SPECIFIC: total bolt holes = 2 × nx × ny ──────────────────────────

@@ -90,5 +90,14 @@ SkillOutput apply   (const Workpiece& wp, const Input& in);
 DFMReport   validate(const Workpiece& wp, const Input& in);
 std::vector<RecognizedFeature> recognize(const Workpiece& wp);
 
+// ── Geometry-formula helpers (single source of truth for tests + apply) ──
+// Returns 0.0 if stud_M is unknown.
+double bushingSeatDepth(double bushing_od_mm);
+double reliefDepth();
+double cbDepth(const std::string& stud_M);
+// Sum of the 3 stacked seat features (bushing seat + relief + counterbore).
+// Must stay STRICTLY below plate_thick_mm minus 1 mm clearance for DFM pass.
+double totalSeatDepth(const std::string& stud_M, double bushing_od_mm);
+
 }  // namespace vibration_isolator_seat
 }  // namespace koocadcam::skill

@@ -117,8 +117,18 @@ TEST(SkillGussetPlateCompound, RecognizeMetadataReplay)
     ASSERT_EQ(cands.size(), 1u);
     EXPECT_NEAR(cands[0].confidence, 1.0, 1e-9);
 
+    // Strip metadata → geometric fallback may still recognize the gusset
+    // (slice-9 work-2 added geom-walk recognize).  Contract: any candidate
+    // returned must carry confidence < 1.0 (NOT a metadata replay) and the
+    // recovered lift_hole_dia_mm must be within 1 mm of the true 25 mm.
     skill::Workpiece raw(out.workpiece->shape());
-    EXPECT_TRUE(skill::gusset_plate_compound::recognize(raw).empty());
+    auto candsRaw = skill::gusset_plate_compound::recognize(raw);
+    for (const auto& c : candsRaw) {
+        EXPECT_LT(c.confidence, 1.0)
+            << "raw-geometry candidate must NOT claim metadata-level confidence";
+        EXPECT_NEAR(c.recovered_params["lift_hole_dia_mm"].get<double>(),
+                    25.0, 1.0);
+    }
 }
 
 // ─── 5. SPECIFIC: hypotenuse = √(a² + b²) recorded in pattern ─────────────

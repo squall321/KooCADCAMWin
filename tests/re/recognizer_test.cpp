@@ -60,11 +60,15 @@ int groupOf(const std::string& sid)
 }  // namespace
 
 // ─── 1. Bare stock → no candidates ───────────────────────────────────────
-// TODO(slice-9): after work-2 expanded the recognizer registry from 11 to
-// 154 entries, some compound-feature recognizers fire false positives on
-// the bare cuboid (e.g., heat_sink_fin_array or shim_pocket may mis-match
-// the planar walls).  Tighten those recognizers' empty-cands gates.
-TEST(Recognizer, DISABLED_AnalyzeBareStock)
+// Re-enabled in slice-9 after tightening the bare-stock false-positive
+// gates in two compound recognizers (top_face_recess_with_walls and
+// curved_lip_around_face).  Both now demand TWO DISTINCT upward planar Z
+// levels (panel top + raised wall top); a pristine cuboid only has one
+// (its single top face at zMax), so neither fires.  The other 152
+// registered recognizers either need a cylindrical face, a tilted chamfer
+// face, repeated parallel fins, or multiple distinct upward Zs — none of
+// which exist on bare stock.
+TEST(Recognizer, AnalyzeBareStock)
 {
     auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
     auto cands = re::analyze(*stock);

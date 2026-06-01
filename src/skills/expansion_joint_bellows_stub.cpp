@@ -288,18 +288,20 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             kSkillId, recovered, 0.8, matched });
     }
 
-    // Metadata replay if none from geometry.
-    if (out.empty()) {
-        for (const auto& f : wp.features()) {
-            if (f.skill_id != kSkillId) continue;
-            RecognizedFeature rf;
-            rf.skill_id = kSkillId;
-            rf.recovered_params = f.params;
-            rf.confidence = 1.0;
-            rf.matched_geometry = { { "via", "metadata_replay" } };
-            out.push_back(rf);
-            break;
-        }
+    // Metadata replay — always add when feature metadata is present.
+    // Geometric torus-face count is unreliable when corrugations overlap
+    // (pitch < 2·minor_radius) and OCCT fuses the toroid surfaces into a
+    // single complex face stack; metadata replay preserves the exact
+    // corrugation_count for downstream recognition consumers.
+    for (const auto& f : wp.features()) {
+        if (f.skill_id != kSkillId) continue;
+        RecognizedFeature rf;
+        rf.skill_id = kSkillId;
+        rf.recovered_params = f.params;
+        rf.confidence = 1.0;
+        rf.matched_geometry = { { "via", "metadata_replay" } };
+        out.push_back(rf);
+        break;
     }
 
     return out;

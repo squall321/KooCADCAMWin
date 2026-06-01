@@ -286,7 +286,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         ++upTopCount;
         if (c.Z() > topZ) topZ = c.Z();
     }
-    if (upTopCount < 1) return out;
+    // Slice-9 bare-stock fix: a "lip AROUND a face" topology has at minimum
+    // a panel top + an offset lip-top (two distinct upward-facing planar
+    // tops).  A pristine cuboid has exactly one upward top, so reject when
+    // upTopCount < 2 — otherwise this recognizer fires on every bare
+    // cuboid at confidence 0.6.
+    if (upTopCount < 2) return out;
 
     // Estimate inset/thickness/height roughly from outermost vs innermost
     // upward-facing-face bboxes near topZ.  Too lossy to reconstruct the

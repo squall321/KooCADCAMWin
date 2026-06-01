@@ -127,10 +127,18 @@ TEST(SkillIBeamCompoundSection, RecognizeMetadataReplay)
     EXPECT_NEAR(cands[0].recovered_params["height_mm"].get<double>(),
                 200.0, 1e-9);
 
-    // Strip metadata → recognize empty.
+    // Strip metadata → geometric fallback may still recognize the I-section
+    // (slice-9 work-2 added geom-walk recognize).  Contract: if any candidate
+    // is returned, its confidence must be < 1.0 (i.e., NOT a metadata replay)
+    // and its recovered height_mm must be within 5% of the true 200 mm.
     skill::Workpiece raw(out.workpiece->shape());
     auto cands2 = skill::i_beam_compound_section::recognize(raw);
-    EXPECT_TRUE(cands2.empty());
+    for (const auto& c : cands2) {
+        EXPECT_LT(c.confidence, 1.0)
+            << "raw-geometry candidate must NOT claim metadata-level confidence";
+        EXPECT_NEAR(c.recovered_params["height_mm"].get<double>(),
+                    200.0, 200.0 * 0.05);
+    }
 }
 
 // ─── 5. SPECIFIC: total height = web + 2 × flange_t ───────────────────────
