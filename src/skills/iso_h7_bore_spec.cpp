@@ -4,6 +4,7 @@
 
 #include "iso_h7_bore_spec.hpp"
 
+#include "_iso286_fits.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -36,6 +37,9 @@ using nlohmann::json;
 //
 // Lower deviation is always 0 for H-grade.  Upper deviation = IT7 grade.
 // Source: ISO 286-1:2010 Table 2 (Standard Tolerance Grades).
+// ≤ 100 mm bands come from the central `iso286::kFits` table; the rows below
+// extend the lookup into the 100..250 mm range that the central helpers
+// intentionally do NOT cover (they return the unchanged nominal there).
 namespace {
 
 struct H7Row
@@ -45,17 +49,11 @@ struct H7Row
     double upper_dev_um; // upper deviation, microns
 };
 
-constexpr std::array<H7Row, 10> kH7Table {{
-    { 0.0,   3.0,  10.0 },   // covers Ø 1–3 (10 µm = 0.010 mm)
-    { 3.0,   6.0,  12.0 },   // Ø 3–6
-    { 6.0,  10.0,  15.0 },   // Ø 6–10
-    { 10.0, 18.0,  18.0 },   // Ø 10–18
-    { 18.0, 30.0,  21.0 },   // Ø 18–30
-    { 30.0, 50.0,  25.0 },   // Ø 30–50
-    { 50.0, 80.0,  30.0 },   // Ø 50–80
-    { 80.0, 120.0, 35.0 },   // Ø 80–120
-    { 120.0,180.0, 40.0 },   // safety extension
-    { 180.0,250.0, 46.0 },
+// Extension table: only the > 100 mm rows that central kFits omits.
+constexpr std::array<H7Row, 3> kH7TableExt {{
+    { 100.0, 120.0, 35.0 },   // Ø 100–120 (kept identical to legacy 80–120 row)
+    { 120.0, 180.0, 40.0 },
+    { 180.0, 250.0, 46.0 },
 }};
 
 // Chamfer is a conical frustum lead-in.  Half-angle = 45°.  bigR > smallR.
@@ -90,11 +88,21 @@ double upperDeviationMicrons(double nominal_dia_mm)
     constexpr double kPromoteBoundary = 6.0;
     constexpr double kEps             = 1e-3;
     if (std::abs(nominal_dia_mm - kPromoteBoundary) < kEps) {
-        for (const auto& r : kH7Table) {
-            if (r.dia_min_mm == kPromoteBoundary) return r.upper_dev_um;
+        // The (6, 10] band lives in iso286::kFits — second entry (size_max=10).
+        // H7 dev for (6, 10] is 15 µm.
+        for (const auto& b : iso286::kFits) {
+            if (b.size_max_mm > kPromoteBoundary + kEps &&
+                b.size_max_mm <= 10.0 + kEps) {
+                return static_cast<double>(b.h7_dev_um);
+            }
         }
     }
-    for (const auto& r : kH7Table) {
+    // ≤ 100 mm: central table.
+    if (const iso286::FitBand* b = iso286::findBand(nominal_dia_mm)) {
+        return static_cast<double>(b->h7_dev_um);
+    }
+    // > 100 mm: extension rows.
+    for (const auto& r : kH7TableExt) {
         if (nominal_dia_mm > r.dia_min_mm && nominal_dia_mm <= r.dia_max_mm) {
             return r.upper_dev_um;
         }

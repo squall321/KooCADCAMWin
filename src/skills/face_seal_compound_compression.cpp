@@ -2,6 +2,7 @@
 
 #include "face_seal_compound_compression.hpp"
 
+#include "_as568_table.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -31,30 +32,14 @@ namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
 // ── AS568 spec table for the primary seal ────────────────────────────────
-
-namespace {
-
-struct AS568Entry { const char* dash; double cs_mm; };
-
-constexpr std::array<AS568Entry, 10> kAS568Spec {{
-    { "-006", 1.78 },
-    { "-011", 1.78 },
-    { "-016", 1.78 },
-    { "-111", 2.62 },
-    { "-116", 2.62 },
-    { "-212", 3.53 },
-    { "-224", 3.53 },
-    { "-325", 5.33 },
-    { "-425", 6.99 },
-    { "-908", 1.78 },
-}};
-
-}  // namespace
+//
+// CS lookup delegates to the central AS568 table (_as568_table.hpp).  The
+// primary groove uses standard AS568 / Parker §4-2 multipliers; the spring
+// energiser groove uses Bal Seal §3.2 multipliers (kept local below).
 
 double crossSectionFor(const std::string& dash_size)
 {
-    for (const auto& e : kAS568Spec)
-        if (dash_size == e.dash) return e.cs_mm;
+    if (auto* p = as568::findDash(dash_size)) return p->cross_section_mm;
     return 0.0;
 }
 
@@ -317,9 +302,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const double csEst = primW / 1.40;
         std::string bestDash = "-111";
         double bestErr = std::numeric_limits<double>::max();
-        for (const auto& e : kAS568Spec) {
-            const double err = std::abs(e.cs_mm - csEst);
-            if (err < bestErr) { bestErr = err; bestDash = e.dash; }
+        for (const auto& e : as568::kAs568) {
+            const double err = std::abs(e.cross_section_mm - csEst);
+            if (err < bestErr) { bestErr = err; bestDash = e.dash_key; }
         }
         const gp_Dir adir = cyls[coaxial[0]].axis.Direction();
         const gp_Pnt aOrg = cyls[coaxial[0]].axis.Location();

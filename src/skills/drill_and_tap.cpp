@@ -3,6 +3,7 @@
 #include "drill_and_tap.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "drill_hole.hpp"
 
 #include <nlohmann/json.hpp>
@@ -13,50 +14,55 @@
 
 namespace koocadcam::skill::drill_and_tap {
 
+namespace tt = koocadcam::skill::thread_table;
 using nlohmann::json;
 
-// ── Thread-size lookup table ─────────────────────────────────────────────
+// ── Thread-size lookup ───────────────────────────────────────────────────
 //
-// ISO 68-1 metric coarse pilot diameters, for the common sizes used in
-// metal-front consumer assemblies (M1.6 … M6).  Larger sizes can be added
-// without touching call sites since callers go through these helpers.
+// Central thread_table covers M3..M30.  Small consumer sizes M1.6/M2/M2.5
+// are not in the central table (it starts at M3), so we keep ONLY those
+// three non-overlapping rows here.
 
 namespace {
 
-struct ThreadPilot {
+struct SmallPilot {
     const char* size;
     double      pilot_dia_mm;
 };
 
-constexpr std::array<ThreadPilot, 7> kThreadTable {{
+constexpr std::array<SmallPilot, 3> kSmallSizes {{
     { "M1.6", 1.25 },
     { "M2",   1.60 },
     { "M2.5", 2.05 },
-    { "M3",   2.50 },
-    { "M4",   3.30 },
-    { "M5",   4.20 },
-    { "M6",   5.00 },
 }};
 
 }  // namespace
 
 double pilotDiameterFor(const std::string& thread_size)
 {
-    for (const auto& e : kThreadTable) {
+    for (const auto& e : kSmallSizes) {
         if (thread_size == e.size) return e.pilot_dia_mm;
     }
+    if (const auto* s = tt::findMetric(thread_size)) return s->tap_pilot_dia_mm;
     return 0.0;
 }
 
 std::string threadSizeFor(double pilot_dia_mm, double tol_mm)
 {
-    const ThreadPilot* best = nullptr;
+    const char* bestSize = nullptr;
     double bestErr = tol_mm;
-    for (const auto& e : kThreadTable) {
+    for (const auto& e : kSmallSizes) {
         const double err = std::abs(e.pilot_dia_mm - pilot_dia_mm);
-        if (err < bestErr) { bestErr = err; best = &e; }
+        if (err < bestErr) { bestErr = err; bestSize = e.size; }
     }
-    return best ? std::string(best->size) : std::string();
+    // drill_and_tap only supports up to M6 in its public contract.
+    for (const auto& e : tt::kMetricThreads) {
+        const std::string k = e.size_key;
+        if (k != "M3" && k != "M4" && k != "M5" && k != "M6") continue;
+        const double err = std::abs(e.tap_pilot_dia_mm - pilot_dia_mm);
+        if (err < bestErr) { bestErr = err; bestSize = e.size_key; }
+    }
+    return bestSize ? std::string(bestSize) : std::string();
 }
 
 // ── Validation ───────────────────────────────────────────────────────────

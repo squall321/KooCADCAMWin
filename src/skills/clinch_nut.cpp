@@ -3,6 +3,7 @@
 #include "clinch_nut.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -35,47 +36,48 @@ using nlohmann::json;
 //
 // Slice-1 simplification: barrel_dia = thread_dia + 0.5 mm.  Real PEM tables
 // vary by series (CL / CLS / SL etc.); 0.5 mm is the most common allowance.
+// Thread nominal dimensions come from the central _iso_thread_table.hpp;
+// only the supported-size key list is kept local (clinch nuts only cover
+// M3..M8 in slice 1; the central table includes M10+ which are out of range).
 
 namespace {
 
-struct ClinchSpec {
-    const char* size;
-    double      thread_dia_mm;
-    double      barrel_dia_mm;
-};
+namespace tt = koocadcam::skill::thread_table;
 
-constexpr std::array<ClinchSpec, 5> kClinchTable {{
-    { "M3", 3.0, 3.5 },
-    { "M4", 4.0, 4.5 },
-    { "M5", 5.0, 5.5 },
-    { "M6", 6.0, 6.5 },
-    { "M8", 8.0, 8.5 },
+constexpr std::array<const char*, 5> kClinchSizes {{
+    "M3", "M4", "M5", "M6", "M8",
 }};
 
-const ClinchSpec* findSpec(const std::string& thread_size)
+constexpr double kClinchBarrelOffsetMm = 0.5;
+
+bool isSupportedClinchSize(const std::string& thread_size)
 {
-    for (const auto& e : kClinchTable)
-        if (thread_size == e.size) return &e;
-    return nullptr;
+    for (const char* k : kClinchSizes)
+        if (thread_size == k) return true;
+    return false;
 }
 
 }  // namespace
 
 double clinchBarrelDiameter(const std::string& thread_size)
 {
-    const ClinchSpec* s = findSpec(thread_size);
-    return s ? s->barrel_dia_mm : 0.0;
+    if (!isSupportedClinchSize(thread_size)) return 0.0;
+    const auto* s = tt::findMetric(thread_size);
+    return s ? s->nominal_dia_mm + kClinchBarrelOffsetMm : 0.0;
 }
 
 std::string threadSizeForBarrel(double barrel_dia_mm, double tol_mm)
 {
-    const ClinchSpec* best = nullptr;
+    const char* bestKey = nullptr;
     double bestErr = tol_mm;
-    for (const auto& e : kClinchTable) {
-        const double err = std::abs(e.barrel_dia_mm - barrel_dia_mm);
-        if (err < bestErr) { bestErr = err; best = &e; }
+    for (const char* k : kClinchSizes) {
+        const auto* s = tt::findMetric(k);
+        if (!s) continue;
+        const double barrel = s->nominal_dia_mm + kClinchBarrelOffsetMm;
+        const double err = std::abs(barrel - barrel_dia_mm);
+        if (err < bestErr) { bestErr = err; bestKey = k; }
     }
-    return best ? std::string(best->size) : std::string();
+    return bestKey ? std::string(bestKey) : std::string();
 }
 
 double senseSheetThickness(const Workpiece& wp)

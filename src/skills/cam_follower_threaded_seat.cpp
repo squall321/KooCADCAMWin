@@ -3,6 +3,7 @@
 #include "cam_follower_threaded_seat.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -22,12 +23,9 @@ using nlohmann::json;
 namespace {
 
 // Cam-follower threaded-seat specs (DIN 5418-style stud follower):
-//   M  | pilot | nut OD | nut height
-//   M6 |  5.0  | 10.0   | 5.0
-//   M8 |  6.8  | 14.0   | 6.5
-//   M10|  8.5  | 18.0   | 8.0
-//   M12| 10.3  | 20.0   | 10.0
-//   M16| 14.0  | 26.0   | 13.0
+// pilot_dia_mm and nominal_dia_mm come from the central thread table
+// (kMetricThreads / findMetric).  nut_od_mm and nut_height_mm are
+// cam-follower lock-nut dimensions specific to this skill.
 
 struct CFEntry {
     const char* size;
@@ -37,16 +35,27 @@ struct CFEntry {
     double nominal_dia_mm;
 };
 
-constexpr std::array<CFEntry, 5> kCFTable {{
-    { "M6",  5.0,  10.0, 5.0,  6.0  },
-    { "M8",  6.8,  14.0, 6.5,  8.0  },
-    { "M10", 8.5,  18.0, 8.0,  10.0 },
-    { "M12", 10.3, 20.0, 10.0, 12.0 },
-    { "M16", 14.0, 26.0, 13.0, 16.0 },
-}};
+CFEntry makeCFEntry(const char* size, double nut_od, double nut_h)
+{
+    const auto* m = thread_table::findMetric(size);
+    return CFEntry{
+        size,
+        m ? m->tap_pilot_dia_mm : 0.0,
+        nut_od,
+        nut_h,
+        m ? m->nominal_dia_mm : 0.0,
+    };
+}
 
 const CFEntry* lookupCF(const std::string& M)
 {
+    static const std::array<CFEntry, 5> kCFTable {{
+        makeCFEntry("M6",  10.0, 5.0 ),
+        makeCFEntry("M8",  14.0, 6.5 ),
+        makeCFEntry("M10", 18.0, 8.0 ),
+        makeCFEntry("M12", 20.0, 10.0),
+        makeCFEntry("M16", 26.0, 13.0),
+    }};
     for (const auto& e : kCFTable) {
         if (M == e.size) return &e;
     }

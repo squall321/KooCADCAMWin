@@ -2,6 +2,7 @@
 
 #include "sapphire_glass_seat.hpp"
 
+#include "_as568_table.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -53,6 +54,11 @@ DFMReport validate(const Workpiece& wp, const Input& in)
               "sapphire_glass_seat: o_ring_cs_mm must be > 0");
     }
     // AS568 -004 family CS = 1.0 mm; we accept 0.7-2.0 with warning otherwise.
+    // Cross-referenced against the central AS568 catalog (_as568_table.hpp):
+    // the smallest dash sizes are -908 (CS = 1.27 mm) and the -006/-011/-016
+    // family (CS = 1.78 mm), both of which fall inside [0.7, 2.0].
+    static_assert(as568::kAs568.size() > 0,
+                  "central AS568 catalog must be populated");
     if (in.o_ring_cs_mm < 0.7 || in.o_ring_cs_mm > 2.0) {
         r.add("DFM-ORING-CS", "warning",
               "sapphire_glass_seat: o_ring_cs " +

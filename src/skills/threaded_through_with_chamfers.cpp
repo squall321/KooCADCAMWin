@@ -3,6 +3,7 @@
 #include "threaded_through_with_chamfers.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -16,50 +17,17 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace koocadcam::skill::threaded_through_with_chamfers {
 
 namespace pr = koocadcam::engine::prim;
+namespace tt = koocadcam::skill::thread_table;
 using nlohmann::json;
-
-namespace {
-
-struct ThreadPilot
-{
-    const char* size;
-    double      pilot_dia_mm;
-    double      pitch_mm;
-};
-
-constexpr std::array<ThreadPilot, 11> kIso965Table {{
-    { "M3",   2.50, 0.50 },
-    { "M4",   3.30, 0.70 },
-    { "M5",   4.20, 0.80 },
-    { "M6",   5.00, 1.00 },
-    { "M8",   6.80, 1.25 },
-    { "M10",  8.50, 1.50 },
-    { "M12", 10.20, 1.75 },
-    { "M16", 14.00, 2.00 },
-    { "M20", 17.50, 2.50 },
-    { "M24", 21.00, 3.00 },
-    { "M30", 26.50, 3.50 },
-}};
-
-const ThreadPilot* findThread(const std::string& size)
-{
-    for (const auto& e : kIso965Table) {
-        if (size == e.size) return &e;
-    }
-    return nullptr;
-}
-
-}  // namespace
 
 double pilotDiameterFor(const std::string& thread_size)
 {
-    if (const ThreadPilot* p = findThread(thread_size)) return p->pilot_dia_mm;
+    if (const auto* s = tt::findMetric(thread_size)) return s->tap_pilot_dia_mm;
     return 0.0;
 }
 
@@ -69,7 +37,7 @@ DFMReport validate(const Workpiece& wp, const Input& in)
 {
     DFMReport r;
 
-    const ThreadPilot* th = findThread(in.thread_size);
+    const tt::MetricThreadSpec* th = tt::findMetric(in.thread_size);
     if (!th) {
         r.add("DFM-METRIC-UNKNOWN", "error",
               "threaded_through_with_chamfers: unknown thread_size '" +
@@ -100,11 +68,11 @@ DFMReport validate(const Workpiece& wp, const Input& in)
         std::abs(in.axis_dir.X()) * (xMax - xMin) +
         std::abs(in.axis_dir.Y()) * (yMax - yMin) +
         std::abs(in.axis_dir.Z()) * (zMax - zMin);
-    if (thickness > 0.0 && thickness < 1.5 * th->pilot_dia_mm) {
+    if (thickness > 0.0 && thickness < 1.5 * th->tap_pilot_dia_mm) {
         r.add("DFM-THROUGH-LEN", "warning",
               "threaded_through_with_chamfers: stock_thickness " +
               std::to_string(thickness) + " < 1.5 × pilot_dia " +
-              std::to_string(1.5 * th->pilot_dia_mm) +
+              std::to_string(1.5 * th->tap_pilot_dia_mm) +
               " — insufficient thread engagement");
     }
     return r;
@@ -121,8 +89,8 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         throw SkillError(msg);
     }
 
-    const ThreadPilot* th = findThread(in.thread_size);
-    const double pilotDia = th->pilot_dia_mm;
+    const tt::MetricThreadSpec* th = tt::findMetric(in.thread_size);
+    const double pilotDia = th->tap_pilot_dia_mm;
     const double pilotR   = pilotDia / 2.0;
     const double pitch    = th->pitch_mm;
     const double reliefDia = pilotDia + 2.0 * pitch;   // spec rule
@@ -299,10 +267,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const double dia = 2.0 * cyl.Radius();
 
         // Match against ISO 965 pilot diameters.
-        const ThreadPilot* best = nullptr;
+        const tt::MetricThreadSpec* best = nullptr;
         double bestErr = 0.10;
-        for (const auto& e : kIso965Table) {
-            const double err = std::abs(e.pilot_dia_mm - dia);
+        for (const auto& e : tt::kMetricThreads) {
+            const double err = std::abs(e.tap_pilot_dia_mm - dia);
             if (err < bestErr) { bestErr = err; best = &e; }
         }
         if (!best) continue;
@@ -321,8 +289,8 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "position_x_mm", entryCenter.X() },
             { "position_y_mm", entryCenter.Y() },
             { "axis_dir",      { adir.X(), adir.Y(), adir.Z() } },
-            { "thread_size",   best->size },
-            { "pilot_dia_mm",  best->pilot_dia_mm },
+            { "thread_size",   best->size_key },
+            { "pilot_dia_mm",  best->tap_pilot_dia_mm },
             { "pitch_mm",      best->pitch_mm },
             { "add_relief",    false },     // can't see relief from single cyl
         };

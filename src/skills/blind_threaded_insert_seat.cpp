@@ -3,6 +3,7 @@
 #include "blind_threaded_insert_seat.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -19,6 +20,10 @@ using nlohmann::json;
 
 namespace {
 
+// Heat-set / brass / clinch insert geometry is insert-vendor-specific and
+// does NOT overlap with the central thread table (_iso_thread_table.hpp);
+// the OD/head_dia of the INSERT is unrelated to the through-bolt clearance
+// of the screw that mates with it.  Local table retained in full.
 struct InsertEntry {
     const char* size;
     double      od_mm;

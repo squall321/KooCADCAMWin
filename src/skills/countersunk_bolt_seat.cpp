@@ -3,6 +3,7 @@
 #include "countersunk_bolt_seat.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -29,22 +30,27 @@ namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
 // ── M-spec lookup tables ─────────────────────────────────────────────────
+//
+// Clearance (ISO 273 medium) for M3..M8 comes from the central thread table
+// (_iso_thread_table.hpp).  The local table keeps only sub-M3 sizes (M2,
+// M2.5 — absent from the central 11-row catalogue) and the ISO 7046
+// flat-head OD column, which is unique to this skill.
 namespace {
 
 struct CskEntry {
     const char* size;
-    double      clearance_mm;   // ISO 273 medium series clearance hole
+    double      clearance_mm;   // valid only for M2/M2.5 rows; 0.0 means use central
     double      head_dia_mm;    // ISO 7046 flat-head OD
 };
 
 constexpr std::array<CskEntry, 7> kTable {{
     { "M2",   2.4,  3.8  },
     { "M2.5", 2.9,  4.7  },
-    { "M3",   3.4,  5.6  },
-    { "M4",   4.5,  7.5  },
-    { "M5",   5.5,  9.2  },
-    { "M6",   6.6,  11.0 },
-    { "M8",   9.0,  14.5 },
+    { "M3",   0.0,  5.6  },
+    { "M4",   0.0,  7.5  },
+    { "M5",   0.0,  9.2  },
+    { "M6",   0.0,  11.0 },
+    { "M8",   0.0,  14.5 },
 }};
 
 const CskEntry* lookupEntry(const std::string& s) {
@@ -52,12 +58,17 @@ const CskEntry* lookupEntry(const std::string& s) {
     return nullptr;
 }
 
+double clearanceForSize(const std::string& s) {
+    if (const auto* thr = thread_table::findMetric(s)) return thr->clearance_medium_mm;
+    if (const auto* e = lookupEntry(s)) return e->clearance_mm;
+    return 0.0;
+}
+
 }  // namespace
 
 double clearanceDiameterFor(const std::string& size)
 {
-    const auto* e = lookupEntry(size);
-    return e ? e->clearance_mm : 0.0;
+    return clearanceForSize(size);
 }
 
 double headDiameterFor(const std::string& size)
@@ -88,10 +99,11 @@ DFMReport validate(const Workpiece& wp, const Input& in)
 
     // DFM-002 — minimum pilot diameter (matches drill_hole floor per ISO 235).
     constexpr double kMinPilotDiaMm = 0.8;  // ISO 235:2016 smallest standard HSS drill
-    if (e->clearance_mm < kMinPilotDiaMm) {
+    const double pilotForCheck = clearanceForSize(in.fastener_size);
+    if (pilotForCheck < kMinPilotDiaMm) {
         r.add("DFM-002", "error",
               "countersunk_bolt_seat: derived pilot " +
-              std::to_string(e->clearance_mm) +
+              std::to_string(pilotForCheck) +
               " mm < min 0.8 mm (ISO 235:2016 smallest standard HSS drill)");
     }
 
@@ -144,7 +156,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     }
 
     const auto* e = lookupEntry(in.fastener_size);
-    const double pilotDia   = e->clearance_mm;
+    const double pilotDia   = clearanceForSize(in.fastener_size);
     const double headDia    = e->head_dia_mm;
     const double angleRad   = in.csk_angle_deg * M_PI / 180.0;
     const double coneDepth  = (headDia - pilotDia) * 0.5 / std::tan(angleRad / 2.0);
@@ -401,7 +413,8 @@ std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
             std::string bestSize = "M3";
             double sizeErr = std::numeric_limits<double>::max();
             for (const auto& e : kTable) {
-                const double err = std::abs(e.clearance_mm - 2.0 * cyl.radius);
+                const double rowClr = clearanceForSize(e.size);
+                const double err = std::abs(rowClr - 2.0 * cyl.radius);
                 if (err < sizeErr) { sizeErr = err; bestSize = e.size; }
             }
             if (sizeErr > 0.5) continue;

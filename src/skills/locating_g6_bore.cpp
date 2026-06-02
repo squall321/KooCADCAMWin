@@ -6,6 +6,7 @@
 
 #include "locating_g6_bore.hpp"
 
+#include "_iso286_fits.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -32,17 +33,14 @@ namespace {
 
 struct G6Row { double dia_min; double dia_max; double upper_um; double lower_um; };
 
-constexpr std::array<G6Row, 10> kG6Table {{
-    { 0.0,   3.0,    8.0,  2.0 },
-    { 3.0,   6.0,   12.0,  4.0 },
-    { 6.0,  10.0,   14.0,  5.0 },
-    { 10.0, 18.0,   17.0,  6.0 },
-    { 18.0, 30.0,   20.0,  7.0 },
-    { 30.0, 50.0,   25.0,  9.0 },
-    { 50.0, 80.0,   29.0, 10.0 },
-    { 80.0, 120.0,  34.0, 12.0 },
-    { 120.0,180.0,  39.0, 14.0 },
-    { 180.0,250.0,  44.0, 15.0 },
+// ≤ 100 mm bands come from the central iso286::kFits (g6_lower_um used as the
+// lower deviation, upper = lower + h6_dev_um — matches the central design
+// of g6_min_mm).  The rows below extend lookup into 100..250 mm, which the
+// central helpers intentionally do not cover.
+constexpr std::array<G6Row, 3> kG6TableExt {{
+    { 100.0, 120.0,  34.0, 12.0 },   // Ø 100–120 (legacy 80–120 row continues)
+    { 120.0, 180.0,  39.0, 14.0 },
+    { 180.0, 250.0,  44.0, 15.0 },
 }};
 
 TopoDS_Shape buildLeadInChamfer(const gp_Pnt& entryCenter, const gp_Dir& axis,
@@ -74,7 +72,15 @@ int countPlanarFaces(const Workpiece& wp)
 
 G6Deviation deviationFor(double nominal_dia_mm)
 {
-    for (const auto& r : kG6Table) {
+    // <= 100 mm: central table.  Central g6_lower_um is the lower (positive
+    // for G-grade hole) deviation; upper = lower + IT6 grade (h6_dev_um).
+    if (const iso286::FitBand* b = iso286::findBand(nominal_dia_mm)) {
+        const double lower = static_cast<double>(b->g6_lower_um);
+        const double upper = lower + static_cast<double>(b->h6_dev_um);
+        return { upper, lower, true };
+    }
+    // > 100 mm: extension rows.
+    for (const auto& r : kG6TableExt) {
         if (nominal_dia_mm > r.dia_min && nominal_dia_mm <= r.dia_max) {
             return { r.upper_um, r.lower_um, true };
         }
@@ -307,11 +313,22 @@ double nearestNominal(double measured_dia_mm, double tol_mm)
 {
     double best = -1.0;
     double bestErr = tol_mm;
-    for (const auto& r : kG6Table) {
-        const double nominal = r.dia_max;
-        const double midDev = ((r.upper_um + r.lower_um) / 2.0) * 1e-3;
+    // ≤ 100 mm: walk the central kFits (lower = g6_lower_um, upper = g6+h6).
+    for (const auto& b : iso286::kFits) {
+        const double nominal  = b.size_max_mm;
+        const double lower    = static_cast<double>(b.g6_lower_um);
+        const double upper    = lower + static_cast<double>(b.h6_dev_um);
+        const double midDev   = ((upper + lower) / 2.0) * 1e-3;
         const double finalDia = nominal + midDev;
-        const double err = std::abs(finalDia - measured_dia_mm);
+        const double err      = std::abs(finalDia - measured_dia_mm);
+        if (err < bestErr) { bestErr = err; best = nominal; }
+    }
+    // > 100 mm: extension rows.
+    for (const auto& r : kG6TableExt) {
+        const double nominal  = r.dia_max;
+        const double midDev   = ((r.upper_um + r.lower_um) / 2.0) * 1e-3;
+        const double finalDia = nominal + midDev;
+        const double err      = std::abs(finalDia - measured_dia_mm);
         if (err < bestErr) { bestErr = err; best = nominal; }
     }
     return best;

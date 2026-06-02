@@ -2,6 +2,7 @@
 
 #include "o_ring_groove_face.hpp"
 
+#include "_as568_table.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -37,28 +38,30 @@ using nlohmann::json;
 
 namespace {
 
-struct AS568Entry { const char* dash; double cs_mm; };
+// Legacy face-seal dash sizes that are NOT in the central AS568 table
+// (_as568_table.hpp).  Central is consulted first; only the entries below
+// stay as local extensions to preserve this skill's historical accept-set.
+// -325 is also kept locally (CS = 5.33) because central rounds to 5.34.
+struct AS568Override { const char* dash; double cs_mm; };
 
-constexpr std::array<AS568Entry, 11> kAS568Table {{
-    { "-006", 1.78 },
+constexpr std::array<AS568Override, 8> kAS568Extras {{
     { "-014", 1.78 },
     { "-110", 2.62 },
-    { "-114", 2.62 },
     { "-210", 3.53 },
     { "-220", 3.53 },
     { "-225", 3.53 },
     { "-228", 3.53 },
     { "-310", 5.33 },
     { "-325", 5.33 },
-    { "-425", 6.99 },
 }};
 
 }  // namespace
 
 double crossSectionFor(const std::string& as568_dash)
 {
-    for (const auto& e : kAS568Table)
+    for (const auto& e : kAS568Extras)
         if (as568_dash == e.dash) return e.cs_mm;
+    if (auto* p = as568::findDash(as568_dash)) return p->cross_section_mm;
     return 0.0;
 }
 
@@ -371,9 +374,13 @@ std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
             const double csEst = depth / 0.74;
             std::string bestSize = "-110";
             double bestErr = std::numeric_limits<double>::max();
-            for (const auto& e : kAS568Table) {
+            for (const auto& e : kAS568Extras) {
                 const double err = std::abs(e.cs_mm - csEst);
                 if (err < bestErr) { bestErr = err; bestSize = e.dash; }
+            }
+            for (const auto& e : as568::kAs568) {
+                const double err = std::abs(e.cross_section_mm - csEst);
+                if (err < bestErr) { bestErr = err; bestSize = e.dash_key; }
             }
 
             const gp_Dir adir = outerCyl.axis.Direction();

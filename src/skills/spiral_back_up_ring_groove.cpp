@@ -2,6 +2,7 @@
 
 #include "spiral_back_up_ring_groove.hpp"
 
+#include "_as568_table.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -26,23 +27,25 @@ namespace koocadcam::skill::spiral_back_up_ring_groove {
 namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
-// ── AS568 table (shared with o_ring_groove_radial) ───────────────────────
+// ── AS568 table ──────────────────────────────────────────────────────────
+//
+// CS lookup delegates to the central AS568 table (_as568_table.hpp); only
+// the legacy face/radial dash sizes NOT in the central table remain here
+// as local extensions to preserve this skill's historical accept-set
+// (shared with o_ring_groove_radial).
 namespace {
 
-struct AS568Entry { const char* dash; double cs_mm; };
+struct AS568Override { const char* dash; double cs_mm; };
 
-constexpr std::array<AS568Entry, 11> kAS568Table {{
-    { "-006", 1.78 },
+constexpr std::array<AS568Override, 8> kAS568Extras {{
     { "-014", 1.78 },
     { "-110", 2.62 },
-    { "-114", 2.62 },
     { "-210", 3.53 },
     { "-220", 3.53 },
     { "-225", 3.53 },
     { "-228", 3.53 },
     { "-310", 5.33 },
     { "-325", 5.33 },
-    { "-425", 6.99 },
 }};
 
 constexpr double kBackupWidthFactor = 0.5;  // Wb ≈ 0.5·Wo (spiral, single-side)
@@ -51,8 +54,9 @@ constexpr double kBackupWidthFactor = 0.5;  // Wb ≈ 0.5·Wo (spiral, single-si
 
 double crossSectionFor(const std::string& as568_dash)
 {
-    for (const auto& e : kAS568Table)
+    for (const auto& e : kAS568Extras)
         if (as568_dash == e.dash) return e.cs_mm;
+    if (auto* p = as568::findDash(as568_dash)) return p->cross_section_mm;
     return 0.0;
 }
 

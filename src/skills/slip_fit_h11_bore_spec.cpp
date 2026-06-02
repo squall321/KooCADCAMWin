@@ -4,6 +4,7 @@
 
 #include "slip_fit_h11_bore_spec.hpp"
 
+#include "_iso286_fits.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -30,17 +31,11 @@ namespace {
 
 struct H11Row { double dia_min; double dia_max; double upper_um; };
 
-constexpr std::array<H11Row, 10> kH11Table {{
-    { 0.0,   3.0,    60.0 },
-    { 3.0,   6.0,    75.0 },
-    { 6.0,  10.0,    90.0 },
-    { 10.0, 18.0,   110.0 },
-    { 18.0, 30.0,   130.0 },
-    { 30.0, 50.0,   160.0 },
-    { 50.0, 80.0,   190.0 },
-    { 80.0, 120.0,  220.0 },
-    { 120.0,180.0,  250.0 },
-    { 180.0,250.0,  290.0 },
+// Extension table: only > 100 mm rows the central iso286::kFits omits.
+constexpr std::array<H11Row, 3> kH11TableExt {{
+    { 100.0, 120.0, 220.0 },
+    { 120.0, 180.0, 250.0 },
+    { 180.0, 250.0, 290.0 },
 }};
 
 TopoDS_Shape buildLeadInChamfer(const gp_Pnt& entryCenter, const gp_Dir& axis,
@@ -61,7 +56,12 @@ TopoDS_Shape buildLeadInChamfer(const gp_Pnt& entryCenter, const gp_Dir& axis,
 
 double upperDeviationMicronsH11(double nominal_dia_mm)
 {
-    for (const auto& r : kH11Table) {
+    // ≤ 100 mm: central table.
+    if (const iso286::FitBand* b = iso286::findBand(nominal_dia_mm)) {
+        return static_cast<double>(b->h11_dev_um);
+    }
+    // > 100 mm: extension rows.
+    for (const auto& r : kH11TableExt) {
         if (nominal_dia_mm > r.dia_min && nominal_dia_mm <= r.dia_max) {
             return r.upper_um;
         }
@@ -269,10 +269,18 @@ double nearestNominal(double measured_dia_mm, double tol_mm)
 {
     double best = -1.0;
     double bestErr = tol_mm;
-    for (const auto& r : kH11Table) {
-        const double nominal = r.dia_max;
+    // ≤ 100 mm: walk the central kFits.
+    for (const auto& b : iso286::kFits) {
+        const double nominal  = b.size_max_mm;
+        const double finalDia = nominal + (b.h11_dev_um * 1e-3) / 2.0;
+        const double err      = std::abs(finalDia - measured_dia_mm);
+        if (err < bestErr) { bestErr = err; best = nominal; }
+    }
+    // > 100 mm: extension rows.
+    for (const auto& r : kH11TableExt) {
+        const double nominal  = r.dia_max;
         const double finalDia = nominal + (r.upper_um * 1e-3) / 2.0;
-        const double err = std::abs(finalDia - measured_dia_mm);
+        const double err      = std::abs(finalDia - measured_dia_mm);
         if (err < bestErr) { bestErr = err; best = nominal; }
     }
     return best;

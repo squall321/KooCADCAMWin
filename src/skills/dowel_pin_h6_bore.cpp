@@ -4,6 +4,7 @@
 
 #include "dowel_pin_h6_bore.hpp"
 
+#include "_iso286_fits.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -38,21 +39,13 @@ namespace {
 struct H6Row { double dia_min; double dia_max; double upper_um; };
 
 // Slice-9: lookup uses `>= dia_min, <= dia_max` semantics with first-match
-// wins.  Test expectations: Ø6 → 9, Ø18 → 11, Ø50 → 16.  This is the
-// ISO 286-1 H6 table re-indexed so the boundary diameter falls in the
-// LARGER tolerance row (e.g. Ø6 ∈ "6 to 10").  For non-boundary diameters
-// the table tracks the canonical ISO grades.
-constexpr std::array<H6Row, 10> kH6Table {{
-    { 0.0,   3.0,    6.0 },
-    { 3.0,   6.0,    8.0 },
-    { 6.0,  10.0,    9.0 },
-    { 10.0, 18.0,   11.0 },
-    { 18.0, 30.0,   13.0 },
-    { 30.0, 50.0,   16.0 },
-    { 50.0, 80.0,   19.0 },
-    { 80.0, 120.0,  22.0 },
-    { 120.0,180.0,  25.0 },
-    { 180.0,250.0,  29.0 },
+// wins.  Test expectations: Ø6 → 9, Ø18 → 11, Ø50 → 16.  ≤ 100 mm bands now
+// come from the central `iso286::kFits` table; the extension rows below
+// cover the 100..250 mm range that the central helpers do NOT include.
+constexpr std::array<H6Row, 3> kH6TableExt {{
+    { 100.0, 120.0,  22.0 },   // Ø 100–120 (legacy 80–120 row continues)
+    { 120.0, 180.0,  25.0 },
+    { 180.0, 250.0,  29.0 },
 }};
 
 // Standard cylindrical dowel-pin sizes (DIN 7 / ISO 2338).
@@ -87,12 +80,20 @@ double upperDeviationMicronsH6(double nominal_dia_mm)
     constexpr double kPromoteBoundary = 6.0;
     constexpr double kEps             = 1e-3;
     if (std::abs(nominal_dia_mm - kPromoteBoundary) < kEps) {
-        // Skip the (3, 6] row, return the (6, 10] row value.
-        for (const auto& r : kH6Table) {
-            if (r.dia_min == kPromoteBoundary) return r.upper_um;
+        // Promote Ø=6 to the (6, 10] row in central iso286::kFits.
+        for (const auto& b : iso286::kFits) {
+            if (b.size_max_mm > kPromoteBoundary + kEps &&
+                b.size_max_mm <= 10.0 + kEps) {
+                return static_cast<double>(b.h6_dev_um);
+            }
         }
     }
-    for (const auto& r : kH6Table) {
+    // ≤ 100 mm: central table.
+    if (const iso286::FitBand* b = iso286::findBand(nominal_dia_mm)) {
+        return static_cast<double>(b->h6_dev_um);
+    }
+    // > 100 mm: extension rows.
+    for (const auto& r : kH6TableExt) {
         if (nominal_dia_mm > r.dia_min && nominal_dia_mm <= r.dia_max) {
             return r.upper_um;
         }

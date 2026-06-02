@@ -3,37 +3,30 @@
 #include "heli_coil.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "threaded_insert.hpp"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
-#include <array>
 #include <string>
 
 namespace koocadcam::skill::heli_coil {
 
+namespace tt = koocadcam::skill::thread_table;
 using nlohmann::json;
 
-// ── ISO 68-1 coarse-pitch defaults for supported sizes ───────────────────
-
-namespace {
-
-struct PitchSpec { const char* size; double pitch_mm; };
-constexpr std::array<PitchSpec, 5> kCoarsePitchTable {{
-    { "M3", 0.5 },
-    { "M4", 0.7 },
-    { "M5", 0.8 },
-    { "M6", 1.0 },
-    { "M8", 1.25 },
-}};
-
-}  // namespace
+// ── ISO 68-1 coarse-pitch defaults via central thread_table ──────────────
+//
+// heli_coil supports M3..M8; all five are in the central table.
 
 double defaultCoarsePitch(const std::string& thread_size)
 {
-    for (const auto& e : kCoarsePitchTable)
-        if (thread_size == e.size) return e.pitch_mm;
+    if (const auto* s = tt::findMetric(thread_size)) {
+        const std::string k = s->size_key;
+        if (k == "M3" || k == "M4" || k == "M5" || k == "M6" || k == "M8")
+            return s->pitch_mm;
+    }
     return 0.0;
 }
 

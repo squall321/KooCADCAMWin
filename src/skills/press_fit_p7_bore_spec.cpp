@@ -4,6 +4,7 @@
 
 #include "press_fit_p7_bore_spec.hpp"
 
+#include "_iso286_fits.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -37,21 +38,17 @@ using nlohmann::json;
 //
 // Both deviations are NEGATIVE — bore is undersize, producing interference
 // against an h7 shaft.  Source: ISO 286-1:2010 Table 2 (P-grade).
+// ≤ 100 mm bands come from the central `iso286::kFits` table (p7_upper_um =
+// lower deviation; upper = lower + h7_dev_um).  The rows below extend the
+// lookup into the 100..250 mm range that the central helpers do NOT cover.
 namespace {
 
 struct P7Row { double dia_min; double dia_max; double upper_um; double lower_um; };
 
-constexpr std::array<P7Row, 10> kP7Table {{
-    { 0.0,   3.0,   -6.0, -16.0 },
-    { 3.0,   6.0,   -8.0, -20.0 },
-    { 6.0,  10.0,   -9.0, -24.0 },
-    { 10.0, 18.0,  -11.0, -29.0 },
-    { 18.0, 30.0,  -14.0, -35.0 },
-    { 30.0, 50.0,  -17.0, -42.0 },
-    { 50.0, 80.0,  -21.0, -51.0 },
-    { 80.0, 120.0, -24.0, -59.0 },
-    { 120.0,180.0, -28.0, -68.0 },
-    { 180.0,250.0, -33.0, -79.0 },
+constexpr std::array<P7Row, 3> kP7TableExt {{
+    { 100.0, 120.0, -24.0, -59.0 },   // Ø 100–120 (legacy 80–120 row continues)
+    { 120.0, 180.0, -28.0, -68.0 },
+    { 180.0, 250.0, -33.0, -79.0 },
 }};
 
 TopoDS_Shape buildLeadInChamfer(const gp_Pnt& entryCenter, const gp_Dir& axis,
@@ -72,7 +69,15 @@ TopoDS_Shape buildLeadInChamfer(const gp_Pnt& entryCenter, const gp_Dir& axis,
 
 P7Deviation deviationFor(double nominal_dia_mm)
 {
-    for (const auto& r : kP7Table) {
+    // <= 100 mm: central table.  Central p7_upper_um is the UPPER deviation
+    // (ES, negative for P-grade hole); lower = upper - IT7 (also negative).
+    if (const iso286::FitBand* b = iso286::findBand(nominal_dia_mm)) {
+        const double upper = static_cast<double>(b->p7_upper_um);
+        const double lower = upper - static_cast<double>(b->h7_dev_um);
+        return { upper, lower, true };
+    }
+    // > 100 mm: extension rows.
+    for (const auto& r : kP7TableExt) {
         if (nominal_dia_mm > r.dia_min && nominal_dia_mm <= r.dia_max) {
             return { r.upper_um, r.lower_um, true };
         }

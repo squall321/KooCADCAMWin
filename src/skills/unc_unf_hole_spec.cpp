@@ -3,6 +3,7 @@
 #include "unc_unf_hole_spec.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -16,7 +17,6 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace koocadcam::skill::unc_unf_hole_spec {
@@ -26,42 +26,20 @@ using nlohmann::json;
 
 // ── ASME B18.2.8 Table 1 clearance hole data ────────────────────────────
 //
-// All values in millimeters (converted from inches at 25.4 mm/in).  Eight
-// common sizes from #2-56 (smallest practical machine screw) up to 1/2-13.
-
-namespace {
-
-struct ImperialClearance
-{
-    const char* size;        // "#2-56", "1/4-20", etc.
-    double      normal_mm;
-    double      close_mm;
-    double      loose_mm;
-};
-
-constexpr std::array<ImperialClearance, 8> kAsmeB18Table {{
-    { "#2-56",   2.39,  2.69,  2.95 },
-    { "#4-40",   2.95,  3.56,  3.78 },
-    { "#6-32",   3.66,  4.22,  4.50 },
-    { "#8-32",   4.32,  4.98,  5.23 },
-    { "#10-24",  4.98,  5.61,  5.79 },
-    { "1/4-20",  7.14,  7.54,  8.20 },
-    { "3/8-16", 10.31, 10.72, 11.51 },
-    { "1/2-13", 13.49, 14.27, 15.47 },
-}};
-
-}  // namespace
+// Sourced from the central thread table (kUncUnfThreads in
+// _iso_thread_table.hpp).  ASME B18.2.8 fit classes:
+//   normal → clearance_normal_mm
+//   close  → clearance_close_mm
+//   loose  → clearance_loose_mm
 
 double clearanceDiameterFor(const std::string& fastener_size,
                             const std::string& fit_class)
 {
-    for (const auto& e : kAsmeB18Table) {
-        if (fastener_size != e.size) continue;
-        if (fit_class == "normal") return e.normal_mm;
-        if (fit_class == "close")  return e.close_mm;
-        if (fit_class == "loose")  return e.loose_mm;
-        return 0.0;
-    }
+    const auto* e = thread_table::findUncUnf(fastener_size);
+    if (!e) return 0.0;
+    if (fit_class == "normal") return e->clearance_normal_mm;
+    if (fit_class == "close")  return e->clearance_close_mm;
+    if (fit_class == "loose")  return e->clearance_loose_mm;
     return 0.0;
 }
 
@@ -72,15 +50,15 @@ struct ReverseMatch { std::string size; std::string fit; double err; };
 ReverseMatch closestSpecMatch(double dia_mm, double tol_mm)
 {
     ReverseMatch best { {}, {}, tol_mm };
-    for (const auto& e : kAsmeB18Table) {
+    for (const auto& e : thread_table::kUncUnfThreads) {
         const struct { const char* fit; double d; } cands[3] = {
-            { "normal", e.normal_mm },
-            { "close",  e.close_mm  },
-            { "loose",  e.loose_mm  },
+            { "normal", e.clearance_normal_mm },
+            { "close",  e.clearance_close_mm  },
+            { "loose",  e.clearance_loose_mm  },
         };
         for (const auto& c : cands) {
             const double err = std::abs(c.d - dia_mm);
-            if (err < best.err) { best.err = err; best.size = e.size; best.fit = c.fit; }
+            if (err < best.err) { best.err = err; best.size = e.size_key; best.fit = c.fit; }
         }
     }
     return best;

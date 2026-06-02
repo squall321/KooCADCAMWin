@@ -2,6 +2,7 @@
 
 #include "crown_stem_cavity_compound.hpp"
 
+#include "_as568_table.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -31,12 +32,20 @@ namespace {
 
 // AS568 small cross-section catalog (-001 family) entries we accept.
 // CS = nominal cord cross-section (mm).
+//
+// Note: this skill consumes the CS value directly (not a dash code), so
+// the central AS568 table (_as568_table.hpp) cannot be used as the
+// canonical source.  We do still consult its values for any matching CS
+// (e.g. 1.27 mm from -908, 1.78 mm from -006/-011/-016) before falling
+// back to the small-CS family entries below.
 constexpr std::array<double, 4> kAS568SmallCS { 0.74, 1.0, 1.42, 1.78 };
 
 bool isStandardAS568CS(double cs_mm, double tol_mm = 0.05)
 {
     for (double v : kAS568SmallCS)
         if (std::abs(v - cs_mm) < tol_mm) return true;
+    for (const auto& e : as568::kAs568)
+        if (std::abs(e.cross_section_mm - cs_mm) < tol_mm) return true;
     return false;
 }
 

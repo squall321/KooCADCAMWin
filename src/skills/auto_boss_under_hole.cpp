@@ -3,6 +3,7 @@
 #include "auto_boss_under_hole.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -30,6 +31,10 @@ namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
 // ── Lookup table: ISO 4762 socket-head cap screw seat/pilot dims ─────────
+//
+// pilot_dia_mm comes from the central thread table (ISO 273 medium fit
+// clearance).  seat_dia / seat_depth are counterbore dimensions specific
+// to this boss-under-hole compound (head-OD + clearance ring).
 namespace {
 
 struct ScrewSpec {
@@ -39,17 +44,28 @@ struct ScrewSpec {
     double      pilot_dia_mm;
 };
 
-constexpr std::array<ScrewSpec, 5> kScrewTable {{
-    { "M3", 6.0,  3.4, 3.4 },
-    { "M4", 8.0,  4.4, 4.5 },
-    { "M5", 10.0, 5.4, 5.5 },
-    { "M6", 11.0, 6.4, 6.6 },
-    { "M8", 15.0, 8.4, 9.0 },
-}};
+ScrewSpec makeSpec(const char* key, double seat_dia, double seat_depth)
+{
+    const auto* m = thread_table::findMetric(key);
+    return ScrewSpec{ key, seat_dia, seat_depth,
+                      m ? m->clearance_medium_mm : 0.0 };
+}
+
+const std::array<ScrewSpec, 5>& screwTable()
+{
+    static const std::array<ScrewSpec, 5> kScrewTable {{
+        makeSpec("M3", 6.0,  3.4),
+        makeSpec("M4", 8.0,  4.4),
+        makeSpec("M5", 10.0, 5.4),
+        makeSpec("M6", 11.0, 6.4),
+        makeSpec("M8", 15.0, 8.4),
+    }};
+    return kScrewTable;
+}
 
 const ScrewSpec* lookupSpec(const std::string& key)
 {
-    for (const auto& s : kScrewTable)
+    for (const auto& s : screwTable())
         if (key == s.key) return &s;
     return nullptr;
 }
@@ -333,7 +349,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 
             // Check against table.
             const std::string keyGuess = [&]() -> std::string {
-                for (const auto& s : kScrewTable) {
+                for (const auto& s : screwTable()) {
                     if (std::abs(2.0 * large.radius - s.seat_dia_mm) < 0.5 &&
                         std::abs(2.0 * small.radius - s.pilot_dia_mm) < 0.5) {
                         return s.key;

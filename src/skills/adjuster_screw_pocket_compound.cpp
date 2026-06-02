@@ -3,6 +3,7 @@
 #include "adjuster_screw_pocket_compound.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -25,13 +26,21 @@ namespace koocadcam::skill::adjuster_screw_pocket_compound {
 namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
-// ── Fine-pitch ISO 261 / ISO 68-1 table ──────────────────────────────────
+// ── Local non-overlap tables ──────────────────────────────────────────────
+//
+// The base M-size nominal data (M3, M4, M5, M6, M8) lives in the central
+// _iso_thread_table.hpp.  Two columns here are NOT in the central table and
+// remain local:
+//   • fine-pitch ISO 261 / ISO 68-1 pilot & pitch  (central table is coarse)
+//   • DIN 934 hex-nut across-flats                  (not modelled centrally)
 namespace {
 
+namespace tt = koocadcam::skill::thread_table;
+
 struct FineEntry {
-    const char* size;
-    double      pilot_dia_mm;
-    double      pitch_mm;
+    const char* size;          // fine designator e.g. "M6x0.75"
+    double      pilot_dia_mm;  // ISO 965 60% engagement pilot for fine pitch
+    double      pitch_mm;      // fine pitch
 };
 
 constexpr std::array<FineEntry, 5> kFineTable {{
@@ -42,12 +51,12 @@ constexpr std::array<FineEntry, 5> kFineTable {{
     { "M8x1",     7.00, 1.00 },
 }};
 
-struct LockNutEntry {
+// DIN 934 hex-nut across-flats (column not in central table).
+struct LockNutAF {
     const char* M;
-    double      across_flats_mm;   // DIN 934
+    double      across_flats_mm;
 };
-
-constexpr std::array<LockNutEntry, 5> kLockNutTable {{
+constexpr std::array<LockNutAF, 5> kLockNutAF {{
     { "M3", 5.5  },
     { "M4", 7.0  },
     { "M5", 8.0  },
@@ -58,11 +67,6 @@ constexpr std::array<LockNutEntry, 5> kLockNutTable {{
 const FineEntry* findFine(const std::string& sz) {
     for (const auto& e : kFineTable)
         if (sz == e.size) return &e;
-    return nullptr;
-}
-const LockNutEntry* findLockNut(const std::string& sz) {
-    for (const auto& e : kLockNutTable)
-        if (sz == e.M) return &e;
     return nullptr;
 }
 
@@ -77,8 +81,12 @@ double finePitchFor(const std::string& fine_thread) {
     return e ? e->pitch_mm : 0.0;
 }
 double lockNutAcrossFlatsFor(const std::string& lock_nut_M) {
-    const auto* e = findLockNut(lock_nut_M);
-    return e ? e->across_flats_mm : 0.0;
+    // Only proceed if the M-size is a known central-table entry (validates
+    // the key against ISO 261); then look up the DIN 934 AF locally.
+    if (!tt::findMetric(lock_nut_M)) return 0.0;
+    for (const auto& e : kLockNutAF)
+        if (lock_nut_M == e.M) return e.across_flats_mm;
+    return 0.0;
 }
 
 // ── Validation ───────────────────────────────────────────────────────────

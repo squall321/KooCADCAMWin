@@ -3,6 +3,7 @@
 #include "socket_head_bolt_seat.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -29,6 +30,10 @@ using nlohmann::json;
 
 namespace {
 
+// All three columns (clearance, socket-head OD, socket-head height) for
+// M3..M8 are sourced from the central thread table (_iso_thread_table.hpp).
+// The local table retains only the sub-M3 sizes (M2, M2.5) that are not in
+// the central 11-row catalogue.
 struct ShcsEntry {
     const char* size;
     double      clearance_mm;
@@ -36,19 +41,34 @@ struct ShcsEntry {
     double      head_height_mm;
 };
 
-constexpr std::array<ShcsEntry, 7> kTable {{
+constexpr std::array<ShcsEntry, 2> kSubM3Table {{
     { "M2",   2.4,  3.8,  2.0 },
     { "M2.5", 2.9,  4.5,  2.5 },
-    { "M3",   3.4,  5.5,  3.0 },
-    { "M4",   4.5,  7.0,  4.0 },
-    { "M5",   5.5,  8.5,  5.0 },
-    { "M6",   6.6,  10.0, 6.0 },
-    { "M8",   9.0,  13.0, 8.0 },
 }};
 
-const ShcsEntry* lookupEntry(const std::string& s) {
-    for (const auto& e : kTable) if (s == e.size) return &e;
+const ShcsEntry* lookupSubM3(const std::string& s) {
+    for (const auto& e : kSubM3Table) if (s == e.size) return &e;
     return nullptr;
+}
+
+struct ShcsSpec {
+    bool   found;
+    double clearance_mm;
+    double head_dia_mm;
+    double head_height_mm;
+};
+
+ShcsSpec lookupSpec(const std::string& s) {
+    if (const auto* thr = thread_table::findMetric(s)) {
+        return ShcsSpec{ true,
+                         thr->clearance_medium_mm,
+                         thr->socket_head_dia_mm,
+                         thr->socket_head_height_mm };
+    }
+    if (const auto* e = lookupSubM3(s)) {
+        return ShcsSpec{ true, e->clearance_mm, e->head_dia_mm, e->head_height_mm };
+    }
+    return ShcsSpec{ false, 0.0, 0.0, 0.0 };
 }
 
 constexpr double kChamferDepth_mm = 0.3;
@@ -57,13 +77,13 @@ constexpr double kSeatExtraDepth_mm = 0.5;  // head_height + 0.5 mm
 }  // namespace
 
 double clearanceDiameterFor(const std::string& s)
-{ const auto* e = lookupEntry(s); return e ? e->clearance_mm : 0.0; }
+{ const auto sp = lookupSpec(s); return sp.found ? sp.clearance_mm : 0.0; }
 
 double headDiameterFor(const std::string& s)
-{ const auto* e = lookupEntry(s); return e ? e->head_dia_mm : 0.0; }
+{ const auto sp = lookupSpec(s); return sp.found ? sp.head_dia_mm : 0.0; }
 
 double headHeightFor(const std::string& s)
-{ const auto* e = lookupEntry(s); return e ? e->head_height_mm : 0.0; }
+{ const auto sp = lookupSpec(s); return sp.found ? sp.head_height_mm : 0.0; }
 
 // ── Validation ───────────────────────────────────────────────────────────
 
@@ -76,8 +96,8 @@ DFMReport validate(const Workpiece& wp, const Input& in)
               "socket_head_bolt_seat: fastener_size is empty");
         return r;
     }
-    const auto* e = lookupEntry(in.fastener_size);
-    if (!e) {
+    const auto sp = lookupSpec(in.fastener_size);
+    if (!sp.found) {
         r.add("DFM-SHCS-SIZE", "error",
               "socket_head_bolt_seat: unknown fastener_size '" +
               in.fastener_size +
@@ -85,21 +105,21 @@ DFMReport validate(const Workpiece& wp, const Input& in)
         return r;
     }
 
-    if (e->clearance_mm < 0.8) {
+    if (sp.clearance_mm < 0.8) {
         r.add("DFM-002", "error",
               "socket_head_bolt_seat: pilot " +
-              std::to_string(e->clearance_mm) + " < 0.8 mm");
+              std::to_string(sp.clearance_mm) + " < 0.8 mm");
     }
 
-    const double seatDia = e->head_dia_mm + in.head_slip_mm;
-    if (seatDia <= e->clearance_mm) {
+    const double seatDia = sp.head_dia_mm + in.head_slip_mm;
+    if (seatDia <= sp.clearance_mm) {
         r.add("DFM-SHCS-MARGIN", "error",
               "socket_head_bolt_seat: seat dia " + std::to_string(seatDia) +
-              " ≤ pilot dia " + std::to_string(e->clearance_mm) +
+              " ≤ pilot dia " + std::to_string(sp.clearance_mm) +
               " — invalid counterbore");
     }
 
-    const double seatDepth = e->head_height_mm + kSeatExtraDepth_mm;
+    const double seatDepth = sp.head_height_mm + kSeatExtraDepth_mm;
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
     const double thickness = zMax - zMin;
@@ -131,10 +151,10 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         throw SkillError(msg);
     }
 
-    const auto* e = lookupEntry(in.fastener_size);
-    const double pilotDia  = e->clearance_mm;
-    const double seatDia   = e->head_dia_mm + in.head_slip_mm;
-    const double seatDepth = e->head_height_mm + kSeatExtraDepth_mm;
+    const auto sp = lookupSpec(in.fastener_size);
+    const double pilotDia  = sp.clearance_mm;
+    const double seatDia   = sp.head_dia_mm + in.head_slip_mm;
+    const double seatDepth = sp.head_height_mm + kSeatExtraDepth_mm;
 
     auto entryId = wp.resolve(in.entry_face);
     if (!entryId) throw SkillError("socket_head_bolt_seat: entry_face datum unresolved");
@@ -340,18 +360,23 @@ std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
             const double seatLen  = seat.axialMax  - seat.axialMin;
             const double pilotLen = pilot.axialMax - pilot.axialMin;
             if (pilotLen < seatLen * 1.5) continue;
-            // Snap to nearest M-size using pilot diameter.
+            // Snap to nearest M-size using pilot diameter.  Candidates are
+            // M2/M2.5 (local sub-M3 table) plus M3..M30 (central table).
             std::string bestSize = "M4";
             double sizeErr = std::numeric_limits<double>::max();
-            for (const auto& e : kTable) {
+            for (const auto& e : kSubM3Table) {
                 const double err = std::abs(e.clearance_mm - 2.0 * pilot.radius);
                 if (err < sizeErr) { sizeErr = err; bestSize = e.size; }
             }
+            for (const auto& thr : thread_table::kMetricThreads) {
+                const double err = std::abs(thr.clearance_medium_mm - 2.0 * pilot.radius);
+                if (err < sizeErr) { sizeErr = err; bestSize = thr.size_key; }
+            }
             if (sizeErr > 0.5) continue;
-            const auto* mat = lookupEntry(bestSize);
-            if (!mat) continue;
+            const auto mat = lookupSpec(bestSize);
+            if (!mat.found) continue;
             const double headSlip = std::max(0.0,
-                2.0 * seat.radius - mat->head_dia_mm);
+                2.0 * seat.radius - mat.head_dia_mm);
             if (headSlip > 2.0) continue;  // outside reasonable counterbore tolerance
 
             gp_Vec drillVec(seat.entryCenter, pilot.deepCenter);

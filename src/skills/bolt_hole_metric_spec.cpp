@@ -3,6 +3,7 @@
 #include "bolt_hole_metric_spec.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -32,47 +33,18 @@ using nlohmann::json;
 
 // ── ISO 273 clearance hole table ────────────────────────────────────────
 //
-// Embedded as static-const arrays.  Each row is one metric size with three
-// fit-class clearances (close / medium / free).  Source: ISO 273:1979,
-// "Fasteners — Clearance holes for bolts and screws".  11 sizes covers
-// the consumer-electronics + structural ranges asked for in the brief.
-
-namespace {
-
-struct MetricClearance
-{
-    const char* size;
-    double      close_mm;
-    double      medium_mm;
-    double      free_mm;
-};
-
-constexpr std::array<MetricClearance, 11> kIso273Table {{
-    { "M3",   3.2,  3.4,  3.6 },
-    { "M4",   4.3,  4.5,  4.8 },
-    { "M5",   5.3,  5.5,  5.8 },
-    { "M6",   6.4,  6.6,  7.0 },
-    { "M8",   8.4,  9.0, 10.0 },
-    { "M10", 10.5, 11.0, 12.0 },
-    { "M12", 13.0, 14.0, 15.0 },
-    { "M16", 17.0, 18.0, 19.0 },
-    { "M20", 21.0, 22.0, 24.0 },
-    { "M24", 25.0, 26.0, 28.0 },
-    { "M30", 31.0, 33.0, 35.0 },
-}};
-
-}  // namespace
+// Sourced from the central thread table (_iso_thread_table.hpp).  Source:
+// ISO 273:1979, "Fasteners — Clearance holes for bolts and screws".
+// 11 sizes covers the consumer-electronics + structural ranges.
 
 double clearanceDiameterFor(const std::string& thread_size,
                             const std::string& fit_class)
 {
-    for (const auto& e : kIso273Table) {
-        if (thread_size != e.size) continue;
-        if (fit_class == "close")  return e.close_mm;
-        if (fit_class == "medium") return e.medium_mm;
-        if (fit_class == "free")   return e.free_mm;
-        return 0.0;
-    }
+    const auto* s = thread_table::findMetric(thread_size);
+    if (!s) return 0.0;
+    if (fit_class == "close")  return s->clearance_close_mm;
+    if (fit_class == "medium") return s->clearance_medium_mm;
+    if (fit_class == "free")   return s->clearance_free_mm;
     return 0.0;
 }
 
@@ -90,17 +62,17 @@ struct ReverseMatch
 ReverseMatch closestSpecMatch(double dia_mm, double tol_mm)
 {
     ReverseMatch best { {}, {}, tol_mm };
-    for (const auto& e : kIso273Table) {
+    for (const auto& e : thread_table::kMetricThreads) {
         const struct { const char* fit; double d; } cands[3] = {
-            { "close",  e.close_mm  },
-            { "medium", e.medium_mm },
-            { "free",   e.free_mm   },
+            { "close",  e.clearance_close_mm  },
+            { "medium", e.clearance_medium_mm },
+            { "free",   e.clearance_free_mm   },
         };
         for (const auto& c : cands) {
             const double err = std::abs(c.d - dia_mm);
             if (err < best.err) {
                 best.err  = err;
-                best.size = e.size;
+                best.size = e.size_key;
                 best.fit  = c.fit;
             }
         }

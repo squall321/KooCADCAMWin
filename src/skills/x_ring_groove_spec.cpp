@@ -2,6 +2,7 @@
 
 #include "x_ring_groove_spec.hpp"
 
+#include "_as568_table.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -35,23 +36,18 @@ namespace koocadcam::skill::x_ring_groove_spec {
 namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
-// ── AS568 X-ring spec table (same dash sizes as O-ring — quad-rings are
-// drop-in replacements per Parker "Quad-Ring Brand Seals" §1.2).
+// ── AS568 X-ring spec table — quad-rings use the same dash sizes as
+// O-rings (drop-in replacement per Parker "Quad-Ring Brand Seals" §1.2).
+// CS lookup delegates to the central AS568 table (_as568_table.hpp); the
+// only local override is -908, which this skill historically maps to the
+// 1.78 mm boss-seal CS instead of the central catalog's 1.27 mm value.
+// X-ring-specific groove multipliers stay local (depth = 0.78 × CS).
 
 namespace {
 
-struct AS568Entry { const char* dash; double cs_mm; };
+struct AS568Override { const char* dash; double cs_mm; };
 
-constexpr std::array<AS568Entry, 10> kAS568Spec {{
-    { "-006", 1.78 },
-    { "-011", 1.78 },
-    { "-016", 1.78 },
-    { "-111", 2.62 },
-    { "-116", 2.62 },
-    { "-212", 3.53 },
-    { "-224", 3.53 },
-    { "-325", 5.33 },
-    { "-425", 6.99 },
+constexpr std::array<AS568Override, 1> kAS568Overrides {{
     { "-908", 1.78 },
 }};
 
@@ -59,8 +55,9 @@ constexpr std::array<AS568Entry, 10> kAS568Spec {{
 
 double crossSectionFor(const std::string& dash_size)
 {
-    for (const auto& e : kAS568Spec)
+    for (const auto& e : kAS568Overrides)
         if (dash_size == e.dash) return e.cs_mm;
+    if (auto* p = as568::findDash(dash_size)) return p->cross_section_mm;
     return 0.0;
 }
 
@@ -328,9 +325,9 @@ std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
             const double csEst = depth / 0.78;       // X-ring formula
             std::string bestDash = "-111";
             double bestErr = std::numeric_limits<double>::max();
-            for (const auto& e : kAS568Spec) {
-                const double err = std::abs(e.cs_mm - csEst);
-                if (err < bestErr) { bestErr = err; bestDash = e.dash; }
+            for (const auto& e : as568::kAs568) {
+                const double err = std::abs(e.cross_section_mm - csEst);
+                if (err < bestErr) { bestErr = err; bestDash = e.dash_key; }
             }
             const gp_Dir adir = outerCyl.axis.Direction();
             const gp_Pnt mid  = outerCyl.midPnt;

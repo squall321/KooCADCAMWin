@@ -7,6 +7,7 @@
 #include "form_tap.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/HelicalSweep.hpp"
 
@@ -24,22 +25,22 @@
 namespace koocadcam::skill::form_tap {
 
 namespace pr = koocadcam::engine::prim;
+namespace tt = koocadcam::skill::thread_table;
 using nlohmann::json;
 
 // ── Chart lookups ────────────────────────────────────────────────────────
+//
+// standardCoarsePitch uses central thread_table for M3..M12; M1.6/M2/M2.5
+// are below the central table's M3 floor and stay inline.
+// formTapPilotDiameter is form-tap-SPECIFIC (chipless displacement) and
+// remains entirely local — central table holds cutting-tap pilots.
 
 double standardCoarsePitch(const std::string& thread_size)
 {
     if (thread_size == "M1.6") return 0.35;
     if (thread_size == "M2")   return 0.40;
     if (thread_size == "M2.5") return 0.45;
-    if (thread_size == "M3")   return 0.50;
-    if (thread_size == "M4")   return 0.70;
-    if (thread_size == "M5")   return 0.80;
-    if (thread_size == "M6")   return 1.00;
-    if (thread_size == "M8")   return 1.25;
-    if (thread_size == "M10")  return 1.50;
-    if (thread_size == "M12")  return 1.75;
+    if (const auto* s = tt::findMetric(thread_size)) return s->pitch_mm;
     return 0.0;
 }
 

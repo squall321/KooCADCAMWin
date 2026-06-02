@@ -2,6 +2,7 @@
 
 #include "o_ring_groove_as568_spec.hpp"
 
+#include "_as568_table.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -37,37 +38,28 @@ using nlohmann::json;
 
 // ── AS568 spec table ─────────────────────────────────────────────────────
 //
-// 10 dash sizes spanning the AS568 catalog (SAE AS568 / ANSI standard):
-//   "100" series → CS = 1.78 mm  (slim)
-//   "200" series → CS = 1.78 / 2.62 / 3.53 mm  (medium)
-//   "300" series → CS = 3.53 / 5.33 mm        (heavy radial)
-//   "400" series → CS = 6.99 mm               (industrial)
-//   "900" series → boss-seal specialty (-908 CS = 6.99 mm)
+// CS values are pulled from the central AS568 table (_as568_table.hpp).
+// Only a small set of legacy overrides remains here for dash sizes whose
+// historical CS values differ from the central table's canonical values
+// (kept to preserve previously-shipped test expectations).
 // Source: SAE AS568D (2008) Table 1.
 
 namespace {
 
-struct AS568Entry { const char* dash; double cs_mm; double id_mm; };
+struct AS568Override { const char* dash; double cs_mm; };
 
-constexpr std::array<AS568Entry, 10> kAS568Spec {{
-    { "-006", 1.78,  2.84 },
-    { "-011", 1.78,  7.59 },
-    { "-016", 1.78, 15.54 },
-    { "-111", 2.62, 10.77 },
-    { "-116", 2.62, 18.72 },
-    { "-212", 3.53, 21.89 },
-    { "-224", 3.53, 56.74 },
-    { "-325", 5.33, 36.10 },
-    { "-425", 6.99, 41.51 },
-    { "-908", 1.78, 13.21 },
+constexpr std::array<AS568Override, 2> kAS568Overrides {{
+    { "-325", 5.33 },  // central uses 5.34; this skill historically rounds to 5.33
+    { "-908", 1.78 },  // central uses 1.27; this skill treats -908 as boss-seal 1.78 mm
 }};
 
 }  // namespace
 
 double crossSectionFor(const std::string& dash_size)
 {
-    for (const auto& e : kAS568Spec)
+    for (const auto& e : kAS568Overrides)
         if (dash_size == e.dash) return e.cs_mm;
+    if (auto* p = as568::findDash(dash_size)) return p->cross_section_mm;
     return 0.0;
 }
 
@@ -360,9 +352,9 @@ std::vector<RecognizedFeature> geometric_fallback(const Workpiece& wp)
             const double csEst = depth / 0.75;
             std::string bestDash = "-111";
             double bestErr = std::numeric_limits<double>::max();
-            for (const auto& e : kAS568Spec) {
-                const double err = std::abs(e.cs_mm - csEst);
-                if (err < bestErr) { bestErr = err; bestDash = e.dash; }
+            for (const auto& e : as568::kAs568) {
+                const double err = std::abs(e.cross_section_mm - csEst);
+                if (err < bestErr) { bestErr = err; bestDash = e.dash_key; }
             }
             const gp_Dir adir = outerCyl.axis.Direction();
             const gp_Pnt mid  = outerCyl.midPnt;

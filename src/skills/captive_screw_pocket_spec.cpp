@@ -3,6 +3,7 @@
 #include "captive_screw_pocket_spec.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -26,32 +27,31 @@ using nlohmann::json;
 
 // ── DIN 6799 retaining-ring groove geometry table ───────────────────────
 //
-// Each row: thread_size, ISO-273-medium clearance dia, DIN 6799 groove dia
-// (on the shaft side, but reused here for cavity-side groove), ring width.
-// Approximation values for the consumer-electronics + structural set.
+// Clearance dia comes from the central thread table (ISO 273 medium fit).
+// Local table retains only the DIN 6799 groove-specific columns
+// (groove_dia, groove_width) which the central table does not carry.
 
 namespace {
 
 struct CaptiveSpec
 {
     const char* size;
-    double      clearance_dia_mm;   // ISO 273 medium
     double      groove_dia_mm;      // DIN 6799 retaining-ring groove
     double      groove_width_mm;    // DIN 6799 ring thickness
 };
 
 constexpr std::array<CaptiveSpec, 11> kDin6799Table {{
-    { "M3",   3.4,  4.0,  0.40 },
-    { "M4",   4.5,  5.0,  0.60 },
-    { "M5",   5.5,  6.2,  0.70 },
-    { "M6",   6.6,  7.4,  0.80 },
-    { "M8",   9.0, 10.0,  1.00 },
-    { "M10", 11.0, 12.0,  1.10 },
-    { "M12", 14.0, 15.0,  1.30 },
-    { "M16", 18.0, 19.0,  1.60 },
-    { "M20", 22.0, 23.0,  2.00 },
-    { "M24", 26.0, 27.5,  2.30 },
-    { "M30", 33.0, 34.5,  2.60 },
+    { "M3",    4.0,  0.40 },
+    { "M4",    5.0,  0.60 },
+    { "M5",    6.2,  0.70 },
+    { "M6",    7.4,  0.80 },
+    { "M8",   10.0,  1.00 },
+    { "M10",  12.0,  1.10 },
+    { "M12",  15.0,  1.30 },
+    { "M16",  19.0,  1.60 },
+    { "M20",  23.0,  2.00 },
+    { "M24",  27.5,  2.30 },
+    { "M30",  34.5,  2.60 },
 }};
 
 const CaptiveSpec* findSpec(const std::string& size)
@@ -66,7 +66,7 @@ const CaptiveSpec* findSpec(const std::string& size)
 
 double clearanceDiameterFor(const std::string& thread_size)
 {
-    if (const CaptiveSpec* s = findSpec(thread_size)) return s->clearance_dia_mm;
+    if (const auto* s = thread_table::findMetric(thread_size)) return s->clearance_medium_mm;
     return 0.0;
 }
 double grooveDiameterFor(const std::string& thread_size)
@@ -87,7 +87,8 @@ DFMReport validate(const Workpiece& wp, const Input& in)
     DFMReport r;
 
     const CaptiveSpec* s = findSpec(in.thread_size);
-    if (!s) {
+    const auto* thr = thread_table::findMetric(in.thread_size);
+    if (!s || !thr) {
         r.add("DFM-METRIC-UNKNOWN", "error",
               "captive_screw_pocket_spec: unknown thread_size '" + in.thread_size +
               "' (DIN 6799 table supports M3..M30)");
@@ -137,7 +138,8 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     }
 
     const CaptiveSpec* s = findSpec(in.thread_size);
-    const double clrDia    = s->clearance_dia_mm;
+    const auto* thr = thread_table::findMetric(in.thread_size);
+    const double clrDia    = thr->clearance_medium_mm;
     const double clrR      = clrDia / 2.0;
     const double grooveDia = s->groove_dia_mm;
     const double grooveR   = grooveDia / 2.0;
@@ -369,12 +371,15 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             const double clrDia    = 2.0 * small.radius;
             const double grooveDia = 2.0 * large.radius;
 
-            // Find matching DIN 6799 row.
+            // Find matching DIN 6799 row.  Clearance dia for each row comes
+            // from the central thread table via the row's size_key.
             const CaptiveSpec* match = nullptr;
             double bestErr = 0.20;
             for (const auto& e : kDin6799Table) {
-                const double err = std::abs(e.clearance_dia_mm - clrDia) +
-                                   std::abs(e.groove_dia_mm    - grooveDia);
+                const auto* thr2 = thread_table::findMetric(e.size);
+                const double rowClr = thr2 ? thr2->clearance_medium_mm : 0.0;
+                const double err = std::abs(rowClr - clrDia) +
+                                   std::abs(e.groove_dia_mm - grooveDia);
                 if (err < bestErr) { bestErr = err; match = &e; }
             }
             if (!match) continue;

@@ -3,6 +3,7 @@
 #include "bolted_joint.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -32,28 +33,26 @@ namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
 // ── Standard bolt thread nominal diameters (ISO metric coarse) ───────────
+//
+// Sourced from the central thread table (kMetricThreads) for M3+.  M1.6,
+// M2, and M2.5 are kept as a local fallback because central skips them.
 namespace {
 
 struct ThreadEntry { const char* code; double nominal_mm; };
-constexpr std::array<ThreadEntry, 11> kThreadTable = {{
+constexpr std::array<ThreadEntry, 3> kLocalSmallThreads = {{
     { "M1.6", 1.6 },
     { "M2",   2.0 },
     { "M2.5", 2.5 },
-    { "M3",   3.0 },
-    { "M4",   4.0 },
-    { "M5",   5.0 },
-    { "M6",   6.0 },
-    { "M8",   8.0 },
-    { "M10", 10.0 },
-    { "M12", 12.0 },
-    { "M16", 16.0 },
 }};
 
 }  // namespace
 
 double boltNominalDia(const std::string& bolt_thread)
 {
-    for (const auto& t : kThreadTable) {
+    if (const auto* m = thread_table::findMetric(bolt_thread)) {
+        return m->nominal_dia_mm;
+    }
+    for (const auto& t : kLocalSmallThreads) {
         if (bolt_thread == t.code) return t.nominal_mm;
     }
     return 0.0;
@@ -225,15 +224,22 @@ std::string matchBoltThread(double hole_dia_mm, double& matched_clearance_mm)
     matched_clearance_mm = 0.0;
     std::string best;
     double bestDiff = std::numeric_limits<double>::max();
-    for (const auto& t : kThreadTable) {
-        const double clearance = hole_dia_mm - t.nominal_mm;  // hole > nominal
-        if (clearance < 0.04 || clearance > 1.05) continue;
-        // Prefer the smallest clearance match (tightest fit).
+    auto tryEntry = [&](const char* code, double nom) {
+        const double clearance = hole_dia_mm - nom;
+        if (clearance < 0.04 || clearance > 1.05) return;
         if (clearance < bestDiff) {
             bestDiff = clearance;
-            best = t.code;
+            best = code;
             matched_clearance_mm = clearance;
         }
+    };
+    for (const auto& m : thread_table::kMetricThreads) {
+        // Only consider sizes up to M16 — original table cap.
+        if (m.nominal_dia_mm > 16.0 + 1e-6) continue;
+        tryEntry(m.size_key, m.nominal_dia_mm);
+    }
+    for (const auto& t : kLocalSmallThreads) {
+        tryEntry(t.code, t.nominal_mm);
     }
     return best;
 }

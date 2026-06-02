@@ -2,6 +2,7 @@
 
 #include "caseback_o_ring_groove.hpp"
 
+#include "_as568_table.hpp"
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
@@ -27,20 +28,22 @@ namespace koocadcam::skill::caseback_o_ring_groove {
 namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
-// ── AS568 face-seal catalog (small cross-section sub-set commonly used in
-//    caseback face-seal grooves).  Only the dash-numbers we accept; CS in mm.
+// ── AS568 caseback face-seal catalog ─────────────────────────────────────
+//
+// CS lookup delegates to the central AS568 table (_as568_table.hpp).  The
+// caseback skill accepts the -001 family (-004..-020) which is mostly NOT
+// in the central table (central covers -006/-011/-016/-111/...).  Local
+// extension entries below preserve this skill's historical accept-set.
 namespace {
 
-struct AS568Entry { const char* dash; double cs_mm; };
+struct AS568Override { const char* dash; double cs_mm; };
 
-constexpr std::array<AS568Entry, 9> kAS568FaceCatalog {{
+constexpr std::array<AS568Override, 7> kAS568Extras {{
     { "-004", 1.78 },
-    { "-006", 1.78 },
     { "-008", 1.78 },
     { "-010", 1.78 },
     { "-012", 1.78 },
     { "-014", 1.78 },
-    { "-016", 1.78 },
     { "-018", 1.78 },
     { "-020", 1.78 },
 }};
@@ -49,9 +52,10 @@ constexpr std::array<AS568Entry, 9> kAS568FaceCatalog {{
 
 double aS568CrossSection(const std::string& dash_number)
 {
-    for (const auto& e : kAS568FaceCatalog) {
+    for (const auto& e : kAS568Extras) {
         if (dash_number == e.dash) return e.cs_mm;
     }
+    if (auto* p = as568::findDash(dash_number)) return p->cross_section_mm;
     return 0.0;
 }
 

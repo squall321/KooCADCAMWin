@@ -3,6 +3,7 @@
 #include "tapped_hole_metric_spec.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -22,46 +23,19 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace koocadcam::skill::tapped_hole_metric_spec {
 
 namespace pr = koocadcam::engine::prim;
+namespace tt = koocadcam::skill::thread_table;
 using nlohmann::json;
 
-// ── ISO 965-1 tap drill table (1st-choice coarse pitch) ─────────────────
-
-namespace {
-
-struct ThreadPilot
-{
-    const char* size;
-    double      pilot_dia_mm;
-    double      pitch_mm;
-};
-
-constexpr std::array<ThreadPilot, 11> kIso965Table {{
-    { "M3",   2.50, 0.50 },
-    { "M4",   3.30, 0.70 },
-    { "M5",   4.20, 0.80 },
-    { "M6",   5.00, 1.00 },
-    { "M8",   6.80, 1.25 },
-    { "M10",  8.50, 1.50 },
-    { "M12", 10.20, 1.75 },
-    { "M16", 14.00, 2.00 },
-    { "M20", 17.50, 2.50 },
-    { "M24", 21.00, 3.00 },
-    { "M30", 26.50, 3.50 },
-}};
-
-}  // namespace
+// ── ISO 965-1 tap drill lookup (central thread_table) ─────────────────────
 
 double pilotDiameterFor(const std::string& thread_size)
 {
-    for (const auto& e : kIso965Table) {
-        if (thread_size == e.size) return e.pilot_dia_mm;
-    }
+    if (const auto* s = tt::findMetric(thread_size)) return s->tap_pilot_dia_mm;
     return 0.0;
 }
 
@@ -69,21 +43,19 @@ namespace {
 
 double pitchFor(const std::string& thread_size)
 {
-    for (const auto& e : kIso965Table) {
-        if (thread_size == e.size) return e.pitch_mm;
-    }
+    if (const auto* s = tt::findMetric(thread_size)) return s->pitch_mm;
     return 0.0;
 }
 
 std::string sizeForDiameter(double dia_mm, double tol_mm)
 {
-    const ThreadPilot* best = nullptr;
+    const tt::MetricThreadSpec* best = nullptr;
     double bestErr = tol_mm;
-    for (const auto& e : kIso965Table) {
-        const double err = std::abs(e.pilot_dia_mm - dia_mm);
+    for (const auto& e : tt::kMetricThreads) {
+        const double err = std::abs(e.tap_pilot_dia_mm - dia_mm);
         if (err < bestErr) { bestErr = err; best = &e; }
     }
-    return best ? std::string(best->size) : std::string();
+    return best ? std::string(best->size_key) : std::string();
 }
 
 }  // namespace

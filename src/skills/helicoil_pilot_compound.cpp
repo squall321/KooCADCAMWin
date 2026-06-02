@@ -3,6 +3,7 @@
 #include "helicoil_pilot_compound.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -19,6 +20,9 @@ using nlohmann::json;
 
 namespace {
 
+// Heli-Coil STI tap-drill diameters and 90° CSK top dia are insert-specific
+// (not in the central thread table _iso_thread_table.hpp).  The local table
+// is retained in full — no columns overlap with the central catalogue.
 struct HeliEntry {
     const char* size;
     double      sti_tap_drill_mm;

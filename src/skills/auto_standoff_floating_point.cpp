@@ -3,6 +3,7 @@
 #include "auto_standoff_floating_point.hpp"
 
 #include "Workpiece.hpp"
+#include "_iso_thread_table.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -30,6 +31,10 @@ namespace pr = koocadcam::engine::prim;
 using nlohmann::json;
 
 // ── Lookup table: PCB-mount metric tapped standoff specs ─────────────────
+//
+// pilot_dia_mm comes from the central thread table (ISO 965 60% tap drill)
+// for sizes M3+; M2 and M2.5 are kept locally because central starts at M3.
+// min_od / min_wall are standoff-specific moulding rules.
 namespace {
 
 struct StandoffSpec {
@@ -39,18 +44,31 @@ struct StandoffSpec {
     double      min_wall_mm;
 };
 
-constexpr std::array<StandoffSpec, 6> kStandoffTable {{
-    { "M2",   1.6,  4.0,  1.2  },
-    { "M2.5", 2.05, 5.0,  1.5  },
-    { "M3",   2.5,  6.0,  1.75 },
-    { "M4",   3.3,  8.0,  2.0  },
-    { "M5",   4.2,  10.0, 2.5  },
-    { "M6",   5.0,  12.0, 3.0  },
-}};
+StandoffSpec makeSpec(const char* key, double fallback_pilot,
+                       double min_od, double min_wall)
+{
+    const auto* m = thread_table::findMetric(key);
+    return StandoffSpec{ key,
+                         m ? m->tap_pilot_dia_mm : fallback_pilot,
+                         min_od, min_wall };
+}
+
+const std::array<StandoffSpec, 6>& standoffTable()
+{
+    static const std::array<StandoffSpec, 6> kStandoffTable {{
+        makeSpec("M2",   1.6,  4.0,  1.2  ),
+        makeSpec("M2.5", 2.05, 5.0,  1.5  ),
+        makeSpec("M3",   2.5,  6.0,  1.75 ),
+        makeSpec("M4",   3.3,  8.0,  2.0  ),
+        makeSpec("M5",   4.2,  10.0, 2.5  ),
+        makeSpec("M6",   5.0,  12.0, 3.0  ),
+    }};
+    return kStandoffTable;
+}
 
 const StandoffSpec* lookupSpec(const std::string& key)
 {
-    for (const auto& s : kStandoffTable)
+    for (const auto& s : standoffTable())
         if (key == s.key) return &s;
     return nullptr;
 }
@@ -336,7 +354,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 
             // Match pilot diameter against table.
             const std::string keyGuess = [&]() -> std::string {
-                for (const auto& s : kStandoffTable) {
+                for (const auto& s : standoffTable()) {
                     if (std::abs(2.0 * small.radius - s.pilot_dia_mm) < 0.3 &&
                         2.0 * large.radius >= s.min_od_mm - 0.5) {
                         return s.key;
