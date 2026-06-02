@@ -32,11 +32,30 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace koocadcam::skill { class Workpiece; }
 
 namespace koocadcam::process {
+
+// ExecuteOptions — runtime knobs for Executor::execute().
+//
+// Default-constructed values preserve the original slice-1 semantics:
+//   abort on the first SkillError, no skipping.
+//
+// `continue_on_error = true` enables robust replay mode (slice-10+):
+//   - On SkillError / std::exception / null-output / unknown-skill_id,
+//     the current workpiece is KEPT (the failed step is treated as a
+//     no-op), the error is recorded in step_errors, skipped_step_count
+//     is incremented, and execution proceeds to the next step.
+//   - On full success, ExecutionResult.failedAtStep is still -1.
+//   - ok() remains false if any step errored, even with skipping on,
+//     so callers can opt into the looser contract explicitly.
+struct ExecuteOptions
+{
+    bool continue_on_error = false;
+};
 
 struct ExecutionResult
 {
@@ -53,8 +72,18 @@ struct ExecutionResult
     std::vector<std::string>              errors;
 
     // -1 if all steps succeeded; otherwise the zero-based index of the
-    // step at which execution stopped.
+    // step at which execution stopped (abort mode) OR the index of the
+    // LAST step that errored (continue_on_error mode).
     int                                   failedAtStep = -1;
+
+    // ── continue_on_error diagnostics ────────────────────────────────
+    // Number of steps that errored when continue_on_error=true (always 0
+    // when continue_on_error=false; one error short-circuits in that mode).
+    int                                              skipped_step_count = 0;
+
+    // (step_index, error_message) for every step that errored under
+    // continue_on_error.  Empty in abort mode.
+    std::vector<std::pair<int, std::string>>         step_errors;
 
     bool ok() const { return errors.empty() && failedAtStep == -1; }
 };
@@ -67,8 +96,15 @@ public:
     // initial_workpiece must be non-null.  If a skill_id is not in the
     // dispatch table, the step fails immediately and the partial result
     // (last good workpiece) is returned.
+    //
+    // 2-arg form: abort-on-error (legacy default).
     static ExecutionResult execute(const ProcessPlan& plan,
                                    std::shared_ptr<skill::Workpiece> initial_workpiece);
+
+    // 3-arg form: caller controls error-handling policy via ExecuteOptions.
+    static ExecutionResult execute(const ProcessPlan& plan,
+                                   std::shared_ptr<skill::Workpiece> initial_workpiece,
+                                   const ExecuteOptions& opts);
 
     // Dispatcher type: parses params JSON and applies the skill.
     using SkillFn = std::function<skill::SkillOutput(const skill::Workpiece&,

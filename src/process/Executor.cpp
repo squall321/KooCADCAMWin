@@ -4827,6 +4827,14 @@ const std::unordered_map<std::string, Executor::SkillFn>& Executor::dispatchTabl
 ExecutionResult Executor::execute(const ProcessPlan& plan,
                                   std::shared_ptr<sk::Workpiece> initial_workpiece)
 {
+    // Preserve the legacy abort-on-error semantics for existing callers.
+    return execute(plan, std::move(initial_workpiece), ExecuteOptions{});
+}
+
+ExecutionResult Executor::execute(const ProcessPlan& plan,
+                                  std::shared_ptr<sk::Workpiece> initial_workpiece,
+                                  const ExecuteOptions& opts)
+{
     ExecutionResult result;
     result.workpiece = initial_workpiece;
 
@@ -4839,6 +4847,30 @@ ExecutionResult Executor::execute(const ProcessPlan& plan,
     const auto& table = dispatchTable();
     auto current = initial_workpiece;
 
+    // Helper: record a per-step error and decide whether to abort.
+    //   Returns `true` if execution should stop (abort mode),
+    //   `false` if execution should keep going (continue_on_error mode).
+    // Mutates: result.errors, result.failedAtStep, result.skipped_step_count,
+    // result.step_errors, result.workpiece (rewound to `current`).
+    auto record_step_error = [&](int step_index,
+                                 const std::string& skill_id,
+                                 const std::string& msg) -> bool
+    {
+        result.errors.push_back(msg);
+        result.failedAtStep = step_index;
+        result.workpiece    = current;   // keep last-good workpiece
+
+        if (opts.continue_on_error) {
+            result.skipped_step_count++;
+            result.step_errors.emplace_back(step_index, msg);
+            spdlog::warn("Executor: step {} ({}) failed: {} — continuing",
+                         step_index, skill_id, msg);
+            return false;   // do not abort
+        }
+        spdlog::error("{}", msg);
+        return true;        // abort
+    };
+
     const auto& steps = plan.steps();
     for (int i = 0; i < static_cast<int>(steps.size()); ++i) {
         const auto& step = steps[i];
@@ -4847,11 +4879,10 @@ ExecutionResult Executor::execute(const ProcessPlan& plan,
         if (it == table.end()) {
             std::string msg = "Executor: unknown skill_id '" + step.skill_id +
                               "' at step " + std::to_string(i);
-            spdlog::error("{}", msg);
-            result.errors.push_back(msg);
-            result.failedAtStep = i;
-            result.workpiece = current;   // last good
-            return result;
+            if (record_step_error(i, step.skill_id, msg)) {
+                return result;
+            }
+            continue;   // continue_on_error: skip this step
         }
 
         try {
@@ -4860,10 +4891,10 @@ ExecutionResult Executor::execute(const ProcessPlan& plan,
                 std::string msg = "Executor: skill '" + step.skill_id +
                                   "' returned null workpiece at step " +
                                   std::to_string(i);
-                result.errors.push_back(msg);
-                result.failedAtStep = i;
-                result.workpiece = current;
-                return result;
+                if (record_step_error(i, step.skill_id, msg)) {
+                    return result;
+                }
+                continue;
             }
             // Mirror the cumulative history into the step's output workpiece
             // so wp.features() reflects the full chain (each skill::apply()
@@ -4875,24 +4906,29 @@ ExecutionResult Executor::execute(const ProcessPlan& plan,
         } catch (const sk::SkillError& e) {
             std::string msg = "Executor: SkillError at step " + std::to_string(i) +
                               " (" + step.skill_id + "): " + e.what();
-            spdlog::error("{}", msg);
-            result.errors.push_back(msg);
-            result.failedAtStep = i;
-            result.workpiece = current;
-            return result;
+            if (record_step_error(i, step.skill_id, msg)) {
+                return result;
+            }
+            continue;
         } catch (const std::exception& e) {
             std::string msg = "Executor: exception at step " + std::to_string(i) +
                               " (" + step.skill_id + "): " + e.what();
-            spdlog::error("{}", msg);
-            result.errors.push_back(msg);
-            result.failedAtStep = i;
-            result.workpiece = current;
-            return result;
+            if (record_step_error(i, step.skill_id, msg)) {
+                return result;
+            }
+            continue;
         }
     }
 
     result.workpiece = current;
-    result.failedAtStep = -1;
+    // In continue_on_error mode, failedAtStep reflects the last failed step
+    // index; ok() will be false if any step errored.  In abort mode this
+    // line resets to -1 only if the loop completed without aborting.
+    if (!opts.continue_on_error) {
+        result.failedAtStep = -1;
+    } else if (result.skipped_step_count == 0) {
+        result.failedAtStep = -1;
+    }
     return result;
 }
 
