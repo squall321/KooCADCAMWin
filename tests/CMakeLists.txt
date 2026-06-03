@@ -805,6 +805,63 @@ koo_add_skill_test(face_fillet_two_faces)
 koo_add_skill_test(asymmetric_chamfer)
 koo_add_skill_test(multi_radius_fillet_table)
 
+# slice 13 — phone PCB/assembly features (5)
+koo_add_skill_test(board_to_board_connector_seat)
+koo_add_skill_test(zif_connector_seat)
+koo_add_skill_test(antenna_keepout_zone)
+koo_add_skill_test(camera_island_step)
+koo_add_skill_test(speaker_grille_slot_array)
+
+# slice 13 — hydraulic ports (5)
+koo_add_skill_test(sae_j518_port)
+koo_add_skill_test(bspp_g_port)
+koo_add_skill_test(npt_taper_port)
+koo_add_skill_test(jic_37deg_flare_port)
+koo_add_skill_test(orfs_face_seal_port)
+
+# slice 13 — hydraulic ports (5)  — slice 13b extension family
+koo_add_skill_test(sae_j518_port_code61)
+koo_add_skill_test(bsp_g_thread_port)
+koo_add_skill_test(npt_taper_port_b120)
+koo_add_skill_test(jic_37_flare_port)
+koo_add_skill_test(orfs_port_4bolt)
+
+# slice 13 — advanced mold (5)
+koo_add_skill_test(shutoff_surface_explicit)
+koo_add_skill_test(side_core_pull_slot)
+koo_add_skill_test(lifter_mechanism)
+koo_add_skill_test(runner_balanced_h)
+koo_add_skill_test(subgate_pin_point)
+
+# slice 13 — watch bezel/case features (5)
+koo_add_skill_test(diving_bezel_120clicks)
+koo_add_skill_test(tachymeter_bezel_scale)
+koo_add_skill_test(gmt_bezel_24hr)
+koo_add_skill_test(screw_down_caseback_6_notches)
+koo_add_skill_test(crown_guard_compound)
+
+# slice 13 — watch bezel/case families (5)
+koo_add_skill_test(diving_bezel_unidirectional)
+koo_add_skill_test(tachymeter_bezel_engraved)
+koo_add_skill_test(case_back_screw_down)
+koo_add_skill_test(crown_guard_shoulder_compound)
+koo_add_skill_test(lug_integrated_curved)
+
+# slice 13 — real involute gears (5)
+koo_add_skill_test(spur_gear_involute)
+koo_add_skill_test(helical_gear)
+set_tests_properties(skill_helical_gear PROPERTIES TIMEOUT 600)
+koo_add_skill_test(bevel_gear)
+koo_add_skill_test(internal_gear)
+koo_add_skill_test(rack_involute)
+
+# slice 13 — phone PCB mount features (5)
+koo_add_skill_test(pcb_standoff_boss_metric)
+koo_add_skill_test(board_to_board_connector_seat_posts)
+koo_add_skill_test(zif_connector_window_compound)
+koo_add_skill_test(antenna_keepout_zone_polygon)
+koo_add_skill_test(speaker_grille_micro_array)
+
 # ── Compound STEP-roundtrip recognition smoke (slice 8) ──────────────────
 add_executable(compound_step_rt_check skills/compound_step_rt_check.cpp)
 target_link_libraries(compound_step_rt_check PRIVATE

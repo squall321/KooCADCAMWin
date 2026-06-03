@@ -714,6 +714,56 @@ add_library(koo_skills STATIC
     face_fillet_two_faces.cpp
     asymmetric_chamfer.cpp
     multi_radius_fillet_table.cpp
+    # slice 13 — phone PCB/assembly features (5)
+    board_to_board_connector_seat.cpp
+    zif_connector_seat.cpp
+    antenna_keepout_zone.cpp
+    camera_island_step.cpp
+    speaker_grille_slot_array.cpp
+    # slice 13 — hydraulic ports (5)
+    sae_j518_port.cpp
+    bspp_g_port.cpp
+    npt_taper_port.cpp
+    jic_37deg_flare_port.cpp
+    orfs_face_seal_port.cpp
+    # slice 13 — hydraulic ports (5)  — slice 13b extension family
+    sae_j518_port_code61.cpp
+    bsp_g_thread_port.cpp
+    npt_taper_port_b120.cpp
+    jic_37_flare_port.cpp
+    orfs_port_4bolt.cpp
+    # slice 13 — real involute gears (5)
+    spur_gear_involute.cpp
+    helical_gear.cpp
+    bevel_gear.cpp
+    internal_gear.cpp
+    rack_involute.cpp
+    # slice 13 — advanced mold (5)
+    shutoff_surface_explicit.cpp
+    side_core_pull_slot.cpp
+    lifter_mechanism.cpp
+    runner_balanced_h.cpp
+    subgate_pin_point.cpp
+    # slice 13 — watch bezel/case features (5)
+    diving_bezel_120clicks.cpp
+    tachymeter_bezel_scale.cpp
+    gmt_bezel_24hr.cpp
+    screw_down_caseback_6_notches.cpp
+    crown_guard_compound.cpp
+    # slice 13 — watch bezel/case families (5)
+    diving_bezel_unidirectional.cpp
+    tachymeter_bezel_engraved.cpp
+    case_back_screw_down.cpp
+    crown_guard_shoulder_compound.cpp
+    lug_integrated_curved.cpp
+    # slice 13 — phone PCB mount features (5)
+    #   Note: board_to_board_connector_seat and antenna_keepout_zone are
+    #   already wired above (under "slice 13 — phone PCB/assembly features");
+    #   they were EXTENDED with mounting-post / polygon-pocket support so do
+    #   not need re-listing. Only the 3 truly-new skills are added here.
+    pcb_standoff_boss_metric.cpp
+    zif_connector_window_compound.cpp
+    speaker_grille_micro_array.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)
