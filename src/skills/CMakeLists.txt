@@ -660,6 +660,60 @@ add_library(koo_skills STATIC
     wave_spring_groove.cpp
     x_ring_groove.cpp
     x_ring_groove_spec.cpp
+    # slice 10 — sketch-driven CAD-native (5)
+    extrude_boss_from_sketch.cpp
+    extrude_cut_from_sketch.cpp
+    revolve_boss.cpp
+    revolve_cut.cpp
+    projected_sketch_cut.cpp
+    # slice 11 — SolidWorks-style body management (5)
+    move_face_along_direction.cpp
+    body_split_by_plane.cpp
+    body_combine_union.cpp
+    body_combine_subtract.cpp
+    copy_body_with_transform.cpp
+    # slice 12 — CAD-native surfaces (5)
+    surface_thicken_to_solid.cpp
+    surface_knit_to_shell.cpp
+    surface_trim_by_plane.cpp
+    surface_offset_from_face.cpp
+    surface_fill_4_edges.cpp
+    # slice 12 — CAD-native patterns (5)
+    linear_pattern.cpp
+    circular_pattern.cpp
+    mirror_pattern.cpp
+    fill_pattern.cpp
+    sketch_driven_pattern.cpp
+    # slice 12 — CAD-native sweep/loft (5)
+    sweep_boss_along_curve.cpp
+    sweep_cut_along_curve.cpp
+    loft_between_profiles.cpp
+    loft_with_guide_curves.cpp
+    boundary_surface_4edges.cpp
+    # slice 12 — CAD-native shell/mirror/scale (5)
+    shell_with_face_skip.cpp
+    mirror_body_about_plane.cpp
+    scale_body_uniform.cpp
+    add_draft_to_face.cpp
+    rib_along_path.cpp
+    # slice 12 — CAD-native weldment (5)
+    structural_member_along_path.cpp
+    weldment_end_cap.cpp
+    weldment_gusset_triangular.cpp
+    miter_corner_trim.cpp
+    intermittent_weld_bead.cpp
+    # slice 12 — CAD-native reference geometry (5)
+    reference_plane_offset.cpp
+    reference_plane_at_3pts.cpp
+    reference_axis_two_pts.cpp
+    reference_point_on_face_uv.cpp
+    coordinate_system_from_axes.cpp
+    # slice 12 — CAD-native advanced fillet/chamfer (5)
+    variable_radius_fillet.cpp
+    full_round_fillet.cpp
+    face_fillet_two_faces.cpp
+    asymmetric_chamfer.cpp
+    multi_radius_fillet_table.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)

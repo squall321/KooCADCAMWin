@@ -1,0 +1,286 @@
+// @lat: [[engine/skills#revolve_cut]]
+
+#include "revolve_cut.hpp"
+
+#include "Workpiece.hpp"
+#include "engine/primitives/Bbox.hpp"
+#include "engine/primitives/Cuts.hpp"
+
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <TopoDS.hxx>
+#include <gp.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Pnt.hxx>
+
+#include <nlohmann/json.hpp>
+#include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+namespace koocadcam::skill::revolve_cut {
+
+namespace pr = koocadcam::engine::prim;
+using nlohmann::json;
+
+namespace {
+
+double polygonAreaRZ(const std::vector<std::pair<double,double>>& poly)
+{
+    if (poly.size() < 3) return 0.0;
+    double a = 0.0;
+    const int n = static_cast<int>(poly.size());
+    for (int i = 0; i < n; ++i) {
+        const auto& A = poly[i];
+        const auto& B = poly[(i + 1) % n];
+        a += A.first * B.second - B.first * A.second;
+    }
+    return std::abs(a) * 0.5;
+}
+
+double polygonCentroidR(const std::vector<std::pair<double,double>>& poly)
+{
+    if (poly.size() < 3) return 0.0;
+    double cx = 0.0, area = 0.0;
+    const int n = static_cast<int>(poly.size());
+    for (int i = 0; i < n; ++i) {
+        const auto& A = poly[i];
+        const auto& B = poly[(i + 1) % n];
+        const double cross = A.first * B.second - B.first * A.second;
+        area += cross;
+        cx += (A.first + B.first) * cross;
+    }
+    area *= 0.5;
+    if (std::abs(area) < 1e-12) return 0.0;
+    return cx / (6.0 * area);
+}
+
+double minRofProfile(const std::vector<std::pair<double,double>>& poly)
+{
+    if (poly.empty()) return 0.0;
+    double m = std::numeric_limits<double>::infinity();
+    for (const auto& p : poly) m = std::min(m, p.first);
+    return m;
+}
+
+double maxRofProfile(const std::vector<std::pair<double,double>>& poly)
+{
+    if (poly.empty()) return 0.0;
+    double m = -std::numeric_limits<double>::infinity();
+    for (const auto& p : poly) m = std::max(m, p.first);
+    return m;
+}
+
+double zRangeOfProfile(const std::vector<std::pair<double,double>>& poly)
+{
+    if (poly.empty()) return 0.0;
+    double zMin = 1e30, zMax = -1e30;
+    for (const auto& p : poly) { zMin = std::min(zMin, p.second);
+                                 zMax = std::max(zMax, p.second); }
+    return zMax - zMin;
+}
+
+TopoDS_Wire makeProfileWireXZ(const std::vector<std::pair<double,double>>& poly)
+{
+    std::vector<gp_Pnt> verts;
+    verts.reserve(poly.size());
+    for (const auto& p : poly)
+        verts.emplace_back(p.first, 0.0, p.second);
+
+    BRepBuilderAPI_MakeWire wireMk;
+    for (size_t i = 0; i < verts.size(); ++i) {
+        const gp_Pnt& a = verts[i];
+        const gp_Pnt& b = verts[(i + 1) % verts.size()];
+        if (a.Distance(b) < 1e-9) continue;
+        BRepBuilderAPI_MakeEdge em(a, b);
+        if (!em.IsDone())
+            throw SkillError("revolve_cut: edge build failed");
+        wireMk.Add(em.Edge());
+    }
+    if (!wireMk.IsDone())
+        throw SkillError("revolve_cut: wire build failed");
+    return wireMk.Wire();
+}
+
+}  // namespace
+
+// ── Validation ───────────────────────────────────────────────────────────
+
+DFMReport validate(const Workpiece& wp, const Input& in)
+{
+    DFMReport r;
+
+    if (in.profile_polyline.size() < 3) {
+        r.add("DFM-INPUT", "error",
+              "revolve_cut: profile needs >= 3 vertices, got " +
+              std::to_string(in.profile_polyline.size()));
+    }
+    if (in.revolution_angle_deg <= 0.0 || in.revolution_angle_deg > 360.0) {
+        r.add("DFM-INPUT", "error",
+              "revolve_cut: revolution_angle_deg " +
+              std::to_string(in.revolution_angle_deg) +
+              " out of (0, 360] range");
+    }
+    if (!in.profile_polyline.empty() && minRofProfile(in.profile_polyline) < 0.0) {
+        r.add("DFM-INPUT", "error",
+              "revolve_cut: profile has r < 0 — would cross revolution axis");
+    }
+    const double zSpan = zRangeOfProfile(in.profile_polyline);
+    if (zSpan > 0.0 && zSpan < 0.4) {
+        r.add("DFM-001", "error",
+              "revolve_cut: profile axial span " + std::to_string(zSpan) +
+              " mm < 0.4 mm (min wall thickness)");
+    }
+    if (in.profile_polyline.size() >= 3 &&
+        polygonAreaRZ(in.profile_polyline) < 1e-6) {
+        r.add("DFM-INPUT", "error",
+              "revolve_cut: profile area ~0 (collinear?)");
+    }
+    if (!wp.shape().IsNull() && !in.profile_polyline.empty()) {
+        const auto bb = pr::optimalBbox(wp.shape());
+        const double maxR = maxRofProfile(in.profile_polyline);
+        if (maxR > bb.outerRadiusXY() + 2.0) {
+            r.add("DFM-INPUT", "error",
+                  "revolve_cut: max profile radius " + std::to_string(maxR) +
+                  " > stock outer radius + 2mm " +
+                  std::to_string(bb.outerRadiusXY() + 2.0));
+        }
+    }
+    return r;
+}
+
+// ── Synthesis ────────────────────────────────────────────────────────────
+
+SkillOutput apply(const Workpiece& wp, const Input& in)
+{
+    DFMReport dfm = validate(wp, in);
+    if (!dfm.passed) {
+        std::string msg = "revolve_cut DFM failed:";
+        for (const auto& f : dfm.findings)
+            if (f.severity == "error") msg += "\n  - " + f.code + ": " + f.message;
+        throw SkillError(msg);
+    }
+
+    if (std::abs(std::abs(in.axis_dir.Z()) - 1.0) > 1e-3) {
+        throw SkillError("revolve_cut: only axis_dir = +/-Z supported in slice-10");
+    }
+
+    const TopoDS_Wire wire = makeProfileWireXZ(in.profile_polyline);
+
+    BRepBuilderAPI_MakeFace faceMk(wire, true);
+    if (!faceMk.IsDone())
+        throw SkillError("revolve_cut: face build failed");
+
+    const gp_Ax1 axis(in.axis_origin, in.axis_dir);
+    const double angRad = in.revolution_angle_deg * M_PI / 180.0;
+
+    BRepPrimAPI_MakeRevol revol(faceMk.Face(), axis, angRad);
+    revol.Build();
+    if (!revol.IsDone())
+        throw SkillError("revolve_cut: revol build failed");
+    const TopoDS_Shape cutter = revol.Shape();
+
+    const TopoDS_Shape newShape = pr::cut(wp.shape(), cutter);
+
+    const double area = polygonAreaRZ(in.profile_polyline);
+    const double rC   = polygonCentroidR(in.profile_polyline);
+    const double vol  = 2.0 * M_PI * rC * area *
+                        (in.revolution_angle_deg / 360.0);
+
+    json polyJson = json::array();
+    for (const auto& p : in.profile_polyline)
+        polyJson.push_back({ { "r", p.first }, { "z", p.second } });
+
+    json params = {
+        { "profile_polyline",     polyJson },
+        { "axis_origin",          { in.axis_origin.X(),
+                                    in.axis_origin.Y(),
+                                    in.axis_origin.Z() } },
+        { "axis_dir",             { in.axis_dir.X(),
+                                    in.axis_dir.Y(),
+                                    in.axis_dir.Z() } },
+        { "revolution_angle_deg", in.revolution_angle_deg },
+    };
+    json pattern = {
+        { "kind",                  kSkillId },
+        { "is_compound",           true },
+        { "subfeature_count",      1 },
+        { "sketch_vertex_count",   static_cast<int>(in.profile_polyline.size()) },
+        { "revolution_angle_deg",  in.revolution_angle_deg },
+        { "derived_volume_mm3",    vol },
+        { "max_radius_mm",         maxRofProfile(in.profile_polyline) },
+        { "axial_span_mm",         zRangeOfProfile(in.profile_polyline) },
+    };
+    ToolingMeta tooling;
+    tooling.tool_type         = "lathe;revolve_cut";
+    tooling.tool_dia_mm       = 0.0;
+    tooling.tool_length_mm    = zRangeOfProfile(in.profile_polyline) + 5.0;
+    tooling.tool_material     = "carbide";
+    tooling.flute_count       = 1;
+    tooling.cutting_speed_sfm = 350.0;
+    tooling.feed_per_tooth_mm = 0.04;
+    tooling.stock_removed_mm3 = vol;
+    tooling.est_cycle_time_s  = std::max(5.0,
+        in.profile_polyline.size() * 0.3 +
+        in.revolution_angle_deg / 50.0);
+
+    FeatureSignature sig{ kSkillId, params, pattern, tooling };
+
+    auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    wpNew->addFeature(sig);
+
+    spdlog::debug("skill::revolve_cut applied: n={} angle={} vol={} faces {}->{}",
+                  in.profile_polyline.size(),
+                  in.revolution_angle_deg, vol,
+                  wp.faceCount(), wpNew->faceCount());
+
+    return SkillOutput{ wpNew, sig };
+}
+
+// ── Recognition ──────────────────────────────────────────────────────────
+
+std::vector<RecognizedFeature> recognize(const Workpiece& wp)
+{
+    std::vector<RecognizedFeature> out;
+
+    for (const auto& f : wp.features()) {
+        if (f.skill_id != kSkillId) continue;
+        RecognizedFeature r;
+        r.skill_id         = kSkillId;
+        r.recovered_params = f.params;
+        r.confidence       = 1.0;
+        r.matched_geometry = { { "source", "feature_history" } };
+        out.push_back(r);
+    }
+    if (!out.empty()) return out;
+
+    int innerCylCount = 0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFaceCylinder(i)) continue;
+        ++innerCylCount;
+    }
+    if (innerCylCount < 1) return out;
+
+    json recovered = {
+        { "profile_polyline",     json::array() },
+        { "axis_origin",          { 0.0, 0.0, 0.0 } },
+        { "axis_dir",             { 0.0, 0.0, 1.0 } },
+        { "revolution_angle_deg", 360.0 },
+    };
+    json matched = {
+        { "inner_cyl_face_count", innerCylCount },
+    };
+    const double conf = std::clamp(0.35 + 0.05 * innerCylCount, 0.35, 0.75);
+    out.push_back(RecognizedFeature{ kSkillId, recovered, conf, matched });
+    return out;
+}
+
+}  // namespace koocadcam::skill::revolve_cut

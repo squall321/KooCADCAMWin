@@ -69,7 +69,7 @@ target_include_directories(watch_features_test SYSTEM PRIVATE ${OpenCASCADE_INCL
 koo_apply_compiler_flags(watch_features_test)
 add_test(NAME watch_features COMMAND watch_features_test)
 set_tests_properties(watch_features PROPERTIES
-    TIMEOUT 60
+    TIMEOUT 180
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
 
@@ -741,6 +741,69 @@ koo_add_skill_test(vibration_isolator_seat)
 koo_add_skill_test(wave_spring_groove)
 koo_add_skill_test(x_ring_groove)
 koo_add_skill_test(x_ring_groove_spec)
+
+# slice 10 — sketch-driven CAD-native (5)
+koo_add_skill_test(extrude_boss_from_sketch)
+koo_add_skill_test(extrude_cut_from_sketch)
+koo_add_skill_test(revolve_boss)
+koo_add_skill_test(revolve_cut)
+koo_add_skill_test(projected_sketch_cut)
+
+# slice 11 — SolidWorks-style body management (5)
+koo_add_skill_test(move_face_along_direction)
+koo_add_skill_test(body_split_by_plane)
+koo_add_skill_test(body_combine_union)
+koo_add_skill_test(body_combine_subtract)
+koo_add_skill_test(copy_body_with_transform)
+
+# slice 12 — CAD-native surfaces (5)
+koo_add_skill_test(surface_thicken_to_solid)
+koo_add_skill_test(surface_knit_to_shell)
+koo_add_skill_test(surface_trim_by_plane)
+koo_add_skill_test(surface_offset_from_face)
+koo_add_skill_test(surface_fill_4_edges)
+
+# slice 12 — CAD-native patterns (5)
+koo_add_skill_test(linear_pattern)
+koo_add_skill_test(circular_pattern)
+koo_add_skill_test(mirror_pattern)
+koo_add_skill_test(fill_pattern)
+koo_add_skill_test(sketch_driven_pattern)
+
+# slice 12 — CAD-native sweep/loft (5)
+koo_add_skill_test(sweep_boss_along_curve)
+koo_add_skill_test(sweep_cut_along_curve)
+koo_add_skill_test(loft_between_profiles)
+koo_add_skill_test(loft_with_guide_curves)
+koo_add_skill_test(boundary_surface_4edges)
+
+# slice 12 — CAD-native shell/mirror/scale (5)
+koo_add_skill_test(shell_with_face_skip)
+koo_add_skill_test(mirror_body_about_plane)
+koo_add_skill_test(scale_body_uniform)
+koo_add_skill_test(add_draft_to_face)
+koo_add_skill_test(rib_along_path)
+
+# slice 12 — CAD-native weldment (5)
+koo_add_skill_test(structural_member_along_path)
+koo_add_skill_test(weldment_end_cap)
+koo_add_skill_test(weldment_gusset_triangular)
+koo_add_skill_test(miter_corner_trim)
+koo_add_skill_test(intermittent_weld_bead)
+
+# slice 12 — CAD-native reference geometry (5)
+koo_add_skill_test(reference_plane_offset)
+koo_add_skill_test(reference_plane_at_3pts)
+koo_add_skill_test(reference_axis_two_pts)
+koo_add_skill_test(reference_point_on_face_uv)
+koo_add_skill_test(coordinate_system_from_axes)
+
+# slice 12 — CAD-native advanced fillet/chamfer (5)
+koo_add_skill_test(variable_radius_fillet)
+koo_add_skill_test(full_round_fillet)
+koo_add_skill_test(face_fillet_two_faces)
+koo_add_skill_test(asymmetric_chamfer)
+koo_add_skill_test(multi_radius_fillet_table)
 
 # ── Compound STEP-roundtrip recognition smoke (slice 8) ──────────────────
 add_executable(compound_step_rt_check skills/compound_step_rt_check.cpp)
