@@ -94,17 +94,28 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const gp_Pnt axisLoc = in.case_axis.Location();
     const gp_Dir axisDir = in.case_axis.Direction();
     // Cut goes UPWARD from bottom into the case body.
-    const gp_Dir cutDir(axisDir.X(), axisDir.Y(), axisDir.Z());
     const gp_Pnt threadStart(axisLoc.X(), axisLoc.Y(), bottomZ - kOverhang);
-    const gp_Ax2 threadAx(threadStart, cutDir);
+    const gp_Ax2 threadAx(threadStart, axisDir);
 
     // ── Sub-feature 1: cylindrical thread relief ─────────────────────────
     const double rCaseback = in.caseback_dia_mm / 2.0;
     const TopoDS_Shape threadCyl = pr::cylinder(
         threadAx, rCaseback, in.thread_depth_mm + kOverhang);
 
+    // First cut: remove the thread relief cylinder from the workpiece as its
+    // OWN Boolean op (separate from the spanner notches).  Packing the large
+    // thread cylinder and 6 small overlapping notch boxes into a single
+    // compound caused OCCT's BRepAlgoAPI_Cut to silently produce a no-op
+    // (the notches sit ON the cylinder's surface, triggering self-intersection
+    // diagnostics in the compound's fusion preprocessor).  Splitting in two
+    // is faster AND correct.
+    const TopoDS_Shape afterThread = pr::cut(wp.shape(), threadCyl);
+
     // ── Sub-features 2..N+1: spanner notches around perimeter ────────────
-    // Each notch = a small box at the outer rim of the caseback bore.
+    // Each notch = a small box that straddles the rim (rCaseback - 0.1 mm)
+    // and extends radially OUTWARD into the rim material, giving a
+    // case-opener tool radial leverage.
+    //
     // gp_Ax2(P, V, Vx) — V is local Z, Vx is local X.  pr::box(ax, dx, dy, dz)
     // makes DX along Vx, DY along V×Vx, DZ along V.  With V = +Z, Vx = +X:
     //   DX → +X = radial,  DY → +Y = tangential,  DZ → +Z = axial.
@@ -125,9 +136,8 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         in.notch_width_mm,                  // DY = tangential
         in.notch_depth_mm + kOverhang);     // DZ = axial into body
 
-    std::vector<TopoDS_Shape> cutters;
-    cutters.reserve(static_cast<size_t>(in.notch_count) + 1);
-    cutters.push_back(threadCyl);
+    std::vector<TopoDS_Shape> notchCutters;
+    notchCutters.reserve(static_cast<size_t>(in.notch_count));
     const double stepDeg = 360.0 / in.notch_count;
     for (int i = 0; i < in.notch_count; ++i) {
         const double aRad = i * stepDeg * M_PI / 180.0;
@@ -136,10 +146,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         BRepBuilderAPI_Transform xform(seedNotch, rot, true);
         if (!xform.IsDone())
             throw SkillError("screw_down_caseback_6_notches: notch transform failed");
-        cutters.push_back(xform.Shape());
+        notchCutters.push_back(xform.Shape());
     }
 
-    const TopoDS_Shape newShape = pr::cutMany(wp.shape(), cutters);
+    // Second cut: remove all 6 notches from the post-thread workpiece.
+    // 60° apart at radius ≈15 mm → chord ≈15 mm between centres vs width
+    // 1.5 mm — comfortably non-overlapping, safe for compound cut.
+    const TopoDS_Shape newShape = pr::cutMany(afterThread, notchCutters);
 
     const double threadVol = M_PI * rCaseback * rCaseback * in.thread_depth_mm;
     const double notchVol  = in.notch_radial_extent_mm *

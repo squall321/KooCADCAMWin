@@ -862,6 +862,41 @@ koo_add_skill_test(zif_connector_window_compound)
 koo_add_skill_test(antenna_keepout_zone_polygon)
 koo_add_skill_test(speaker_grille_micro_array)
 
+# slice 14 — optical/camera mounts (5)
+koo_add_skill_test(c_mount_lens_thread)
+koo_add_skill_test(optical_axis_alignment_pin_pair)
+koo_add_skill_test(iris_aperture_slot_array)
+koo_add_skill_test(kinematic_mount_3point)
+koo_add_skill_test(beam_dump_aperture_blackbody)
+
+# slice 14 — keyway families (5)
+koo_add_skill_test(keyway_din6885_parallel_shaft)
+koo_add_skill_test(keyway_din6885_parallel_hub)
+koo_add_skill_test(keyway_din6886_taper_shaft)
+koo_add_skill_test(keyway_woodruff_arc)
+koo_add_skill_test(keyway_internal_din6885_through)
+
+# slice 14 — sheet metal advanced (5)
+koo_add_skill_test(k_factor_unfold)
+koo_add_skill_test(jog_bend)
+koo_add_skill_test(gusset_form)
+koo_add_skill_test(hem_open_closed)
+koo_add_skill_test(lance_form)
+
+# slice 14 — retaining rings + washers (5)
+koo_add_skill_test(ext_retaining_ring_groove_din471)
+koo_add_skill_test(int_retaining_ring_groove_din472)
+koo_add_skill_test(e_clip_groove_din6799)
+koo_add_skill_test(spring_lock_washer_seat_din127)
+koo_add_skill_test(retaining_ring_din5417_spiral)
+
+# slice 14 — EV battery module (5)
+koo_add_skill_test(busbar_terminal_post_compound)
+koo_add_skill_test(cell_clamp_slot_array)
+koo_add_skill_test(cooling_plate_channel_serpentine)
+koo_add_skill_test(vent_burst_disc_pocket)
+koo_add_skill_test(pcb_lock_tab_compound)
+
 # ── Compound STEP-roundtrip recognition smoke (slice 8) ──────────────────
 add_executable(compound_step_rt_check skills/compound_step_rt_check.cpp)
 target_link_libraries(compound_step_rt_check PRIVATE

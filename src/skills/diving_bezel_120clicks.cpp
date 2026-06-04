@@ -104,33 +104,47 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     const gp_Pnt axisLoc = in.case_axis.Location();
     const gp_Dir axisDir = in.case_axis.Direction();
-    // Bezel cut goes DOWN from topZ.
-    const gp_Pnt bezelStart(axisLoc.X(), axisLoc.Y(), topZ + kOverhang);
-    const gp_Ax2 bezelAx(bezelStart, gp_Dir(-axisDir.X(), -axisDir.Y(), -axisDir.Z()));
+    // Bezel cut extends DOWN from topZ through height_mm of material.  We
+    // anchor each cutter at its BOTTOM Z and build along +axisDir so that
+    // BRepPrimAPI_MakeCylinder builds upward through the top.  Anchoring at
+    // the bottom (rather than at topZ + overhang with a flipped axis)
+    // avoids subtle gp_Ax2 inversion artifacts that, combined with
+    // BRepAlgoAPI_Cut against a packed compound of 121 shapes, were
+    // producing degenerate results.
+    const double bezelBottomZ = topZ - in.height_mm;
+    const gp_Pnt bezelStart(axisLoc.X(), axisLoc.Y(), bezelBottomZ);
+    const gp_Ax2 bezelAx(bezelStart, axisDir);
 
     // ── Sub-feature 1: annular bezel ring ────────────────────────────────
     const TopoDS_Shape bezelRing = pr::annularRing(
         bezelAx, rOuter, rInner, in.height_mm + kOverhang);
 
+    // First cut: remove the annular bezel ring from the workpiece.  Done as
+    // its OWN Boolean op (separate from the click notches) — this is more
+    // robust than packing 121 cutters into a single compound, which OCCT
+    // sometimes degenerates on with overlapping coaxial shapes.
+    const TopoDS_Shape afterBezel = pr::cut(wp.shape(), bezelRing);
+
     // ── Sub-features 2..N+1: click notches around outer rim ──────────────
     // Seed notch at angle = 0 (positive X-axis from case centre), placed at
-    // the outer edge of the bezel rim, going DOWN through the bezel.
+    // the outer edge of the bezel rim, going DOWN through the TOP of the
+    // case by notch_depth_mm.  Like the bezel, we anchor at the cutter
+    // bottom (topZ − notch_depth) and build upward.
     const double rNotchCentre = rOuter;   // notch tangent to outer rim
+    const double notchBottomZ = topZ - in.notch_depth_mm;
     const gp_Pnt notchSeedStart(
         axisLoc.X() + rNotchCentre,
         axisLoc.Y(),
-        topZ + kOverhang);
-    const gp_Ax2 notchSeedAx(notchSeedStart,
-                             gp_Dir(-axisDir.X(), -axisDir.Y(), -axisDir.Z()));
+        notchBottomZ);
+    const gp_Ax2 notchSeedAx(notchSeedStart, axisDir);
     const TopoDS_Shape notchSeed = pr::cylinder(
         notchSeedAx, in.notch_dia_mm / 2.0,
         in.notch_depth_mm + kOverhang);
 
     const gp_Ax1 rotAxis(axisLoc, axisDir);
 
-    std::vector<TopoDS_Shape> cutters;
-    cutters.reserve(static_cast<size_t>(in.click_count) + 1);
-    cutters.push_back(bezelRing);
+    std::vector<TopoDS_Shape> notchCutters;
+    notchCutters.reserve(static_cast<size_t>(in.click_count));
     const double stepDeg = 360.0 / in.click_count;
     for (int i = 0; i < in.click_count; ++i) {
         const double aRad = i * stepDeg * M_PI / 180.0;
@@ -139,10 +153,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         BRepBuilderAPI_Transform xform(notchSeed, rot, true);
         if (!xform.IsDone())
             throw SkillError("diving_bezel_120clicks: notch transform failed");
-        cutters.push_back(xform.Shape());
+        notchCutters.push_back(xform.Shape());
     }
 
-    const TopoDS_Shape newShape = pr::cutMany(wp.shape(), cutters);
+    // Second cut: remove all 120 click notches at once.  These are small,
+    // non-overlapping (3° apart at radius 19 mm — chord ≈ 1.0 mm vs notch
+    // Ø 0.6 mm), so a single compound cut is safe and fast.
+    const TopoDS_Shape newShape = pr::cutMany(afterBezel, notchCutters);
 
     // ── Volumes for signature / tooling ──────────────────────────────────
     const double bezelVol = M_PI * (rOuter * rOuter - rInner * rInner) * in.height_mm;

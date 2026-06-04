@@ -764,6 +764,36 @@ add_library(koo_skills STATIC
     pcb_standoff_boss_metric.cpp
     zif_connector_window_compound.cpp
     speaker_grille_micro_array.cpp
+    # slice 14 — retaining rings + washers (5)
+    ext_retaining_ring_groove_din471.cpp
+    int_retaining_ring_groove_din472.cpp
+    e_clip_groove_din6799.cpp
+    spring_lock_washer_seat_din127.cpp
+    retaining_ring_din5417_spiral.cpp
+    # slice 14 — optical/camera mounts (5)
+    c_mount_lens_thread.cpp
+    optical_axis_alignment_pin_pair.cpp
+    iris_aperture_slot_array.cpp
+    kinematic_mount_3point.cpp
+    beam_dump_aperture_blackbody.cpp
+    # slice 14 — keyway families (5)
+    keyway_din6885_parallel_shaft.cpp
+    keyway_din6885_parallel_hub.cpp
+    keyway_din6886_taper_shaft.cpp
+    keyway_woodruff_arc.cpp
+    keyway_internal_din6885_through.cpp
+    # slice 14 — sheet metal advanced (5)
+    k_factor_unfold.cpp
+    jog_bend.cpp
+    gusset_form.cpp
+    hem_open_closed.cpp
+    lance_form.cpp
+    # slice 14 — EV battery module (5)
+    busbar_terminal_post_compound.cpp
+    cell_clamp_slot_array.cpp
+    cooling_plate_channel_serpentine.cpp
+    vent_burst_disc_pocket.cpp
+    pcb_lock_tab_compound.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)

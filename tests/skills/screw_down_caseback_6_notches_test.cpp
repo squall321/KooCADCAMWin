@@ -43,7 +43,7 @@ skill::screw_down_caseback_6_notches::Input goodInput() {
 }  // namespace
 
 // ─── 1. Apply removes thread cylinder + 6 notch volume ────────────────────
-TEST(SkillScrewDownCaseback, DISABLED_ApplyRemovesThreadAndNotches)
+TEST(SkillScrewDownCaseback, ApplyRemovesThreadAndNotches)
 {
     auto stock = skill::createCylindricalStock(40.0, 8.0);
 

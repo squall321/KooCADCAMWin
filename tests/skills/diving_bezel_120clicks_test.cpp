@@ -42,7 +42,7 @@ skill::diving_bezel_120clicks::Input goodInput() {
 }  // namespace
 
 // ─── 1. Apply removes annular bezel volume + 120 notch volume ────────────
-TEST(SkillDivingBezel, DISABLED_ApplyRemovesAnnularPlusNotchVolume)
+TEST(SkillDivingBezel, ApplyRemovesAnnularPlusNotchVolume)
 {
     auto stock = skill::createCylindricalStock(40.0, 8.0);
 
