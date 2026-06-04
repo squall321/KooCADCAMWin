@@ -155,7 +155,16 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     }
 
     const double volBefore = volumeOf(wp.shape());
-    TopoDS_Shape newShape = pr::cutMany(wp.shape(), cutters);
+    // NOTE: pr::cutMany with overlapping/interpenetrating tool solids on a box
+    // base silently returns the input unchanged in OCCT 8.0 (the bore cylinder
+    // contains the cosmetic thread band, and the flange pad overlaps both at
+    // the top).  We sequentialise the cuts to avoid the compound-tool failure
+    // mode: ~9 cm^3 are removed per call (pilot bore dominates).
+    TopoDS_Shape newShape = wp.shape();
+    for (const auto& tool : cutters) {
+        if (tool.IsNull()) continue;
+        newShape = pr::cut(newShape, tool);
+    }
     if (newShape.IsNull()) {
         throw SkillError("c_mount_lens_thread: cutMany returned null");
     }

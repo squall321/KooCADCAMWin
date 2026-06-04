@@ -897,6 +897,41 @@ koo_add_skill_test(cooling_plate_channel_serpentine)
 koo_add_skill_test(vent_burst_disc_pocket)
 koo_add_skill_test(pcb_lock_tab_compound)
 
+# slice 15 — heat sink + electronics (5)
+koo_add_skill_test(heatsink_fin_pin_array_compound)
+koo_add_skill_test(heatsink_blade_fin_extruded)
+koo_add_skill_test(thermal_pad_recess_with_to220)
+koo_add_skill_test(screw_terminal_strip_array)
+koo_add_skill_test(lcd_bezel_window_compound)
+
+# slice 15 — automotive engine (5)
+koo_add_skill_test(valve_seat_insert_compound)
+koo_add_skill_test(piston_oil_gallery_compound)
+koo_add_skill_test(crankshaft_journal_with_fillet)
+koo_add_skill_test(camshaft_lobe_compound)
+koo_add_skill_test(exhaust_manifold_port_compound)
+
+# slice 15 — medical/orthopedic implant (5)
+koo_add_skill_test(bone_screw_pilot_compound)
+koo_add_skill_test(cannulated_screw_lumen)
+koo_add_skill_test(locking_compression_plate_hole)
+koo_add_skill_test(hex_drive_recess_implant)
+koo_add_skill_test(dental_implant_emergence_taper)
+
+# slice 15 — aerospace fasteners (5)
+koo_add_skill_test(rivet_dimple_compound)
+koo_add_skill_test(lockbolt_pin_hole_compound)
+koo_add_skill_test(hi_lok_install_hole)
+koo_add_skill_test(nas_bolt_pattern_circular)
+koo_add_skill_test(panel_fastener_dzus_pocket)
+
+# slice 15 — HVAC/fluid (5)
+koo_add_skill_test(radiator_finger_array)
+koo_add_skill_test(hose_barb_compound)
+koo_add_skill_test(p_trap_threaded_port)
+koo_add_skill_test(pipe_clamp_saddle_compound)
+koo_add_skill_test(manifold_block_compound)
+
 # ── Compound STEP-roundtrip recognition smoke (slice 8) ──────────────────
 add_executable(compound_step_rt_check skills/compound_step_rt_check.cpp)
 target_link_libraries(compound_step_rt_check PRIVATE

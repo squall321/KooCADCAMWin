@@ -40,7 +40,7 @@ int findTopFace(const skill::Workpiece& wp)
 }  // namespace
 
 // ─── 1. apply removes a measurable volume ────────────────────────────────
-TEST(SkillCMountLensThread, DISABLED_ApplyRemovesVolume)
+TEST(SkillCMountLensThread, ApplyRemovesVolume)
 {
     auto stock = skill::createCuboidStock(60.0, 60.0, 25.0);
     const int topId = findTopFace(*stock);

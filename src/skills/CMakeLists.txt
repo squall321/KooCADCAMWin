@@ -794,6 +794,36 @@ add_library(koo_skills STATIC
     cooling_plate_channel_serpentine.cpp
     vent_burst_disc_pocket.cpp
     pcb_lock_tab_compound.cpp
+    # slice 15 — automotive engine (5)
+    valve_seat_insert_compound.cpp
+    piston_oil_gallery_compound.cpp
+    crankshaft_journal_with_fillet.cpp
+    camshaft_lobe_compound.cpp
+    exhaust_manifold_port_compound.cpp
+    # slice 15 — heat sink + electronics (5)
+    heatsink_fin_pin_array_compound.cpp
+    heatsink_blade_fin_extruded.cpp
+    thermal_pad_recess_with_to220.cpp
+    screw_terminal_strip_array.cpp
+    lcd_bezel_window_compound.cpp
+    # slice 15 — medical/orthopedic implant (5)
+    bone_screw_pilot_compound.cpp
+    cannulated_screw_lumen.cpp
+    locking_compression_plate_hole.cpp
+    hex_drive_recess_implant.cpp
+    dental_implant_emergence_taper.cpp
+    # slice 15 — aerospace fasteners (5)
+    rivet_dimple_compound.cpp
+    lockbolt_pin_hole_compound.cpp
+    hi_lok_install_hole.cpp
+    nas_bolt_pattern_circular.cpp
+    panel_fastener_dzus_pocket.cpp
+    # slice 15 — HVAC/fluid (5)
+    radiator_finger_array.cpp
+    hose_barb_compound.cpp
+    p_trap_threaded_port.cpp
+    pipe_clamp_saddle_compound.cpp
+    manifold_block_compound.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)

@@ -48,8 +48,7 @@ namespace {
 
 struct AS568Override { const char* dash; double cs_mm; };
 
-constexpr std::array<AS568Override, 2> kAS568Overrides {{
-    { "-325", 5.33 },  // central uses 5.34; this skill historically rounds to 5.33
+constexpr std::array<AS568Override, 1> kAS568Overrides {{
     { "-908", 1.78 },  // central uses 1.27; this skill treats -908 as boss-seal 1.78 mm
 }};
 

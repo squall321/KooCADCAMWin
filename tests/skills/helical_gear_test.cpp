@@ -38,7 +38,7 @@ skill::helical_gear::Input goodInput()
 
 }  // namespace
 
-TEST(SkillHelicalGear, DISABLED_ApplyRemovesRealGeometry)
+TEST(SkillHelicalGear, ApplyRemovesRealGeometry)
 {
     auto stock = skill::createCylindricalStock(46.0, 10.0);
     const double vStock = volumeOf(stock->shape());

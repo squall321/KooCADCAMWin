@@ -40,7 +40,10 @@ struct Input
     double  pressure_angle_deg  = 20.0;
     double  helix_angle_deg     = 15.0;
     double  blank_outer_dia_mm  = 0.0;   // 0 → auto = 2·r_tip
-    int     axial_slice_count   = 6;     // # of stacked slabs for helix approx
+    int     axial_slice_count   = 2;     // # of stacked slabs for helix approx;
+                                         // default 2 = "fast preview" mode
+                                         // (z×slabs cutter Booleans dominate cost;
+                                         // raise to 4–6 for production-grade twist).
 };
 
 SkillOutput apply   (const Workpiece& wp, const Input& in);
