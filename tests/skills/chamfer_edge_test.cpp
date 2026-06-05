@@ -111,6 +111,46 @@ TEST(SkillChamferEdge, RecognizeFindsChamferFaces)
     EXPECT_TRUE(clusterFound);
 }
 
+// ─── 6. Recognize MEASURES the real chamfer size (not a hardcoded guess) ──
+//
+// Apply a known chamfer leg, then recover it geometrically and assert the
+// recovered chamfer_size_mm matches the authored size to a tight tolerance.
+// This guards the bevel-width measurement (c = (area/L)/√2) against
+// regressing to the old "assume 0.5 mm / L≈10 mm" sentinel.
+TEST(SkillChamferEdge, RecognizeMeasuresChamferSize)
+{
+    for (double authored : { 0.8, 1.5, 2.5 }) {
+        auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
+        skill::chamfer_edge::Input in;
+        in.edge_selector   = skill::chamfer_edge::EdgesAtZBand{ 10.0, 1e-3 };
+        in.chamfer_size_mm = authored;
+        in.angle_deg       = 45.0;
+        auto out = skill::chamfer_edge::apply(*stock, in);
+
+        // Geometric recognition (chamfer_edge::recognize ignores feature
+        // history, so this measures the shape, not the stored signature).
+        auto candidates = skill::chamfer_edge::recognize(*out.workpiece);
+        ASSERT_FALSE(candidates.empty());
+
+        // EVERY rim-cluster candidate (≥ 2 bevel faces) must geometrically
+        // recover the authored leg.  This is strict on purpose: if the
+        // recognizer regresses and mis-classifies a large side wall as a
+        // chamfer, that bogus cluster's measured size will not match and the
+        // test fails — guarding both the measurement AND recognizer precision.
+        int rimClusters = 0;
+        for (const auto& c : candidates) {
+            if (!c.matched_geometry.contains("bevel_face_ids") ||
+                c.matched_geometry["bevel_face_ids"].size() < 2) continue;
+            ++rimClusters;
+            const double s = c.recovered_params.value("chamfer_size_mm", -1.0);
+            EXPECT_NEAR(s, authored, 0.30)
+                << "measured chamfer size " << s
+                << " must match authored " << authored;
+        }
+        EXPECT_GE(rimClusters, 1) << "no rim-cluster chamfer candidate";
+    }
+}
+
 // ─── 5. Round-trip: re-apply produces same face count + volume ───────────
 TEST(SkillChamferEdge, RoundTripFaceCountStable)
 {

@@ -7,7 +7,9 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
+#include <GProp_GProps.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
 #include <TopExp.hxx>
@@ -306,9 +308,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             for (size_t b = a + 1; b < neighborPlanarFaces.size() && !isChamfer; ++b) {
                 const int na = neighborPlanarFaces[a];
                 const int nb = neighborPlanarFaces[b];
-                // Skip if both neighbours are smaller than us — chamfer face is
-                // expected to be the smaller one in its locality.
-                if (meta[na].area < meta[i].area && meta[nb].area < meta[i].area)
+                // A genuine chamfer/bevel face is the SMALL strip that bridges
+                // two LARGER faces.  Require BOTH bracketing faces to be larger
+                // than the candidate; this rejects the false positive where a
+                // large side wall is "bracketed" by a thin bevel strip plus a
+                // big face (the strip is smaller than the wall, so the wall
+                // would otherwise pass the angle-bisector test).
+                if (meta[na].area <= meta[i].area || meta[nb].area <= meta[i].area)
                     continue;
                 const double angAB = angleBetweenDir(meta[na].normal, meta[nb].normal);
                 if (angAB < 20.0 || angAB > 160.0) continue;  // not a real corner
@@ -343,19 +349,33 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             }
         }
 
-        // Estimate chamfer size from face area: for a face with one straight
-        // edge of length L and a chamfer size c at 45°, area ≈ c × L × √2 .
-        // We can't separate c and L without more analysis; we report area
-        // diagnostic and assume the user-supplied chamfer_size as 0.5 mm
-        // typical.  Recovered_size_mm is a coarse estimate.
-        double estSize = 0.5;  // sentinel
-        // Use the smallest cluster face area to estimate.
-        double smallest = 1e30;
-        for (int fid : cluster) smallest = std::min(smallest, wp.faceArea(fid));
-        if (smallest > 0 && smallest < 1e29) {
-            // Assume L ≈ side of stock ≈ 10 mm typical; c ≈ smallest / (10 * √2).
-            estSize = std::clamp(smallest / (10.0 * std::sqrt(2.0)), 0.05, 5.0);
+        // MEASURE the chamfer size from the bevel-face geometry (no hardcoded
+        // edge-length guess).  A 45° chamfer of leg c on an edge of length L
+        // produces a planar bevel strip of area ≈ L · w, where w = c·√2 is the
+        // strip width (the bevel hypotenuse).  Measure w directly as
+        // area / L with L = the bevel face's longest edge (the run along the
+        // part edge), then c = w / √2.  Average over the cluster for robustness.
+        double sizeSum = 0.0;
+        int    sizeN   = 0;
+        for (int fid : cluster) {
+            const TopoDS_Face& bf = wp.face(fid);
+            const double area = wp.faceArea(fid);
+            double maxEdgeLen = 0.0;
+            for (TopExp_Explorer ee(bf, TopAbs_EDGE); ee.More(); ee.Next()) {
+                GProp_GProps lp;
+                BRepGProp::LinearProperties(ee.Current(), lp);
+                maxEdgeLen = std::max(maxEdgeLen, lp.Mass());
+            }
+            if (area > 1e-9 && maxEdgeLen > 1e-6) {
+                const double w = area / maxEdgeLen;        // bevel strip width
+                const double c = w / std::sqrt(2.0);       // 45° chamfer leg
+                if (c > 1e-3 && c < 50.0) { sizeSum += c; ++sizeN; }
+            }
         }
+        // Fallback to a nominal 0.5 mm only if the geometry was unmeasurable.
+        const double estSize = (sizeN > 0)
+            ? std::clamp(sizeSum / static_cast<double>(sizeN), 0.05, 50.0)
+            : 0.5;
 
         double conf = 0.55;
         if (cluster.size() >= 2) conf = 0.70;
