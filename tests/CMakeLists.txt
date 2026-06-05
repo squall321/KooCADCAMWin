@@ -1014,6 +1014,48 @@ koo_add_skill_test(date_window_aperture_compound)
 koo_add_skill_test(power_reserve_indicator_slot)
 koo_add_skill_test(screw_down_crown_tube_compound)
 
+# slice 17 — railway / rolling stock (5)
+koo_add_skill_test(rail_clip_pandrol_seat)
+koo_add_skill_test(axle_box_bearing_housing)
+koo_add_skill_test(coupler_knuckle_pin_bore)
+koo_add_skill_test(brake_disc_hub_bolt_circle)
+koo_add_skill_test(pantograph_carbon_strip_groove)
+
+# slice 17 — robotics / automation (5)
+koo_add_skill_test(harmonic_drive_flange_bore)
+koo_add_skill_test(linear_rail_carriage_pocket)
+koo_add_skill_test(servo_mount_face_nema)
+koo_add_skill_test(cable_carrier_anchor_bracket)
+koo_add_skill_test(gripper_finger_dovetail_mount)
+
+# slice 17 — aerospace structures (5)
+koo_add_skill_test(wing_rib_lightening_hole)
+koo_add_skill_test(stringer_run_out_cutout)
+koo_add_skill_test(fastener_countersink_array_nas)
+koo_add_skill_test(access_panel_cutout_radiused)
+koo_add_skill_test(fuel_tank_boss_threaded)
+
+# slice 17 — furniture / cabinetry (5)
+koo_add_skill_test(euro_hinge_cup_35mm)
+koo_add_skill_test(cam_lock_minifix_bore)
+koo_add_skill_test(shelf_pin_hole_row_32mm)
+koo_add_skill_test(drawer_slide_pilot_array)
+koo_add_skill_test(dowel_joint_boring_pair)
+
+# slice 17 — bicycle / lightweight frame (5)
+koo_add_skill_test(bb_shell_thread_bsa)
+koo_add_skill_test(headtube_bearing_seat_zs)
+koo_add_skill_test(dropout_thru_axle_12mm)
+koo_add_skill_test(bottle_cage_boss_m5)
+koo_add_skill_test(internal_cable_port_compound)
+
+# slice 17 — power transmission (5)
+koo_add_skill_test(spur_sprocket_roller_chain)
+koo_add_skill_test(v_belt_pulley_groove)
+koo_add_skill_test(htd_timing_pulley_teeth)
+koo_add_skill_test(flange_coupling_bolt_circle)
+koo_add_skill_test(shaft_collar_clamp_split)
+
 # ── Compound STEP-roundtrip recognition smoke (slice 8) ──────────────────
 add_executable(compound_step_rt_check skills/compound_step_rt_check.cpp)
 target_link_libraries(compound_step_rt_check PRIVATE

@@ -890,6 +890,42 @@ add_library(koo_skills STATIC
     date_window_aperture_compound.cpp
     power_reserve_indicator_slot.cpp
     screw_down_crown_tube_compound.cpp
+    # slice 17 — railway / rolling stock (5)
+    rail_clip_pandrol_seat.cpp
+    axle_box_bearing_housing.cpp
+    coupler_knuckle_pin_bore.cpp
+    brake_disc_hub_bolt_circle.cpp
+    pantograph_carbon_strip_groove.cpp
+    # slice 17 — robotics / automation (5)
+    harmonic_drive_flange_bore.cpp
+    linear_rail_carriage_pocket.cpp
+    servo_mount_face_nema.cpp
+    cable_carrier_anchor_bracket.cpp
+    gripper_finger_dovetail_mount.cpp
+    # slice 17 — aerospace structures (5)
+    wing_rib_lightening_hole.cpp
+    stringer_run_out_cutout.cpp
+    fastener_countersink_array_nas.cpp
+    access_panel_cutout_radiused.cpp
+    fuel_tank_boss_threaded.cpp
+    # slice 17 — furniture / cabinetry (5)
+    euro_hinge_cup_35mm.cpp
+    cam_lock_minifix_bore.cpp
+    shelf_pin_hole_row_32mm.cpp
+    drawer_slide_pilot_array.cpp
+    dowel_joint_boring_pair.cpp
+    # slice 17 — bicycle / lightweight frame (5)
+    bb_shell_thread_bsa.cpp
+    headtube_bearing_seat_zs.cpp
+    dropout_thru_axle_12mm.cpp
+    bottle_cage_boss_m5.cpp
+    internal_cable_port_compound.cpp
+    # slice 17 — power transmission (5)
+    spur_sprocket_roller_chain.cpp
+    v_belt_pulley_groove.cpp
+    htd_timing_pulley_teeth.cpp
+    flange_coupling_bolt_circle.cpp
+    shaft_collar_clamp_split.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)
