@@ -239,6 +239,53 @@ TEST(FrameReframeLoop, ReframeShiftsHolesByPartDelta)
     }
 }
 
+// ─── 4. Compound feature: counterbore seat+pilot recovered by MEASUREMENT ─
+//
+// A counterbore is two coaxial cylinders (a wide shallow seat + a narrow deep
+// pilot).  Synthesize one on the plate, strip metadata via STEP, and assert
+// the recognizer recovers BOTH measured diameters — proving the loop handles
+// compound features, not just single holes.
+TEST(FrameReframeLoop, RecoverCounterboreMeasured)
+{
+    constexpr double kSeatDia = 12.0, kPilotDia = 6.0;
+    constexpr double kCx = 60.0, kCy = 40.0;
+
+    process::ProcessPlan plan;
+    {
+        process::StepInvocation s;
+        s.skill_id = "counterbore";
+        s.params = {
+            { "entry_face",    "top" },
+            { "position_x_mm", kCx },
+            { "position_y_mm", kCy },
+            { "seat_dia_mm",   kSeatDia },
+            { "seat_depth_mm", 4.0 },
+            { "pilot_dia_mm",  kPilotDia },
+            { "pilot_depth_mm", 12.0 },     // through the 12 mm plate
+        };
+        plan.append(s);
+    }
+
+    const TopoDS_Shape s1 = executeOnFreshStock(plan);
+    int feat = -1;
+    skill::Workpiece reim = stepRoundTrip(s1, feat);
+    EXPECT_EQ(feat, 0) << "STEP must strip metadata (geometric recovery only)";
+
+    // Find the counterbore candidate (measured seat/pilot diameters).
+    bool found = false;
+    for (const auto& c : re::analyze(reim)) {
+        if (c.skill_id != "counterbore" || c.confidence < 0.7) continue;
+        const auto& rp = c.recovered_params;
+        EXPECT_NEAR(rp.value("seat_dia_mm",  0.0), kSeatDia,  0.10);
+        EXPECT_NEAR(rp.value("pilot_dia_mm", 0.0), kPilotDia, 0.10);
+        EXPECT_NEAR(rp.value("position_x_mm", 0.0), kCx, 0.20);
+        EXPECT_NEAR(rp.value("position_y_mm", 0.0), kCy, 0.20);
+        found = true;
+        break;
+    }
+    EXPECT_TRUE(found) << "counterbore not recovered geometrically";
+}
+
 // ─── 3. Volume is conserved across the reframe (same 4 holes, moved) ──────
 TEST(FrameReframeLoop, VolumeConservedAcrossReframe)
 {
