@@ -1203,6 +1203,19 @@ koo_apply_compiler_flags(integration_watch_re_roundtrip)
 add_test(NAME integration_watch_re_roundtrip COMMAND integration_watch_re_roundtrip)
 set_tests_properties(integration_watch_re_roundtrip PROPERTIES TIMEOUT 180)
 
+# ── Integration: reframe loop — original vision proven with measured dims ──
+# synth frame -> STEP(strip metadata) -> geometric recognize -> part moves
+# +15mm -> adapt -> re-execute -> STEP -> recognize -> assert holes followed.
+add_executable(integration_frame_reframe
+    integration/frame_reframe_loop_test.cpp)
+target_link_libraries(integration_frame_reframe PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills koo_process koo_re koo_io koo_engine)
+target_include_directories(integration_frame_reframe SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(integration_frame_reframe)
+add_test(NAME integration_frame_reframe COMMAND integration_frame_reframe)
+set_tests_properties(integration_frame_reframe PROPERTIES TIMEOUT 180)
+
 # ── Integration: COMPLETE watch as a 11-step ProcessPlan ──────
 # Slice-1 end-to-end demo — build a full M1.5 watch using ONLY the
 # 28 dispatched skills, then round-trip through (a) the JSON plan
