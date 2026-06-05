@@ -92,11 +92,15 @@ private:
 // ── Heuristic extractor ─────────────────────────────────────────────────
 //
 // Scan a ProcessPlan's step params for fields named like position_x_mm,
-// center_x_mm, offset_x_mm (and the y/z analogues).  For each step that
-// yields a usable (x, y, z) — with missing components treated as 0.0 — find
-// the part whose AABB centre is closest in Euclidean distance.  If the
-// nearest part is within `match_tolerance_mm` (default 5.0 mm), record an
-// edge step → part.
+// center_x_mm, offset_x_mm (and the y/z analogues).  For each step that yields
+// a usable point, record an edge to the part that OWNS it: the smallest-
+// footprint part whose AABB — expanded by `match_tolerance_mm` (default 5.0,
+// acting as a slop margin around the box, NOT a distance-to-centre) — contains
+// the point on every axis the step specifies.  Axes the step omits (e.g. a
+// top-face drill's z) are ignored, so the owning part may sit anywhere along
+// them.  Containment (not nearest-centre) lets one part own many features it
+// physically covers; a zero-size point part degrades to a per-axis |Δ| ≤
+// margin test, preserving the original point-match behaviour.
 //
 // What it CATCHES:
 //   - drill_hole / counterbore / countersink / mill_*_pocket / mill_slot /

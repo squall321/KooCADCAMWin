@@ -239,13 +239,14 @@ TEST(FrameReframeLoop, ReframeShiftsHolesByPartMove)
     for (const auto& h : recovered) recXY.push_back({ h.x, h.y });
     const process::ProcessPlan recoveredPlan = buildFramePlan(recXY);
 
-    // DATUM-DRIVEN ADAPT: the PCB moved +15mm X.  reframePlanForMoves finds
-    // the holes that depend on it (match tolerance 50mm anchors all 4 to the
-    // PCB centre) and shifts them by the part delta.
+    // DATUM-DRIVEN ADAPT: the PCB moved +15mm X.  The PCB's AABB CONTAINS all
+    // four mounting holes, so a tight 1mm margin anchors every hole to it (no
+    // need to inflate the tolerance to reach a far-off part centre) and
+    // reframePlanForMoves shifts them by the part delta.
     const parts::PartsLayout before = pcbLayout(60.0);
     const parts::PartsLayout after  = pcbLayout(60.0 + kDeltaX);
     const process::ProcessPlan adapted =
-        parts::reframePlanForMoves(recoveredPlan, before, after, 50.0);
+        parts::reframePlanForMoves(recoveredPlan, before, after, 1.0);
 
     // RE-EXECUTE on fresh stock, then verify by measuring the new STEP.
     const TopoDS_Shape s2 = executeOnFreshStock(adapted);
@@ -367,13 +368,14 @@ TEST(FrameReframeLoop, WatchCrownReframeMeasured)
 
     // Crown sub-assembly moves +6 mm Y; sensor unchanged.
     process::ProcessPlan recoveredWatch = buildWatch(c0.x, c0.y);
-    // Centre the part AABB on z=0 (the drill steps carry only x,y, so their
-    // implicit z is 0 — a z-offset here would inflate the 3D match distance).
+    // The part sits at its real height in the case (z 0..10).  The drill steps
+    // carry only x,y, so their z axis is ABSENT and correctly ignored by the
+    // containment match — the part's z extent no longer has to be faked to 0.
     auto boxPart = [](const std::string& id, double cx, double cy) {
         parts::Part p; p.id = id;
         p.xMin = cx - 1.0; p.xMax = cx + 1.0;
         p.yMin = cy - 1.0; p.yMax = cy + 1.0;
-        p.zMin = -1.0;     p.zMax = 1.0;
+        p.zMin = 0.0;      p.zMax = 10.0;
         return p;
     };
     parts::PartsLayout before, after;
@@ -383,7 +385,7 @@ TEST(FrameReframeLoop, WatchCrownReframeMeasured)
     after.addPart(boxPart("sensor", -5.0, 15.0));   // stationary
 
     process::ProcessPlan adapted =
-        parts::reframePlanForMoves(recoveredWatch, before, after, 2.0);
+        parts::reframePlanForMoves(recoveredWatch, before, after, 1.0);
 
     int feat2 = -1;
     skill::Workpiece reim2 = stepRoundTrip(execWatch(adapted), feat2);

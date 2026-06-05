@@ -141,24 +141,44 @@ void shiftAxisCoord(json& params, char axis, double delta)
 // (so the step is "position-less" — not amenable to point matching).  If
 // some axes are missing but others are present, the missing ones default
 // to 0.0 (e.g. a 2D pocket on the top face encodes only x + y).
-struct StepPoint { double x, y, z; bool any; };
+// A step's feature point, with per-axis presence.  A top-face drill carries
+// only x,y — its z is ABSENT (hasZ == false), and must not gate matching.
+struct StepPoint {
+    double x = 0.0, y = 0.0, z = 0.0;
+    bool   hasX = false, hasY = false, hasZ = false;
+    bool   any() const { return hasX || hasY || hasZ; }
+};
 StepPoint pointFromParams(const json& params)
 {
-    StepPoint pt{0.0, 0.0, 0.0, false};
-    auto vx = extractAxisCoord(params, 'x');
-    auto vy = extractAxisCoord(params, 'y');
-    auto vz = extractAxisCoord(params, 'z');
-    if (vx) { pt.x = *vx; pt.any = true; }
-    if (vy) { pt.y = *vy; pt.any = true; }
-    if (vz) { pt.z = *vz; pt.any = true; }
+    StepPoint pt;
+    if (auto vx = extractAxisCoord(params, 'x')) { pt.x = *vx; pt.hasX = true; }
+    if (auto vy = extractAxisCoord(params, 'y')) { pt.y = *vy; pt.hasY = true; }
+    if (auto vz = extractAxisCoord(params, 'z')) { pt.z = *vz; pt.hasZ = true; }
     return pt;
 }
 
-double dist2(double ax, double ay, double az,
-             double bx, double by, double bz)
+// The part that OWNS a feature point: the smallest-footprint part whose AABB,
+// expanded by `margin`, contains the point on every axis the step actually
+// specifies.  Containment (not nearest-centre) is the general rule — one PCB
+// part can own all of its mounting holes without its centre sitting on any of
+// them, and a feature's omitted axis (e.g. a top-face drill's z) is ignored so
+// the part may sit anywhere along that axis.  A zero-size (point) part reduces
+// to a per-axis |Δ| ≤ margin test, preserving the old point-match behaviour.
+// Smallest AABB volume wins ties → the most specific (innermost) part owns it.
+const Part* anchorPart(const PartsLayout& layout, const StepPoint& pt, double margin)
 {
-    const double dx = bx - ax, dy = by - ay, dz = bz - az;
-    return dx*dx + dy*dy + dz*dz;
+    const Part* best    = nullptr;
+    double      bestVol = std::numeric_limits<double>::infinity();
+    for (const auto& part : layout.parts()) {
+        if (pt.hasX && (pt.x < part.xMin - margin || pt.x > part.xMax + margin)) continue;
+        if (pt.hasY && (pt.y < part.yMin - margin || pt.y > part.yMax + margin)) continue;
+        if (pt.hasZ && (pt.z < part.zMin - margin || pt.z > part.zMax + margin)) continue;
+        const double vol = (part.sizeX() + 1e-6) *
+                           (part.sizeY() + 1e-6) *
+                           (part.sizeZ() + 1e-6);
+        if (vol < bestVol) { bestVol = vol; best = &part; }
+    }
+    return best;
 }
 
 }  // namespace
@@ -170,25 +190,12 @@ DatumGraph extractHeuristicDependencies(
 {
     DatumGraph graph;
     if (layout.parts().empty()) return graph;
-    const double tol2 = match_tolerance_mm * match_tolerance_mm;
 
     for (size_t i = 0; i < stepParams.size(); ++i) {
         const StepPoint pt = pointFromParams(stepParams[i]);
-        if (!pt.any) continue;  // step has no point-like fields
-
-        // Find the closest part by AABB centre.
-        const Part* best = nullptr;
-        double      bestDist2 = std::numeric_limits<double>::infinity();
-        for (const auto& part : layout.parts()) {
-            const double d2 = dist2(pt.x, pt.y, pt.z,
-                                    part.centerX(), part.centerY(), part.centerZ());
-            if (d2 < bestDist2) {
-                bestDist2 = d2;
-                best      = &part;
-            }
-        }
-        if (best && bestDist2 <= tol2) {
-            graph.addDependency(static_cast<int>(i), best->id);
+        if (!pt.any()) continue;  // step has no point-like fields
+        if (const Part* owner = anchorPart(layout, pt, match_tolerance_mm)) {
+            graph.addDependency(static_cast<int>(i), owner->id);
         }
     }
     return graph;
