@@ -133,13 +133,15 @@ DatumGraph extractHeuristicDependencies(
 // RIGID-BODY pose change between `oldLayout` and `newLayout`:
 //   1. extractHeuristicDependencies(plan, oldLayout) → step↔owner-part edges.
 //   2. For each owned step, transform its feature point through the owner's
-//      pose delta — translation of the AABB centre PLUS rotation of the part's
-//      placement: f' = newCentre + ΔR·(f − oldCentre).  A pure translation
-//      reduces to f' = f + centreDelta; a rotated part rotates its features.
+//      full AFFINE pose delta — translation of the AABB centre, rotation of the
+//      placement, AND per-axis size scaling:
+//          f' = newCentre + R_new · (S ⊙ (R_old⁻¹·(f − oldCentre))),  S = newSize/oldSize
+//      A pure translation reduces to f' = f + centreDelta; a rotated part
+//      rotates its features; a resized part pushes its features' offsets out (or
+//      in) proportionally.
 // A part whose pose is unchanged yields an identity delta, so its features are
 // untouched.  Steps with no owning part are copied verbatim.  The LLM bridge is
 // an alternate adapt strategy that produces the same kind of param edits.
-// (Resize/non-uniform scale is not yet adapted — a future extension.)
 process::ProcessPlan reframePlanForMoves(
     const process::ProcessPlan& plan,
     const PartsLayout&          oldLayout,

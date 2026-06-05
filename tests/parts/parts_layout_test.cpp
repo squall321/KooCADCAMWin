@@ -297,3 +297,31 @@ TEST(PartsLayout, ReframeRotatesDependentSteps)
     EXPECT_NEAR(out.steps()[1].params["position_x_mm"].get<double>(), -5.0, 1e-6);
     EXPECT_NEAR(out.steps()[1].params["position_y_mm"].get<double>(),  0.0, 1e-6);
 }
+
+// ─── 10. reframePlanForMoves scales feature offsets when a part is RESIZED ─
+//
+// A part that grows pushes its anchored features outward proportionally (e.g.
+// a larger battery spreads its mounting holes).  Plate centred at origin grows
+// 2× in X and 1.5× in Y → a hole's offset-from-centre scales per axis.
+TEST(PartsLayout, ReframeScalesDependentStepsOnResize)
+{
+    ProcessPlan plan;
+    {   StepInvocation s; s.skill_id = "drill_hole";
+        s.params = { { "position_x_mm", 10.0 }, { "position_y_mm", 8.0 },
+                     { "diameter_mm", 3.0 } };
+        plan.append(s); }
+
+    PartsLayout before;
+    before.addPart(makeAabbPart("plate", 0.0, 0.0, 0.0, 40.0, 40.0, 4.0));
+
+    // Same centre + orientation, but 2× wider in X and 1.5× in Y.
+    PartsLayout after;
+    after.addPart(makeAabbPart("plate", 0.0, 0.0, 0.0, 80.0, 60.0, 4.0));
+
+    const ProcessPlan out = reframePlanForMoves(plan, before, after, 1.0);
+    ASSERT_EQ(out.size(), 1);
+
+    // Offset (10,8) from centre scales by (2.0, 1.5) -> (20, 12).
+    EXPECT_NEAR(out.steps()[0].params["position_x_mm"].get<double>(), 20.0, 1e-6);
+    EXPECT_NEAR(out.steps()[0].params["position_y_mm"].get<double>(), 12.0, 1e-6);
+}

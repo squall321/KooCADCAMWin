@@ -184,18 +184,22 @@ const Part* anchorPart(const PartsLayout& layout, const StepPoint& pt, double ma
     return best;
 }
 
-// Move a step's feature point through a part's RIGID-BODY pose change.  The
+// Move a step's feature point through a part's full AFFINE pose change.  The
 // part's pose is modelled as { position = AABB centre, orientation = placement
-// rotation }.  The feature point f is re-expressed in the part frame, rotated
-// by the orientation delta, and translated to the new centre:
+// rotation, size = AABB extents }.  The feature point f is expressed in the
+// part's OLD local frame, scaled by the per-axis size ratio, then placed in the
+// NEW frame:
 //
-//     f' = newCentre + ΔR · (f − oldCentre)
+//     f_local = R_old⁻¹ · (f − oldCentre)
+//     f'      = newCentre + R_new · (S ⊙ f_local),   S = newSize / oldSize
 //
-// For a pure translation (placements equal) ΔR is identity and this reduces to
-// f' = f + (newCentre − oldCentre) — i.e. the old translation behaviour.  For
-// a rotated part the anchored features rotate with it.  Axes the step omits
-// (e.g. a top-face drill's z) are seeded from the centre so a 2-D feature
-// rotates within the part's plane and the absent axis is never written back.
+// Special cases fall out cleanly:
+//   - S = 1, R_old = R_new           → pure translation  (f' = f + centreΔ)
+//   - S = 1                          → rigid rotation     (f' = newC + ΔR·(f−oldC))
+//   - R_old = R_new = I              → translate + scale  (offsets grow with the part)
+// Axes the step omits (e.g. a top-face drill's z) are seeded from the centre so
+// a 2-D feature transforms within its plane and the absent axis is never
+// written back.
 void applyPartDeltaToParams(json& params, const Part& oldP, const Part& newP)
 {
     const StepPoint pt = pointFromParams(params);
@@ -203,16 +207,24 @@ void applyPartDeltaToParams(json& params, const Part& oldP, const Part& newP)
 
     const gp_XYZ oldC(oldP.centerX(), oldP.centerY(), oldP.centerZ());
     const gp_XYZ newC(newP.centerX(), newP.centerY(), newP.centerZ());
-    const gp_Quaternion qDelta =
-        newP.placement.GetRotation() * oldP.placement.GetRotation().Inverted();
-    gp_Trsf rot;
-    rot.SetRotation(qDelta);
+
+    gp_Trsf rOldInv; rOldInv.SetRotation(oldP.placement.GetRotation().Inverted());
+    gp_Trsf rNew;    rNew.SetRotation(newP.placement.GetRotation());
+
+    auto ratio = [](double num, double den) {
+        return (std::abs(den) > 1e-9) ? (num / den) : 1.0;
+    };
+    const double sx = ratio(newP.sizeX(), oldP.sizeX());
+    const double sy = ratio(newP.sizeY(), oldP.sizeY());
+    const double sz = ratio(newP.sizeZ(), oldP.sizeZ());
 
     gp_XYZ rel(pt.hasX ? pt.x : oldP.centerX(),
                pt.hasY ? pt.y : oldP.centerY(),
                pt.hasZ ? pt.z : oldP.centerZ());
     rel -= oldC;
-    rot.Transforms(rel);
+    rOldInv.Transforms(rel);                       // into old local axes
+    rel.SetCoord(rel.X() * sx, rel.Y() * sy, rel.Z() * sz);  // scale offsets
+    rNew.Transforms(rel);                          // into new orientation
     const gp_XYZ res = newC + rel;
 
     if (pt.hasX) setAxisCoord(params, 'x', res.X());
