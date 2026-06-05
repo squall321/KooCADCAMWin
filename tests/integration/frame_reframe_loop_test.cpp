@@ -140,6 +140,18 @@ std::vector<RecHole> recoverHoles(const skill::Workpiece& wp, double minConf = 0
     return out;
 }
 
+// Nearest recovered hole to (tx,ty); dia<0 if none within tol.
+RecHole findNear(const std::vector<RecHole>& hs, double tx, double ty, double tol)
+{
+    RecHole best{ 0.0, 0.0, -1.0 };
+    double bestD = tol * tol;
+    for (const auto& h : hs) {
+        const double d = (h.x - tx) * (h.x - tx) + (h.y - ty) * (h.y - ty);
+        if (d <= bestD) { bestD = d; best = h; }
+    }
+    return best;
+}
+
 // Match a measured hole set against an expected XY set within tol (both ways).
 ::testing::AssertionResult holesMatch(const std::vector<RecHole>& got,
                                       const std::vector<XY>& want,
@@ -301,6 +313,89 @@ TEST(FrameReframeLoop, RecoverCounterboreMeasured)
         break;
     }
     EXPECT_TRUE(found) << "counterbore not recovered geometrically";
+}
+
+// ─── 5. The REAL product: watch case crown reframe, measured ──────────────
+//
+// A cylindrical watch case with a centre display pocket, a crown drill (3 o'
+// clock) and a rear sensor drill.  The crown sub-assembly moves +6 mm in Y;
+// the datum graph makes ONLY the crown drill follow while the sensor stays.
+// Every claim is measured from a metadata-stripped STEP round-trip.
+TEST(FrameReframeLoop, WatchCrownReframeMeasured)
+{
+    constexpr double kDia = 44.0, kThk = 10.0;
+    constexpr double kCrownDia = 3.0, kSensorDia = 1.5;
+    const XY kSensor = { -5.0, 15.0 };
+
+    auto buildWatch = [&](double crownX, double crownY) {
+        process::ProcessPlan p;
+        {   process::StepInvocation s; s.skill_id = "mill_circular_pocket";
+            s.params = { { "entry_face", "top" }, { "position_x_mm", 0.0 },
+                         { "position_y_mm", 0.0 }, { "diameter_mm", 30.0 },
+                         { "depth_mm", 6.0 } };
+            p.append(s); }
+        {   process::StepInvocation s; s.skill_id = "drill_hole";
+            s.params = { { "entry_face", "top" }, { "position_x_mm", crownX },
+                         { "position_y_mm", crownY }, { "diameter_mm", kCrownDia },
+                         { "depth_mm", 2.5 }, { "through_hole", false } };
+            p.append(s); }
+        {   process::StepInvocation s; s.skill_id = "drill_hole";
+            s.params = { { "entry_face", "top" }, { "position_x_mm", kSensor.x },
+                         { "position_y_mm", kSensor.y }, { "diameter_mm", kSensorDia },
+                         { "depth_mm", 2.0 }, { "through_hole", false } };
+            p.append(s); }
+        return p;
+    };
+    auto execWatch = [&](const process::ProcessPlan& p) {
+        auto stock = skill::createCylindricalStock(kDia, kThk);
+        auto res = process::Executor::execute(p, stock);
+        EXPECT_TRUE(res.ok()) << (res.errors.empty() ? "" : res.errors.front());
+        return res.workpiece->shape();
+    };
+
+    // Synth original watch -> STEP -> recover crown + sensor (measured).
+    int feat = -1;
+    skill::Workpiece reim = stepRoundTrip(execWatch(buildWatch(19.0, 0.0)), feat);
+    ASSERT_EQ(feat, 0);
+    const std::vector<RecHole> holes = recoverHoles(reim);
+    const RecHole c0 = findNear(holes, 19.0,  0.0, 1.0);
+    const RecHole s0 = findNear(holes, -5.0, 15.0, 1.0);
+    ASSERT_GT(c0.dia, 0.0) << "crown drill not recovered";
+    ASSERT_GT(s0.dia, 0.0) << "sensor drill not recovered";
+    EXPECT_NEAR(c0.dia, kCrownDia,  0.08);   // measured crown diameter
+    EXPECT_NEAR(s0.dia, kSensorDia, 0.08);   // measured sensor diameter
+
+    // Crown sub-assembly moves +6 mm Y; sensor unchanged.
+    process::ProcessPlan recoveredWatch = buildWatch(c0.x, c0.y);
+    // Centre the part AABB on z=0 (the drill steps carry only x,y, so their
+    // implicit z is 0 — a z-offset here would inflate the 3D match distance).
+    auto boxPart = [](const std::string& id, double cx, double cy) {
+        parts::Part p; p.id = id;
+        p.xMin = cx - 1.0; p.xMax = cx + 1.0;
+        p.yMin = cy - 1.0; p.yMax = cy + 1.0;
+        p.zMin = -1.0;     p.zMax = 1.0;
+        return p;
+    };
+    parts::PartsLayout before, after;
+    before.addPart(boxPart("crown",  19.0,  0.0));
+    before.addPart(boxPart("sensor", -5.0, 15.0));
+    after.addPart(boxPart("crown",  19.0,  6.0));   // +6 mm Y
+    after.addPart(boxPart("sensor", -5.0, 15.0));   // stationary
+
+    process::ProcessPlan adapted =
+        parts::reframePlanForMoves(recoveredWatch, before, after, 2.0);
+
+    int feat2 = -1;
+    skill::Workpiece reim2 = stepRoundTrip(execWatch(adapted), feat2);
+    ASSERT_EQ(feat2, 0);
+    const std::vector<RecHole> holes2 = recoverHoles(reim2);
+
+    EXPECT_GT(findNear(holes2, 19.0,  6.0, 1.0).dia, 0.0)
+        << "crown drill must have followed the part to (19, 6)";
+    EXPECT_GT(findNear(holes2, -5.0, 15.0, 1.0).dia, 0.0)
+        << "sensor drill must remain at (-5, 15)";
+    EXPECT_LT(findNear(holes2, 19.0,  0.0, 0.8).dia, 0.0)
+        << "no crown drill should remain at the old (19, 0)";
 }
 
 // ─── 3. Volume is conserved across the reframe (same 4 holes, moved) ──────
