@@ -824,6 +824,72 @@ add_library(koo_skills STATIC
     p_trap_threaded_port.cpp
     pipe_clamp_saddle_compound.cpp
     manifold_block_compound.cpp
+    # slice 16 — solar/PV (5)
+    mc4_connector_seat_pair.cpp
+    pv_junction_box_pottable_pocket.cpp
+    mounting_clamp_rail_slot.cpp
+    busbar_terminal_lug_compound.cpp
+    anti_pid_coating_recess.cpp
+    # slice 16 — marine/shipbuilding (5)
+    porthole_seal_compound.cpp
+    bulkhead_penetration_iso6042.cpp
+    hull_plate_strake_compound.cpp
+    anchor_chain_locker_pipe_compound.cpp
+    bilge_drain_threaded_compound.cpp
+    # slice 16 — wind turbine (5)
+    blade_root_t_bolt_array.cpp
+    pitch_bearing_seat_compound.cpp
+    yaw_motor_mount_compound.cpp
+    nacelle_panel_lock_quarter_turn.cpp
+    generator_stator_slot_pattern.cpp
+    # slice 16 — full watch case assemblies (5)
+    diver_case_full_compound.cpp
+    gmt_chronograph_case_compound.cpp
+    square_case_octagonal_compound.cpp
+    pocket_watch_hunter_case_compound.cpp
+    smart_watch_aluminum_band_lug_compound.cpp
+    # slice 16 — agricultural/forestry (5)
+    chainsaw_bar_chain_groove.cpp
+    tractor_pto_spline_compound.cpp
+    harvester_blade_arc_compound.cpp
+    hydraulic_quick_coupler_iso7241.cpp
+    ag_implement_3point_hitch_pin.cpp
+    # slice 16 — audio/musical (5)
+    guitar_truss_rod_channel.cpp
+    brass_valve_port_compound.cpp
+    drum_lug_seat_compound.cpp
+    mic_capsule_thread_compound.cpp
+    speaker_cone_mount_4hole.cpp
+    # slice 16b — marine hardware (5)
+    boat_cleat_mounting_compound.cpp
+    thru_hull_seacock_flange.cpp
+    rudder_gudgeon_pintle_bore.cpp
+    winch_drum_base_bolt_circle.cpp
+    cutless_bearing_housing_seat.cpp
+    # slice 16b — wind turbine (5)
+    blade_root_tbolt_compound.cpp
+    pitch_bearing_bolt_circle.cpp
+    yaw_brake_caliper_mount.cpp
+    slip_ring_shaft_bore_keyway.cpp
+    nacelle_bedplate_mount_pad.cpp
+    # slice 16b — solar/PV mounting (5)
+    pv_frame_clamp_tslot.cpp
+    solar_rail_splice_channel.cpp
+    grounding_lug_layin_seat.cpp
+    microinverter_mount_slots.cpp
+    tracker_slew_pivot_bore.cpp
+    # slice 16b — pro audio hardware (5)
+    speaker_basket_spider_seat.cpp
+    horn_throat_conical_flare.cpp
+    rack_ear_19inch_eia.cpp
+    xlr_panel_d_cutout.cpp
+    cabinet_handle_dish_recess.cpp
+    # slice 16b — watch complications (5)
+    chronograph_pusher_tube_bore.cpp
+    helium_escape_valve_seat.cpp
+    date_window_aperture_compound.cpp
+    power_reserve_indicator_slot.cpp
+    screw_down_crown_tube_compound.cpp
 )
 
 target_include_directories(koo_skills PUBLIC ${CMAKE_SOURCE_DIR}/src)
