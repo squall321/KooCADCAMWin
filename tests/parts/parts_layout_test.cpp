@@ -213,3 +213,39 @@ TEST(PartsLayout, JsonRoundTrip)
     EXPECT_DOUBLE_EQ(restored.findById("batt")->centerX(), 20.0);
     EXPECT_DOUBLE_EQ(restored.findById("batt")->sizeX(), 10.0);
 }
+
+// ─── 8. reframePlanForMoves shifts ONLY the steps tied to a moved part ────
+//
+// The deterministic adapt core: a step anchored to a part that moves follows
+// the part's centre delta; a step anchored to a stationary part is untouched.
+TEST(PartsLayout, ReframePlanForMovesShiftsDependentSteps)
+{
+    ProcessPlan plan;
+    {   StepInvocation s; s.skill_id = "drill_hole";
+        s.params = { { "position_x_mm", 10.0 }, { "position_y_mm", 10.0 },
+                     { "diameter_mm", 4.0 } };
+        plan.append(s); }
+    {   StepInvocation s; s.skill_id = "drill_hole";
+        s.params = { { "position_x_mm", 40.0 }, { "position_y_mm", 10.0 },
+                     { "diameter_mm", 4.0 } };
+        plan.append(s); }
+
+    PartsLayout before;
+    before.addPart(makeAabbPart("pcb",  10.0, 10.0, 0.0));
+    before.addPart(makeAabbPart("batt", 40.0, 10.0, 0.0));
+
+    // Only the PCB moves: +7 mm X, −3 mm Y.  Battery stays put.
+    PartsLayout after;
+    after.addPart(makeAabbPart("pcb",  17.0,  7.0, 0.0));
+    after.addPart(makeAabbPart("batt", 40.0, 10.0, 0.0));
+
+    const ProcessPlan out = reframePlanForMoves(plan, before, after, 1.0);
+    ASSERT_EQ(out.size(), 2);
+
+    // Step 0 anchored to the PCB → shifted by (+7, −3).
+    EXPECT_DOUBLE_EQ(out.steps()[0].params["position_x_mm"].get<double>(), 17.0);
+    EXPECT_DOUBLE_EQ(out.steps()[0].params["position_y_mm"].get<double>(),  7.0);
+    // Step 1 anchored to the (stationary) battery → unchanged.
+    EXPECT_DOUBLE_EQ(out.steps()[1].params["position_x_mm"].get<double>(), 40.0);
+    EXPECT_DOUBLE_EQ(out.steps()[1].params["position_y_mm"].get<double>(), 10.0);
+}

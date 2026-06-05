@@ -30,6 +30,9 @@
 #include <gtest/gtest.h>
 
 #include "io/StepIO.hpp"
+#include "parts/DatumGraph.hpp"
+#include "parts/Part.hpp"
+#include "parts/PartsLayout.hpp"
 #include "process/Executor.hpp"
 #include "process/ProcessPlan.hpp"
 #include "process/StepInvocation.hpp"
@@ -187,8 +190,27 @@ TEST(FrameReframeLoop, RecoverHolesMeasuredFromForeignStep)
     EXPECT_TRUE(holesMatch(holes, kHoles, 0.15));
 }
 
-// ─── 2. Full reframe loop: parts move +15mm X -> holes follow ─────────────
-TEST(FrameReframeLoop, ReframeShiftsHolesByPartDelta)
+// A PCB part whose AABB centre is (cx, 40, 6); its 4 mounting holes are the
+// frame's 4 drills.  Used to drive the datum dependency graph.
+parts::PartsLayout pcbLayout(double cx)
+{
+    parts::PartsLayout L;
+    parts::Part pcb;
+    pcb.id   = "pcb";
+    pcb.xMin = cx - 40.0; pcb.xMax = cx + 40.0;   // centre x = cx
+    pcb.yMin = 10.0;      pcb.yMax = 70.0;        // centre y = 40
+    pcb.zMin = 0.0;       pcb.zMax = 12.0;        // centre z = 6
+    L.addPart(pcb);
+    return L;
+}
+
+// ─── 2. Full reframe loop, DATUM-DRIVEN: PCB moves +15mm X -> holes follow ─
+//
+// The adapt step is NOT a hardcoded shift — it runs the real dependency graph:
+// reframePlanForMoves links each hole to the PCB (point↔AABB-centre within
+// tolerance), diffs the layouts, and shifts every dependent step by the PCB's
+// centre delta.  Verified by measuring the re-machined holes.
+TEST(FrameReframeLoop, ReframeShiftsHolesByPartMove)
 {
     constexpr double kDeltaX = 15.0;
 
@@ -200,23 +222,18 @@ TEST(FrameReframeLoop, ReframeShiftsHolesByPartDelta)
     const std::vector<RecHole> recovered = recoverHoles(reim);
     ASSERT_EQ(recovered.size(), kHoles.size());
 
-    // ADAPT: the PCB part the holes anchor to shifted +15mm in X, so every
-    // recovered hole's X is corrected by the part delta.  Build the adapted
-    // plan straight from the recovered (measured) params.
-    process::ProcessPlan adapted;
-    for (const auto& h : recovered) {
-        process::StepInvocation s;
-        s.skill_id = "drill_hole";
-        s.params = {
-            { "entry_face",    "top" },
-            { "position_x_mm", h.x + kDeltaX },
-            { "position_y_mm", h.y },
-            { "diameter_mm",   h.dia },
-            { "depth_mm",      0.0 },
-            { "through_hole",  true },
-        };
-        adapted.append(s);
-    }
+    // Rebuild a plan from the recovered (measured) hole params.
+    std::vector<XY> recXY;
+    for (const auto& h : recovered) recXY.push_back({ h.x, h.y });
+    const process::ProcessPlan recoveredPlan = buildFramePlan(recXY);
+
+    // DATUM-DRIVEN ADAPT: the PCB moved +15mm X.  reframePlanForMoves finds
+    // the holes that depend on it (match tolerance 50mm anchors all 4 to the
+    // PCB centre) and shifts them by the part delta.
+    const parts::PartsLayout before = pcbLayout(60.0);
+    const parts::PartsLayout after  = pcbLayout(60.0 + kDeltaX);
+    const process::ProcessPlan adapted =
+        parts::reframePlanForMoves(recoveredPlan, before, after, 50.0);
 
     // RE-EXECUTE on fresh stock, then verify by measuring the new STEP.
     const TopoDS_Shape s2 = executeOnFreshStock(adapted);
@@ -230,7 +247,7 @@ TEST(FrameReframeLoop, ReframeShiftsHolesByPartDelta)
     std::vector<XY> want;
     for (const auto& h : kHoles) want.push_back({ h.x + kDeltaX, h.y });
     EXPECT_TRUE(holesMatch(reframed, want, 0.15))
-        << "after reframe, holes must sit at the part-shifted positions";
+        << "after datum-driven reframe, holes must follow the PCB part";
 
     // And NONE remain at an original X column (30 or 90).
     for (const auto& r : reframed) {

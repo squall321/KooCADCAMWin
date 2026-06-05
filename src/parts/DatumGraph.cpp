@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <array>
+#include <map>
 #include <optional>
 #include <set>
 
@@ -117,6 +119,24 @@ std::optional<double> extractAxisCoord(const json& params, char axis)
     return std::nullopt;
 }
 
+// Add `delta` to whichever coordinate field exists for `axis` (the same
+// prefix set extractAxisCoord scans).  Shifts only the first matching field
+// per axis; no-op if the step has no coordinate for that axis.
+void shiftAxisCoord(json& params, char axis, double delta)
+{
+    if (!params.is_object() || delta == 0.0) return;
+    static const std::vector<std::string> kPrefixes = {
+        "position_", "center_", "offset_"
+    };
+    for (const auto& pre : kPrefixes) {
+        const std::string key = pre + axis + "_mm";
+        if (params.contains(key) && params[key].is_number()) {
+            params[key] = params[key].get<double>() + delta;
+            return;
+        }
+    }
+}
+
 // Read the step's (x, y, z).  Returns nullopt if NO axis is found at all
 // (so the step is "position-less" — not amenable to point matching).  If
 // some axes are missing but others are present, the missing ones default
@@ -184,6 +204,48 @@ DatumGraph extractHeuristicDependencies(
     params.reserve(plan.steps().size());
     for (const auto& s : plan.steps()) params.push_back(s.params);
     return extractHeuristicDependencies(params, layout, match_tolerance_mm);
+}
+
+process::ProcessPlan reframePlanForMoves(
+    const process::ProcessPlan& plan,
+    const PartsLayout&          oldLayout,
+    const PartsLayout&          newLayout,
+    double                      match_tolerance_mm)
+{
+    // 1. Which step depends on which part (point-in-AABB heuristic).
+    const DatumGraph graph =
+        extractHeuristicDependencies(plan, oldLayout, match_tolerance_mm);
+
+    // 2. Accumulate, per step, the total centre delta of every MOVED part it
+    //    depends on (a step straddling two moved parts gets the sum).
+    std::map<int, std::array<double, 3>> stepDelta;
+    for (const auto& d : oldLayout.diff(newLayout)) {
+        if (d.kind != "moved" || !d.details.contains("delta")) continue;
+        const auto& dl = d.details["delta"];
+        if (!dl.is_array() || dl.size() < 3) continue;
+        const double dx = dl[0].get<double>();
+        const double dy = dl[1].get<double>();
+        const double dz = dl[2].get<double>();
+        for (int si : graph.stepsDependentOn(d.part_id)) {
+            auto& acc = stepDelta[si];
+            acc[0] += dx; acc[1] += dy; acc[2] += dz;
+        }
+    }
+
+    // 3. Copy the plan, shifting position fields of dependent steps.
+    process::ProcessPlan out;
+    const auto& steps = plan.steps();
+    for (int i = 0; i < static_cast<int>(steps.size()); ++i) {
+        process::StepInvocation s = steps[i];
+        auto it = stepDelta.find(i);
+        if (it != stepDelta.end()) {
+            shiftAxisCoord(s.params, 'x', it->second[0]);
+            shiftAxisCoord(s.params, 'y', it->second[1]);
+            shiftAxisCoord(s.params, 'z', it->second[2]);
+        }
+        out.append(s);
+    }
+    return out;
 }
 #endif
 

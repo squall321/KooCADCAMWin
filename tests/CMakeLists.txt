@@ -1210,11 +1210,21 @@ add_executable(integration_frame_reframe
     integration/frame_reframe_loop_test.cpp)
 target_link_libraries(integration_frame_reframe PRIVATE
     GTest::gtest GTest::gtest_main
-    koo_skills koo_process koo_re koo_io koo_engine)
+    koo_skills koo_process koo_re koo_io koo_parts koo_engine)
 target_include_directories(integration_frame_reframe SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_frame_reframe)
 add_test(NAME integration_frame_reframe COMMAND integration_frame_reframe)
 set_tests_properties(integration_frame_reframe PROPERTIES TIMEOUT 180)
+
+# ── Parts layout + datum graph + reframePlanForMoves (Layer 6) ────────────
+# (was previously unregistered — never built/run; now wired in.)
+add_executable(parts_layout_test parts/parts_layout_test.cpp)
+target_link_libraries(parts_layout_test PRIVATE
+    GTest::gtest GTest::gtest_main koo_parts koo_process koo_io)
+target_include_directories(parts_layout_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(parts_layout_test)
+add_test(NAME parts_layout COMMAND parts_layout_test)
+set_tests_properties(parts_layout PROPERTIES TIMEOUT 60)
 
 # ── Integration: COMPLETE watch as a 11-step ProcessPlan ──────
 # Slice-1 end-to-end demo — build a full M1.5 watch using ONLY the
