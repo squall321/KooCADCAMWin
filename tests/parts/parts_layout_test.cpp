@@ -19,11 +19,21 @@
 #include "process/ProcessPlan.hpp"
 #include "process/StepInvocation.hpp"
 
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 using namespace koocadcam::parts;
 using koocadcam::process::ProcessPlan;
@@ -248,4 +258,42 @@ TEST(PartsLayout, ReframePlanForMovesShiftsDependentSteps)
     // Step 1 anchored to the (stationary) battery → unchanged.
     EXPECT_DOUBLE_EQ(out.steps()[1].params["position_x_mm"].get<double>(), 40.0);
     EXPECT_DOUBLE_EQ(out.steps()[1].params["position_y_mm"].get<double>(), 10.0);
+}
+
+// ─── 9. reframePlanForMoves carries features through a part ROTATION ───────
+//
+// Not just translation: a part that rotates about its centre drags its
+// anchored features around with it.  Plate centred at origin, rotated +90°
+// about Z via its placement → each hole (x,y) maps to (−y, x).
+TEST(PartsLayout, ReframeRotatesDependentSteps)
+{
+    ProcessPlan plan;
+    {   StepInvocation s; s.skill_id = "drill_hole";
+        s.params = { { "position_x_mm", 10.0 }, { "position_y_mm", 0.0 },
+                     { "diameter_mm", 3.0 } };
+        plan.append(s); }
+    {   StepInvocation s; s.skill_id = "drill_hole";
+        s.params = { { "position_x_mm", 0.0 }, { "position_y_mm", 5.0 },
+                     { "diameter_mm", 3.0 } };
+        plan.append(s); }
+
+    PartsLayout before;
+    before.addPart(makeAabbPart("plate", 0.0, 0.0, 0.0, 40.0, 40.0, 4.0));
+
+    // Same centre, but rotated +90° about Z (placement orientation change).
+    PartsLayout after;
+    {   Part p = makeAabbPart("plate", 0.0, 0.0, 0.0, 40.0, 40.0, 4.0);
+        gp_Trsf t;
+        t.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), M_PI / 2.0);
+        p.placement = t;
+        after.addPart(p); }
+
+    const ProcessPlan out = reframePlanForMoves(plan, before, after, 1.0);
+    ASSERT_EQ(out.size(), 2);
+
+    // +90° about Z: (x,y) -> (-y, x).  A(10,0)->(0,10); B(0,5)->(-5,0).
+    EXPECT_NEAR(out.steps()[0].params["position_x_mm"].get<double>(),  0.0, 1e-6);
+    EXPECT_NEAR(out.steps()[0].params["position_y_mm"].get<double>(), 10.0, 1e-6);
+    EXPECT_NEAR(out.steps()[1].params["position_x_mm"].get<double>(), -5.0, 1e-6);
+    EXPECT_NEAR(out.steps()[1].params["position_y_mm"].get<double>(),  0.0, 1e-6);
 }

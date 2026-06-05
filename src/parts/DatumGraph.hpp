@@ -129,15 +129,17 @@ DatumGraph extractHeuristicDependencies(
 
 // Datum-driven re-frame — the deterministic core of recover→adapt→re-execute.
 //
-// Build a NEW ProcessPlan whose position params follow every part that MOVED
-// between `oldLayout` and `newLayout`:
-//   1. extractHeuristicDependencies(plan, oldLayout) → step↔part edges.
-//   2. oldLayout.diff(newLayout) → per-part centre deltas (kind == "moved").
-//   3. For each step depending on a moved part, add that part's (dx,dy,dz) to
-//      the step's position_/center_/offset_ *_mm fields (summed if the step
-//      depends on several moved parts).
-// Steps with no moved-part dependency are copied verbatim.  The LLM bridge is
+// Build a NEW ProcessPlan whose feature points follow each owning part's
+// RIGID-BODY pose change between `oldLayout` and `newLayout`:
+//   1. extractHeuristicDependencies(plan, oldLayout) → step↔owner-part edges.
+//   2. For each owned step, transform its feature point through the owner's
+//      pose delta — translation of the AABB centre PLUS rotation of the part's
+//      placement: f' = newCentre + ΔR·(f − oldCentre).  A pure translation
+//      reduces to f' = f + centreDelta; a rotated part rotates its features.
+// A part whose pose is unchanged yields an identity delta, so its features are
+// untouched.  Steps with no owning part are copied verbatim.  The LLM bridge is
 // an alternate adapt strategy that produces the same kind of param edits.
+// (Resize/non-uniform scale is not yet adapted — a future extension.)
 process::ProcessPlan reframePlanForMoves(
     const process::ProcessPlan& plan,
     const PartsLayout&          oldLayout,

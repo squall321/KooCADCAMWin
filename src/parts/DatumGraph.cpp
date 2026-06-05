@@ -4,6 +4,10 @@
 
 #include <spdlog/spdlog.h>
 
+#include <gp_Quaternion.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_XYZ.hxx>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -119,19 +123,18 @@ std::optional<double> extractAxisCoord(const json& params, char axis)
     return std::nullopt;
 }
 
-// Add `delta` to whichever coordinate field exists for `axis` (the same
-// prefix set extractAxisCoord scans).  Shifts only the first matching field
-// per axis; no-op if the step has no coordinate for that axis.
-void shiftAxisCoord(json& params, char axis, double delta)
+// Set whichever coordinate field exists for `axis` to `value` (the same prefix
+// set extractAxisCoord scans).  Writes only the first matching field per axis.
+void setAxisCoord(json& params, char axis, double value)
 {
-    if (!params.is_object() || delta == 0.0) return;
+    if (!params.is_object()) return;
     static const std::vector<std::string> kPrefixes = {
         "position_", "center_", "offset_"
     };
     for (const auto& pre : kPrefixes) {
         const std::string key = pre + axis + "_mm";
         if (params.contains(key) && params[key].is_number()) {
-            params[key] = params[key].get<double>() + delta;
+            params[key] = value;
             return;
         }
     }
@@ -181,6 +184,42 @@ const Part* anchorPart(const PartsLayout& layout, const StepPoint& pt, double ma
     return best;
 }
 
+// Move a step's feature point through a part's RIGID-BODY pose change.  The
+// part's pose is modelled as { position = AABB centre, orientation = placement
+// rotation }.  The feature point f is re-expressed in the part frame, rotated
+// by the orientation delta, and translated to the new centre:
+//
+//     f' = newCentre + ΔR · (f − oldCentre)
+//
+// For a pure translation (placements equal) ΔR is identity and this reduces to
+// f' = f + (newCentre − oldCentre) — i.e. the old translation behaviour.  For
+// a rotated part the anchored features rotate with it.  Axes the step omits
+// (e.g. a top-face drill's z) are seeded from the centre so a 2-D feature
+// rotates within the part's plane and the absent axis is never written back.
+void applyPartDeltaToParams(json& params, const Part& oldP, const Part& newP)
+{
+    const StepPoint pt = pointFromParams(params);
+    if (!pt.any()) return;
+
+    const gp_XYZ oldC(oldP.centerX(), oldP.centerY(), oldP.centerZ());
+    const gp_XYZ newC(newP.centerX(), newP.centerY(), newP.centerZ());
+    const gp_Quaternion qDelta =
+        newP.placement.GetRotation() * oldP.placement.GetRotation().Inverted();
+    gp_Trsf rot;
+    rot.SetRotation(qDelta);
+
+    gp_XYZ rel(pt.hasX ? pt.x : oldP.centerX(),
+               pt.hasY ? pt.y : oldP.centerY(),
+               pt.hasZ ? pt.z : oldP.centerZ());
+    rel -= oldC;
+    rot.Transforms(rel);
+    const gp_XYZ res = newC + rel;
+
+    if (pt.hasX) setAxisCoord(params, 'x', res.X());
+    if (pt.hasY) setAxisCoord(params, 'y', res.Y());
+    if (pt.hasZ) setAxisCoord(params, 'z', res.Z());
+}
+
 }  // namespace
 
 DatumGraph extractHeuristicDependencies(
@@ -219,36 +258,23 @@ process::ProcessPlan reframePlanForMoves(
     const PartsLayout&          newLayout,
     double                      match_tolerance_mm)
 {
-    // 1. Which step depends on which part (point-in-AABB heuristic).
+    // 1. Which step is owned by which part (AABB-containment heuristic).
     const DatumGraph graph =
         extractHeuristicDependencies(plan, oldLayout, match_tolerance_mm);
 
-    // 2. Accumulate, per step, the total centre delta of every MOVED part it
-    //    depends on (a step straddling two moved parts gets the sum).
-    std::map<int, std::array<double, 3>> stepDelta;
-    for (const auto& d : oldLayout.diff(newLayout)) {
-        if (d.kind != "moved" || !d.details.contains("delta")) continue;
-        const auto& dl = d.details["delta"];
-        if (!dl.is_array() || dl.size() < 3) continue;
-        const double dx = dl[0].get<double>();
-        const double dy = dl[1].get<double>();
-        const double dz = dl[2].get<double>();
-        for (int si : graph.stepsDependentOn(d.part_id)) {
-            auto& acc = stepDelta[si];
-            acc[0] += dx; acc[1] += dy; acc[2] += dz;
-        }
-    }
-
-    // 3. Copy the plan, shifting position fields of dependent steps.
+    // 2. Copy the plan; for each owned step, move its feature point through the
+    //    owner part's rigid-body pose change (translation + rotation).  A part
+    //    whose pose is unchanged yields an identity delta, so its features stay
+    //    put — only the parts that actually moved/rotated drag their features.
     process::ProcessPlan out;
     const auto& steps = plan.steps();
     for (int i = 0; i < static_cast<int>(steps.size()); ++i) {
         process::StepInvocation s = steps[i];
-        auto it = stepDelta.find(i);
-        if (it != stepDelta.end()) {
-            shiftAxisCoord(s.params, 'x', it->second[0]);
-            shiftAxisCoord(s.params, 'y', it->second[1]);
-            shiftAxisCoord(s.params, 'z', it->second[2]);
+        const std::vector<std::string> owners = graph.partsForStep(i);
+        if (!owners.empty()) {
+            const Part* oldP = oldLayout.findById(owners.front());
+            const Part* newP = newLayout.findById(owners.front());
+            if (oldP && newP) applyPartDeltaToParams(s.params, *oldP, *newP);
         }
         out.append(s);
     }
