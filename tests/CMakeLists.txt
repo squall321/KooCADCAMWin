@@ -43,6 +43,15 @@ add_custom_command(
 )
 add_custom_target(golden_step ALL DEPENDS "${KOO_GOLDEN_STEP}")
 
+# ── koo_analyze CLI ───────────────────────────────────────────
+# Load any STEP file and dump the reverse-engineered machining features
+# (skill, confidence, measured dimensions).  Usage: koo_analyze <file.step>
+add_executable(koo_analyze tools/koo_analyze.cpp)
+target_link_libraries(koo_analyze PRIVATE
+    koo_io koo_skills koo_re koo_engine koo_process)
+target_include_directories(koo_analyze SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(koo_analyze)
+
 # ── Watch parametric build test (M1.1) ────────────────────────
 add_executable(watch_test watch/watch_test.cpp)
 target_link_libraries(watch_test PRIVATE
