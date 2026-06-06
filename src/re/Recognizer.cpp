@@ -174,6 +174,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -522,6 +523,36 @@ bool intersects(const std::unordered_set<int>& a, const std::unordered_set<int>&
     return false;
 }
 
+// STEP-round-trip-STABLE geometric fingerprint.  Face IDs renumber on every
+// Workpiece(shape) build, so two recognizers describing the SAME physical hole
+// (e.g. a through-hole seen from both ends, or a cylinder split into multiple
+// STEP faces) get different face-ID sets and escape face-ID dedupe.  Key the
+// feature by its measured GEOMETRY instead: skill + rounded diameters/depth +
+// rounded entry position.  Axis is intentionally omitted so a through-hole
+// reported from either end collapses to one.  Returns "" when the candidate
+// exposes no positional/dimensional content (then we fall back to face-ID
+// overlap and never over-merge dimensionless features like raw chamfers).
+std::string geomFingerprint(const skill::RecognizedFeature& c)
+{
+    const json& p = c.recovered_params;
+    if (!p.is_object()) return "";
+    static const char* kDimKeys[] = {
+        "diameter_mm", "seat_dia_mm", "pilot_dia_mm", "bore_dia_mm",
+        "position_x_mm", "position_y_mm", "position_z_mm", "depth_mm"
+    };
+    std::string key = c.skill_id;
+    bool any = false;
+    for (const char* k : kDimKeys) {
+        if (p.contains(k) && p[k].is_number()) {
+            any = true;
+            // 0.05 mm grid: collapses rebuild noise, keeps distinct features apart.
+            const long q = std::lround(p[k].get<double>() * 20.0);
+            key += '|'; key += k; key += ':'; key += std::to_string(q);
+        }
+    }
+    return any ? key : "";
+}
+
 }  // namespace
 
 std::vector<skill::RecognizedFeature>
@@ -536,23 +567,30 @@ dedupe(const std::vector<skill::RecognizedFeature>& candidates)
 
     std::vector<skill::RecognizedFeature> kept;
     std::vector<std::unordered_set<int>> keptFaceSets;
+    std::unordered_set<std::string>      seenGeom;   // geometric fingerprints
 
     for (const auto& c : sorted) {
+        // 1) Geometric fingerprint — collapses the SAME physical feature even
+        //    when its face IDs differ (the dominant duplicate source on real
+        //    multi-face / through-hole STEP geometry).
+        const std::string fp = geomFingerprint(c);
+        if (!fp.empty()) {
+            if (seenGeom.count(fp)) continue;       // exact same measured feature
+            seenGeom.insert(fp);
+        }
+
+        // 2) Face-ID overlap — drop a competing claim (e.g. drill vs. bore) on
+        //    geometry an already-kept candidate owns.
         std::unordered_set<int> fids;
         collectFaceIds(c.matched_geometry, fids);
+        if (!fids.empty()) {
+            bool overlap = false;
+            for (const auto& kf : keptFaceSets) {
+                if (intersects(fids, kf)) { overlap = true; break; }
+            }
+            if (overlap) continue;
+        }
 
-        if (fids.empty()) {
-            // No identifiable geometry fingerprint → conservatively keep,
-            // because we cannot prove overlap.
-            kept.push_back(c);
-            keptFaceSets.push_back(std::move(fids));
-            continue;
-        }
-        bool overlap = false;
-        for (const auto& kf : keptFaceSets) {
-            if (intersects(fids, kf)) { overlap = true; break; }
-        }
-        if (overlap) continue;
         kept.push_back(c);
         keptFaceSets.push_back(std::move(fids));
     }
