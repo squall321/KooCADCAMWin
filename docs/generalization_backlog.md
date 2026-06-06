@@ -15,6 +15,30 @@ the current tests but fails the general real-world case. Ranked by payoff.
   translation-only; `Part.placement` was unused. Now features move through the
   owner part's full pose delta `f' = newCentre + ΔR·(f − oldCentre)`.
 
+## Done — recognizer / RE (proven on real downloaded STEP via koo_analyze)
+
+- **drill_hole entry detection is axis-orientation-generic** (`12252a6`). Entry
+  vs blind-bottom by adjacency, not Z order; size-adaptive radius tol; recovers
+  3-D entry. Verified on AS1 (holes along ±X/±Y recovered correctly).
+- **Executor parseFaceDatum → full FaceDatum vocabulary** (`57538c6`).
+- **dedupe by STEP-stable geometric fingerprint** (`c35f72c`). Face IDs renumber
+  per build; geometric key (skill + rounded dims + position) collapses the same
+  physical hole. AS1: drill_hole 70 → 30 (its real count).
+- **Cap loose geometric fallbacks from non-precise recognizers** (`50975ad`).
+  Domain-compound skills' foreign-STEP pattern-matches capped at 0.5 (metadata
+  replay + precise tier exempt). AS1 @0.7: 34 → 30, zero false positives.
+  RC buggy @0.7: 5073 → 1674, all precise-tier (domain noise gone).
+
+### Sharpened limit (from the real-part demo)
+
+- **Precise recognizers still over-detect on FREEFORM geometry.** On the RC-buggy
+  (organic surfaces) drill_hole reports ~1605 "holes" — small cylindrical patches
+  from tessellated curved faces, not real drilled holes. A cylindrical face ≠ a
+  machined hole. Needs a machinability gate: a real hole's wall is a *full* or
+  near-full cylinder bounded by circular edges on planar faces, not a sliver
+  patch on a B-spline. Prismatic machined parts (AS1) are unaffected and recover
+  cleanly. This is the main remaining blocker for general foreign CAD.
+
 ## High payoff (next)
 
 - **Reframe: handle `resized` parts** — `PartsLayout::diff` emits "resized" but
