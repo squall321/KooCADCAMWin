@@ -433,6 +433,26 @@ const std::vector<RecognizeFn>& recognizerRegistry()
 
 // ── analyze() ────────────────────────────────────────────────────────────
 
+// Recognizers that recover a feature by RIGOROUS geometric measurement (exact
+// cylinder radius, coaxial-pair step, bevel angle, ISO-273 diameter match).
+// Their geometric candidates are trustworthy on foreign CAD.  Every other
+// recognizer is a domain-compound heuristic: on a part WE synthesised it
+// replays its own metadata at high confidence (fine), but on a FOREIGN STEP it
+// only has a loose geometric fallback that pattern-matches generic planar +
+// cylindrical faces — a false-positive source (jig_plate, gauge_block, …).  We
+// cap such geometric-fallback candidates so they fall below the RE confidence
+// threshold (0.7) while leaving metadata replay and the precise tier untouched.
+const std::unordered_set<std::string>& preciseRecognizers()
+{
+    static const std::unordered_set<std::string> kPrecise = {
+        "drill_hole", "drill_through_hole", "counterbore", "countersink",
+        "chamfer_edge", "fillet_edge", "bore_cylindrical", "bore_with_shelf",
+        "ream", "spot_drill", "spot_face", "mill_circular_pocket",
+        "mill_rect_pocket", "mill_slot", "bolt_hole_metric_spec",
+    };
+    return kPrecise;
+}
+
 std::vector<skill::RecognizedFeature> analyze(const skill::Workpiece& wp)
 {
     std::vector<skill::RecognizedFeature> all;
@@ -446,6 +466,19 @@ std::vector<skill::RecognizedFeature> analyze(const skill::Workpiece& wp)
             spdlog::warn("re::analyze: a recognizer threw an unknown exception");
         }
     }
+
+    // Demote loose geometric fallbacks from non-precise (domain-compound)
+    // recognizers.  Metadata replay ("source":"metadata_replay") and the
+    // precise tier are exempt, so synthetic round-trips are unaffected.
+    const auto& precise = preciseRecognizers();
+    for (auto& c : all) {
+        const bool replay =
+            c.matched_geometry.is_object() &&
+            c.matched_geometry.value("source", std::string()) == "metadata_replay";
+        if (!replay && !precise.count(c.skill_id))
+            c.confidence = std::min(c.confidence, 0.5);
+    }
+
     std::stable_sort(all.begin(), all.end(),
         [](const skill::RecognizedFeature& a, const skill::RecognizedFeature& b) {
             return a.confidence > b.confidence;
