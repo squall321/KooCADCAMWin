@@ -311,24 +311,91 @@ using nlohmann::json;
 //
 //   "entry_face":     "top"       → FaceByNormal{ gp_Dir(0,0,1) }    (+Z)
 //   "entry_face":     "bottom"    → FaceByNormal{ gp_Dir(0,0,-1) }   (-Z)
+//   "entry_face":     "largest"   → FaceLargestPlanar{}
+//   "entry_face":     [x,y,z]     → FaceByNormal{ gp_Dir(x,y,z) }   (any direction)
 //   "entry_face_id":  <int>       → FaceIdRef{<int>}
 //   (none of the above)           → FaceLargestPlanar{}
 //
-// Future datum kinds (FaceByRay, FaceTopAtXY, FaceCylinderByAxis, …) are
-// TODO; their JSON shorthand is reserved but not yet parsed.
+// Full object form covers every FaceDatum variant so arbitrary / tilted entries
+// round-trip (paired with recognizers that recover axis_dir + 3-D entry):
+//   { "type": "by_normal",     "normal": [x,y,z], "tolerance_deg": t, "variant": v }
+//   { "type": "by_ray",        "origin": [x,y,z], "direction": [x,y,z] }
+//   { "type": "top_at_xy",     "x_mm": .., "y_mm": .. }
+//   { "type": "cylinder_axis", "axis_origin": [x,y,z], "axis_dir": [x,y,z], "tolerance_deg": t }
+//   { "type": "largest" }
 
 namespace {
 
+// Read a 3-number JSON array into out[3]; false if not a valid vec3.
+bool readVec3(const json& j, double out[3])
+{
+    if (!j.is_array() || j.size() != 3) return false;
+    for (int i = 0; i < 3; ++i) {
+        if (!j[i].is_number()) return false;
+        out[i] = j[i].get<double>();
+    }
+    return true;
+}
+
+bool nonZero3(const double v[3])
+{
+    return std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]) > 1e-9;
+}
+
 sk::FaceDatum parseFaceDatum(const json& params)
 {
-    if (params.contains("entry_face_id") && params["entry_face_id"].is_number_integer()) {
+    // Explicit face id wins.
+    if (params.contains("entry_face_id") && params["entry_face_id"].is_number_integer())
         return sk::FaceIdRef{ params["entry_face_id"].get<int>() };
-    }
-    if (params.contains("entry_face") && params["entry_face"].is_string()) {
-        const std::string s = params["entry_face"].get<std::string>();
+
+    if (!params.contains("entry_face")) return sk::FaceLargestPlanar{};
+    const json& ef = params["entry_face"];
+
+    // String shorthands.
+    if (ef.is_string()) {
+        const std::string s = ef.get<std::string>();
         if (s == "top")    return sk::FaceByNormal{ gp_Dir(0.0, 0.0, 1.0),  5.0, "largest" };
         if (s == "bottom") return sk::FaceByNormal{ gp_Dir(0.0, 0.0, -1.0), 5.0, "largest" };
+        return sk::FaceLargestPlanar{};   // "largest"/"largest_planar"/unknown
     }
+
+    // Bare [x,y,z] → the face whose normal points that way.
+    double v[3];
+    if (ef.is_array() && readVec3(ef, v) && nonZero3(v))
+        return sk::FaceByNormal{ gp_Dir(v[0], v[1], v[2]), 5.0, "largest" };
+
+    // Full object form: { "type": ..., ... }.
+    if (ef.is_object()) {
+        const std::string type = ef.value("type", std::string("by_normal"));
+        if (type == "largest" || type == "largest_planar")
+            return sk::FaceLargestPlanar{};
+        if (type == "top_at_xy")
+            return sk::FaceTopAtXY{ ef.value("x_mm", 0.0), ef.value("y_mm", 0.0) };
+        if (type == "by_ray") {
+            double o[3] = {0,0,0}, d[3] = {0,0,1};
+            if (ef.contains("origin"))    readVec3(ef["origin"], o);
+            if (ef.contains("direction")) readVec3(ef["direction"], d);
+            if (nonZero3(d))
+                return sk::FaceByRay{ gp_Pnt(o[0],o[1],o[2]), gp_Dir(d[0],d[1],d[2]) };
+        }
+        if (type == "cylinder_axis") {
+            double o[3] = {0,0,0}, d[3] = {0,0,1};
+            if (ef.contains("axis_origin")) readVec3(ef["axis_origin"], o);
+            if (ef.contains("axis_dir"))    readVec3(ef["axis_dir"], d);
+            if (nonZero3(d))
+                return sk::FaceCylinderByAxis{
+                    gp_Ax1(gp_Pnt(o[0],o[1],o[2]), gp_Dir(d[0],d[1],d[2])),
+                    ef.value("tolerance_deg", 5.0) };
+        }
+        // default: by_normal
+        double n[3] = {0,0,1};
+        if (ef.contains("normal")) readVec3(ef["normal"], n);
+        if (nonZero3(n))
+            return sk::FaceByNormal{ gp_Dir(n[0],n[1],n[2]),
+                                     ef.value("tolerance_deg", 5.0),
+                                     ef.value("variant", std::string("largest")) };
+    }
+
     return sk::FaceLargestPlanar{};
 }
 

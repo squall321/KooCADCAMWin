@@ -373,3 +373,44 @@ TEST(ProcessExecutor, ExecuteAllSkillCategories)
     EXPECT_EQ(result.signatures[3].skill_id, "drill_hole");
     EXPECT_EQ(result.signatures[4].skill_id, "mill_circular_pocket");
 }
+
+// ─── General entry_face datum forms all resolve like the "top" shorthand ──
+//
+// The Executor's parseFaceDatum was generalized from {"top"/"bottom"/id} to the
+// full FaceDatum vocabulary.  A drill driven by the new forms (a bare normal
+// array, a { type: by_normal } object, and a { type: top_at_xy } object) must
+// remove the same material as the legacy "top" string — proving the general
+// parser is a superset, not a behaviour change.
+TEST(ProcessPlan, GeneralEntryFaceFormsResolveLikeTop)
+{
+    auto runOne = [](const json& entryFace) {
+        process::StepInvocation s;
+        s.skill_id = "drill_hole";
+        s.params = {
+            { "entry_face",    entryFace },
+            { "position_x_mm", 25.0 },
+            { "position_y_mm", 25.0 },
+            { "diameter_mm",   4.0 },
+            { "depth_mm",      6.0 },
+            { "through_hole",  false },
+        };
+        process::ProcessPlan plan;
+        plan.append(s);
+        auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
+        auto res = process::Executor::execute(plan, stock);
+        EXPECT_TRUE(res.ok());
+        return volumeOf(stock->shape()) - volumeOf(res.workpiece->shape());
+    };
+
+    const double vTop    = runOne("top");
+    const double vArray  = runOne(json::array({ 0.0, 0.0, 1.0 }));
+    const double vNormal = runOne(json{ { "type", "by_normal" },
+                                        { "normal", { 0.0, 0.0, 1.0 } } });
+    const double vTopXY  = runOne(json{ { "type", "top_at_xy" },
+                                        { "x_mm", 25.0 }, { "y_mm", 25.0 } });
+
+    EXPECT_GT(vTop, 0.0);
+    EXPECT_NEAR(vArray,  vTop, 1e-6);
+    EXPECT_NEAR(vNormal, vTop, 1e-6);
+    EXPECT_NEAR(vTopXY,  vTop, vTop * 0.02);
+}
