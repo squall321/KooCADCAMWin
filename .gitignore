@@ -42,3 +42,19 @@ _*/
 
 # Allow .gitkeep sentinels
 !.gitkeep
+
+# Claude Code session / agent working dir (never commit)
+.claude/
+
+# Throwaway dev build wrappers + logs (root-level scratch from agent runs)
+/build_*.cmd
+/build_*.log
+/run_*.cmd
+/run_*.log
+/z_*.log
+/*.log
+/debug_ninja.cmd
+/stderr_dump.txt
+/DELETE_REPORT.txt
+/all_tests_run.log
+/*_commit_msg.txt
