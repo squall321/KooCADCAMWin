@@ -193,3 +193,46 @@ TEST(SkillDrillHole, ThroughHoleProducesNoBottomFace)
     ASSERT_EQ(cands.size(), 1u);
     EXPECT_TRUE(cands.front().recovered_params["through_hole"].get<bool>());
 }
+
+// ─── 6. Entry face recovered from ADJACENCY, not Z order ──────────────────
+//
+// Two blind holes, one drilled from the TOP (entry z=20) and one from the
+// BOTTOM (entry z=0).  The entry point must be the ring opening onto the large
+// workpiece surface — independent of the cylinder-axis orientation OCCT picks.
+// The old "highest-Z circle = entry" heuristic reported the bottom hole's entry
+// at z=6 (its blind floor); the adjacency rule recovers z=0.
+TEST(SkillDrillHole, EntryFaceFromAdjacencyNotZOrder)
+{
+    auto stock = skill::createCuboidStock(50.0, 50.0, 20.0);
+
+    skill::drill_hole::Input a;
+    a.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    a.position_x_mm = 15.0; a.position_y_mm = 15.0;
+    a.axis_dir = gp_Dir(0, 0, -1);
+    a.diameter_mm = 4.0; a.depth_mm = 6.0; a.through_hole = false;
+    auto wA = skill::drill_hole::apply(*stock, a);
+
+    skill::drill_hole::Input b;
+    b.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, -1) };
+    b.position_x_mm = 35.0; b.position_y_mm = 35.0;
+    b.axis_dir = gp_Dir(0, 0, 1);
+    b.diameter_mm = 4.0; b.depth_mm = 6.0; b.through_hole = false;
+    auto wB = skill::drill_hole::apply(*wA.workpiece, b);
+
+    auto cands = skill::drill_hole::recognize(*wB.workpiece);
+    bool gotTop = false, gotBottom = false;
+    for (const auto& c : cands) {
+        const double x = c.recovered_params.value("position_x_mm", 0.0);
+        const double y = c.recovered_params.value("position_y_mm", 0.0);
+        const double z = c.recovered_params.value("position_z_mm", -999.0);
+        const bool blind = !c.recovered_params.value("through_hole", true);
+        if (std::abs(x - 15.0) < 0.5 && std::abs(y - 15.0) < 0.5) {
+            gotTop = true; EXPECT_NEAR(z, 20.0, 0.1); EXPECT_TRUE(blind);
+        }
+        if (std::abs(x - 35.0) < 0.5 && std::abs(y - 35.0) < 0.5) {
+            gotBottom = true; EXPECT_NEAR(z, 0.0, 0.1); EXPECT_TRUE(blind);
+        }
+    }
+    EXPECT_TRUE(gotTop)    << "top-entry blind hole not recovered";
+    EXPECT_TRUE(gotBottom) << "bottom-entry blind hole not recovered at z=0";
+}

@@ -246,88 +246,82 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const double radius = cyl.Radius();
         const gp_Ax1 axis = cyl.Axis();
 
-        // Collect circular edges that lie on this face and are perpendicular
-        // to the cylinder axis (i.e. circles around the cylinder waist).
-        std::vector<gp_Pnt> circleCenters;
-        std::vector<double> circleRadii;
+        // Collect the circular edges that ring the cylinder waist.  For each,
+        // record its centre and the area of the LARGEST planar face adjacent to
+        // it — the workpiece surface it opens onto (large for an entry/exit,
+        // ≈ π r² for a blind drill bottom).  Radius match is size-adaptive so it
+        // works from sub-mm holes to large bores and tolerates STEP rebuild noise.
+        const double radTol = std::max(1e-4, 1e-3 * radius);
+        struct Ring { gp_Pnt center; double adjPlanarArea; };
+        std::vector<Ring> rings;
         for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
             const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
             BRepAdaptor_Curve crv(e);
             if (crv.GetType() != GeomAbs_Circle) continue;
             const gp_Circ c = crv.Circle();
-            // Reject if the circle's normal is not parallel to cylinder axis.
+            // Circle must ring the cylinder (its normal parallel to the axis).
             if (std::abs(std::abs(c.Axis().Direction().Dot(axis.Direction())) - 1.0) > 1e-3)
                 continue;
-            if (std::abs(c.Radius() - radius) > 1e-3) continue;
-            circleCenters.push_back(c.Location());
-            circleRadii.push_back(c.Radius());
+            if (std::abs(c.Radius() - radius) > radTol) continue;
+            double adjMax = 0.0;
+            if (edgeFaces.Contains(e)) {
+                const auto& adj = edgeFaces.FindFromKey(e);
+                for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
+                    const TopoDS_Face& af = TopoDS::Face(it.Value());
+                    if (af.IsSame(cylFace)) continue;
+                    if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
+                    GProp_GProps gp; BRepGProp::SurfaceProperties(af, gp);
+                    adjMax = std::max(adjMax, gp.Mass());
+                }
+            }
+            rings.push_back({ c.Location(), adjMax });
         }
-        if (circleCenters.size() < 2) continue;  // not a clean drill
+        if (rings.size() < 2) continue;  // not a clean drill
 
-        // Take the two extreme circles along the cylinder axis as top/bottom.
+        // Two extreme rings along the cylinder axis (orientation-independent —
+        // the axis can point any way; we never assume entry is "up" in Z).
         const gp_Dir adir = axis.Direction();
         auto projOnAxis = [&](const gp_Pnt& p) {
             return (p.X() - axis.Location().X()) * adir.X() +
                    (p.Y() - axis.Location().Y()) * adir.Y() +
                    (p.Z() - axis.Location().Z()) * adir.Z();
         };
-        auto cmp = [&](const gp_Pnt& a, const gp_Pnt& b) {
-            return projOnAxis(a) < projOnAxis(b);
-        };
-        const auto minIt = std::min_element(circleCenters.begin(), circleCenters.end(), cmp);
-        const auto maxIt = std::max_element(circleCenters.begin(), circleCenters.end(), cmp);
-        const gp_Pnt centerLow  = *minIt;
-        const gp_Pnt centerHigh = *maxIt;
-        const double depth = centerHigh.Distance(centerLow);
+        const Ring& loRing = *std::min_element(rings.begin(), rings.end(),
+            [&](const Ring& a, const Ring& b){ return projOnAxis(a.center) < projOnAxis(b.center); });
+        const Ring& hiRing = *std::max_element(rings.begin(), rings.end(),
+            [&](const Ring& a, const Ring& b){ return projOnAxis(a.center) < projOnAxis(b.center); });
+        const double depth = hiRing.center.Distance(loRing.center);
+        if (depth < 1e-6) continue;
 
-        // The drill direction conventionally points from entry → bottom,
-        // so axis_dir = unit(centerLow - centerHigh) if drilling 'down' from
-        // higher-Z entry to lower-Z blind bottom.  We pick the direction that
-        // moves "into the material" — for a top-face entry on a Z+ stock,
-        // that's the -Z direction.  Use centerHigh as the entry point.
-        gp_Vec drillVec(centerHigh, centerLow);
+        // Entry vs blind-bottom from adjacency, NOT from Z order:
+        //   - a ring opening onto a small (≈ π r²) face is the blind bottom;
+        //   - the entry is the ring opening onto the larger workpiece surface;
+        //   - through-hole ⇔ neither ring is a blind bottom.
+        const double bottomArea = M_PI * radius * radius;
+        const bool loIsBottom = loRing.adjPlanarArea > 0.0 && loRing.adjPlanarArea <= bottomArea * 1.5;
+        const bool hiIsBottom = hiRing.adjPlanarArea > 0.0 && hiRing.adjPlanarArea <= bottomArea * 1.5;
+        const bool through    = !loIsBottom && !hiIsBottom;
+
+        const Ring* entry = &hiRing;
+        const Ring* other = &loRing;
+        if (loIsBottom)            { entry = &hiRing; other = &loRing; }
+        else if (hiIsBottom)       { entry = &loRing; other = &hiRing; }
+        else if (loRing.adjPlanarArea > hiRing.adjPlanarArea) { entry = &loRing; other = &hiRing; }
+
+        // Drill direction points entry → into the material (sign now meaningful
+        // for any axis orientation, not just a Z+ stock).
+        gp_Vec drillVec(entry->center, other->center);
         if (drillVec.Magnitude() < 1e-6) continue;
         drillVec.Normalize();
 
-        // Is it a through-hole?
-        //
-        // Both blind and through holes have planar faces adjacent to the
-        // cylinder's bounding circles, so "any planar adjacent" is not
-        // discriminating.  Instead compare areas:
-        //   - Blind hole:    adjacent face areas are { workpiece top (large),
-        //                    drill bottom (≈ π r², small) }.
-        //   - Through hole:  adjacent face areas are { workpiece top (large),
-        //                    workpiece bottom (large) }.
-        //
-        // If the SMALLEST adjacent planar face is close to π r², it's the
-        // drill bottom → blind.  Otherwise → through.
-        const double drillBottomArea = M_PI * radius * radius;
-        double minAdjPlanarArea = std::numeric_limits<double>::max();
-        for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
-            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
-            if (!edgeFaces.Contains(e)) continue;
-            BRepAdaptor_Curve crv(e);
-            if (crv.GetType() != GeomAbs_Circle) continue;
-            const auto& adj = edgeFaces.FindFromKey(e);
-            for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
-                const TopoDS_Face& af = TopoDS::Face(it.Value());
-                if (af.IsSame(cylFace)) continue;
-                if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
-                GProp_GProps gp;
-                BRepGProp::SurfaceProperties(af, gp);
-                minAdjPlanarArea = std::min(minAdjPlanarArea, gp.Mass());
-            }
-        }
-        // 1.5× tolerance: a face within 50% of π r² is the drill bottom.
-        const bool through = (minAdjPlanarArea > drillBottomArea * 1.5);
-
-        // Recover entry x,y (in world XY) — use centerHigh
-        const double pos_x = centerHigh.X();
-        const double pos_y = centerHigh.Y();
+        const double pos_x = entry->center.X();
+        const double pos_y = entry->center.Y();
+        const double pos_z = entry->center.Z();
 
         json recovered = {
             { "position_x_mm", pos_x },
             { "position_y_mm", pos_y },
+            { "position_z_mm", pos_z },   // full 3-D entry point (any axis)
             { "axis_dir",      { drillVec.X(), drillVec.Y(), drillVec.Z() } },
             { "diameter_mm",   2.0 * radius },
             { "depth_mm",      through ? 0.0 : depth },
@@ -335,8 +329,8 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         };
         json matched = {
             { "cylindrical_face_id", fIdx },
-            { "top_center", { centerHigh.X(), centerHigh.Y(), centerHigh.Z() } },
-            { "bot_center", { centerLow.X(),  centerLow.Y(),  centerLow.Z()  } },
+            { "entry_center", { entry->center.X(), entry->center.Y(), entry->center.Z() } },
+            { "far_center",   { other->center.X(), other->center.Y(), other->center.Z() } },
         };
         out.push_back(RecognizedFeature{
             kSkillId, recovered, /*confidence*/ 0.95, matched
