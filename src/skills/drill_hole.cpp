@@ -16,8 +16,10 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
+#include <TopAbs.hxx>
 #include <TopoDS.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Vec.hxx>
 
 #include <limits>
 
@@ -231,6 +233,46 @@ EdgeFaceMap buildEdgeFaceMap(const TopoDS_Shape& shape)
 
 }  // namespace
 
+namespace {
+
+// Machinability gate — is this cylindrical face an actual DRILLED-HOLE wall?
+//
+// A hole is CONCAVE: the solid is outside the cylinder, so the face's outward
+// (into-the-void) normal points INWARD, toward the axis.  A rod / boss / pin is
+// CONVEX (normal points outward), and a tessellated sliver on a freeform
+// surface barely wraps the axis at all.  Rejecting convex + sliver cylinders
+// stops the recognizer from reporting thousands of phantom "holes" on organic
+// CAD (e.g. an RC-buggy suspension), while leaving real machined holes — which
+// are concave and wrap >= ~90 deg — fully recovered.
+bool isDrillableHoleWall(const TopoDS_Face& f, const gp_Cylinder& cyl)
+{
+    BRepAdaptor_Surface s(f);
+
+    // (a) Sliver guard: the wall must wrap a meaningful arc of the axis.  A real
+    //     hole is a full cylinder (2π) or a few face-splits (≥ ~90° each).
+    const double uSpan = s.LastUParameter() - s.FirstUParameter();
+    if (uSpan < 0.45 * M_PI) return false;   // < 81° → freeform patch, not a wall
+
+    // (b) Concavity: solid's outward normal points toward the axis.
+    const double u = 0.5 * (s.FirstUParameter() + s.LastUParameter());
+    const double v = 0.5 * (s.FirstVParameter() + s.LastVParameter());
+    gp_Pnt P; gp_Vec du, dv;
+    s.D1(u, v, P, du, dv);
+    gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1e-9) return false;
+    n.Normalize();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+
+    const gp_Pnt aLoc = cyl.Axis().Location();
+    const gp_Vec aDir(cyl.Axis().Direction());
+    gp_Vec ap(aLoc, P);
+    const gp_Vec radial = ap - aDir * ap.Dot(aDir);   // outward from the axis
+    if (radial.Magnitude() < 1e-9) return false;
+    return n.Dot(radial) < 0.0;                        // inward outward-normal ⇒ hole
+}
+
+}  // namespace
+
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
@@ -245,6 +287,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Cylinder cyl = surf.Cylinder();
         const double radius = cyl.Radius();
         const gp_Ax1 axis = cyl.Axis();
+
+        // Machinability gate: only concave, axis-wrapping cylinders are holes
+        // (rejects rods/bosses and freeform tessellation slivers).
+        if (!isDrillableHoleWall(cylFace, cyl)) continue;
 
         // Collect the circular edges that ring the cylinder waist.  For each,
         // record its centre and the area of the LARGEST planar face adjacent to
