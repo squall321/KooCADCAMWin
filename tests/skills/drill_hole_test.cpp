@@ -19,11 +19,15 @@
 
 #include "io/StepIO.hpp"
 
+#include "engine/primitives/Tools.hpp"
+#include "engine/primitives/Cuts.hpp"
+
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax2.hxx>
 
 #include <cmath>
 #include <filesystem>
@@ -235,4 +239,39 @@ TEST(SkillDrillHole, EntryFaceFromAdjacencyNotZOrder)
     }
     EXPECT_TRUE(gotTop)    << "top-entry blind hole not recovered";
     EXPECT_TRUE(gotBottom) << "bottom-entry blind hole not recovered at z=0";
+}
+
+// ─── 7. Machinability gate: a convex BOSS (rod) is NOT a hole ──────────────
+//
+// drill_hole::recognize must reject convex cylinders. Drill a real hole at
+// (15,15) and fuse a cylindrical boss at (35,35); only the concave hole should
+// be recovered — the boss (material inside the cylinder) must not.
+TEST(SkillDrillHole, RejectsConvexBossAsHole)
+{
+    namespace pr = koocadcam::engine::prim;
+    auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
+
+    // A real drilled hole at (15,15).
+    skill::drill_hole::Input h;
+    h.entry_face   = skill::FaceByNormal{ gp_Dir(0,0,1) };
+    h.position_x_mm = 15.0; h.position_y_mm = 15.0;
+    h.axis_dir = gp_Dir(0,0,-1); h.diameter_mm = 4.0; h.depth_mm = 6.0; h.through_hole = false;
+    auto holed = skill::drill_hole::apply(*stock, h);
+
+    // A convex cylindrical boss standing up from the top face at (35,35).
+    const TopoDS_Shape boss = pr::cylinder(
+        gp_Ax2(gp_Pnt(35.0, 35.0, 10.0), gp_Dir(0,0,1)), 5.0, 8.0);
+    const TopoDS_Shape withBoss = pr::fuse(holed.workpiece->shape(), boss);
+    skill::Workpiece wp(withBoss);
+
+    auto cands = skill::drill_hole::recognize(wp);
+    int atHole = 0, atBoss = 0;
+    for (const auto& c : cands) {
+        const double x = c.recovered_params.value("position_x_mm", 0.0);
+        const double y = c.recovered_params.value("position_y_mm", 0.0);
+        if (std::abs(x-15.0) < 1.0 && std::abs(y-15.0) < 1.0) ++atHole;
+        if (std::abs(x-35.0) < 1.0 && std::abs(y-35.0) < 1.0) ++atBoss;
+    }
+    EXPECT_GT(atHole, 0) << "the real concave hole must still be recovered";
+    EXPECT_EQ(atBoss, 0) << "the convex boss must NOT be recognized as a hole";
 }

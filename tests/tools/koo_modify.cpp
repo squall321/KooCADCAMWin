@@ -18,10 +18,17 @@
 #include "engine/primitives/Tools.hpp"
 #include "engine/primitives/Cuts.hpp"
 
+#include <BRep_Builder.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
+#include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <Standard_Failure.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Solid.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
@@ -36,6 +43,36 @@ using namespace koocadcam;
 namespace pr = koocadcam::engine::prim;
 
 namespace {
+
+// Fuse `tool` into ONLY the solid(s) of `shape` whose AABB contains `p`, leaving
+// every other solid untouched, then re-assemble the compound.  Fusing a tool
+// into a whole multi-solid STEP assembly at once is fragile in OCCT; isolating
+// the affected solid makes "shrink" (add material) work on real assemblies.
+// If `shape` is a single solid, this is just one fuse.
+TopoDS_Shape fuseIntoContainingSolid(const TopoDS_Shape& shape,
+                                     const TopoDS_Shape& tool, const gp_Pnt& p)
+{
+    BRep_Builder bb;
+    TopoDS_Compound out;
+    bb.MakeCompound(out);
+    bool fusedAny = false;
+    int solids = 0;
+    for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) {
+        ++solids;
+        const TopoDS_Solid& s = TopoDS::Solid(ex.Current());
+        Bnd_Box box; BRepBndLib::Add(s, box);
+        double xm,ym,zm,xx,yx,zx; box.Get(xm,ym,zm,xx,yx,zx);
+        const double m = 1.0;  // small inflation
+        const bool contains = p.X() >= xm-m && p.X() <= xx+m &&
+                              p.Y() >= ym-m && p.Y() <= yx+m &&
+                              p.Z() >= zm-m && p.Z() <= zx+m;
+        if (contains) { bb.Add(out, pr::fuse(s, tool)); fusedAny = true; }
+        else          { bb.Add(out, s); }
+    }
+    if (solids == 0) return pr::fuse(shape, tool);  // no solids → fuse whole
+    if (!fusedAny)   return pr::fuse(shape, tool);  // point outside all → fallback
+    return out;
+}
 double vol(const TopoDS_Shape& s)
 {
     GProp_GProps g; BRepGProp::VolumeProperties(s, g); return g.Mass();
@@ -131,8 +168,10 @@ int main(int argc, char* argv[])
                                 entry.Y() - axisDir.Y()*0.5,
                                 entry.Z() - axisDir.Z()*0.5);
             }
-            result = pr::fuse(*shape, pr::annularRing(gp_Ax2(aStart, axisDir),
-                                                      oldDia/2.0 + overlap, newDia/2.0, len));
+            const TopoDS_Shape annulus = pr::annularRing(gp_Ax2(aStart, axisDir),
+                                                         oldDia/2.0 + overlap, newDia/2.0, len);
+            // Fuse only into the solid that holds this hole (robust on assemblies).
+            result = fuseIntoContainingSolid(*shape, annulus, entry);
         }
     } catch (const Standard_Failure&) {
         std::cerr << "modify failed (OCCT boolean): "
