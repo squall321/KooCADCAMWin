@@ -52,6 +52,16 @@ target_link_libraries(koo_analyze PRIVATE
 target_include_directories(koo_analyze SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(koo_analyze)
 
+# ── koo_modify CLI ────────────────────────────────────────────
+# Recover a hole from a foreign STEP and change its diameter on the ORIGINAL
+# geometry (preserves the rest of the part). Usage:
+#   koo_modify <in.step> <out.step> <tx> <ty> <tz> <new_dia_mm> [tol]
+add_executable(koo_modify tools/koo_modify.cpp)
+target_link_libraries(koo_modify PRIVATE
+    koo_io koo_skills koo_re koo_engine koo_process)
+target_include_directories(koo_modify SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(koo_modify)
+
 # ── Watch parametric build test (M1.1) ────────────────────────
 add_executable(watch_test watch/watch_test.cpp)
 target_link_libraries(watch_test PRIVATE
