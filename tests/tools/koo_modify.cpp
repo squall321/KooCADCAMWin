@@ -20,11 +20,13 @@
 
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
+#include <Standard_Failure.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -65,8 +67,7 @@ int main(int argc, char* argv[])
 
     // Find the recognized hole nearest the target.
     auto cands = re::dedupe(re::analyze(wp));
-    const nlohmann::json* best = nullptr;
-    std::string bestSkill;
+    const skill::RecognizedFeature* bestC = nullptr;
     double bestD = tol;
     for (const auto& c : cands) {
         if (c.skill_id != "drill_hole" && c.skill_id != "bore_cylindrical" &&
@@ -75,10 +76,12 @@ int main(int argc, char* argv[])
         const double d = std::sqrt(std::pow(num(p,"position_x_mm")-tx,2) +
                                    std::pow(num(p,"position_y_mm")-ty,2) +
                                    std::pow(num(p,"position_z_mm")-tz,2));
-        if (d <= bestD) { bestD = d; best = &p; bestSkill = c.skill_id; }
+        if (d <= bestD) { bestD = d; bestC = &c; }
     }
-    if (!best) { std::cerr << "no recognized hole within " << tol << "mm of target\n"; return 1; }
+    if (!bestC) { std::cerr << "no recognized hole within " << tol << "mm of target\n"; return 1; }
 
+    const nlohmann::json* best = &bestC->recovered_params;
+    const std::string bestSkill = bestC->skill_id;
     const double oldDia = (best->contains("seat_dia_mm")) ? num(*best,"seat_dia_mm")
                                                           : num(*best,"diameter_mm");
     gp_Dir axisDir(0,0,-1);
@@ -91,25 +94,66 @@ int main(int argc, char* argv[])
 
     std::cout << "Matched " << bestSkill << " at (" << entry.X() << ", " << entry.Y()
               << ", " << entry.Z() << ")  dia=" << oldDia << " mm  (dist " << bestD << ")\n";
-    if (newDia <= oldDia) {
-        std::cerr << "koo_modify demo enlarges only; new_dia (" << newDia
-                  << ") must exceed measured dia (" << oldDia << ")\n";
+    if (std::abs(newDia - oldDia) < 1e-6) {
+        std::cerr << "new_dia equals measured dia — nothing to change\n";
         return 1;
     }
 
-    // Cut a larger co-axial cylinder spanning the part along the hole's axis.
+    // Co-axial tool spanning the part along the hole's recovered axis.
     const gp_Pnt start(entry.X() - axisDir.X()*0.1*diag,
                        entry.Y() - axisDir.Y()*0.1*diag,
                        entry.Z() - axisDir.Z()*0.1*diag);
-    const TopoDS_Shape cutter = pr::cylinder(gp_Ax2(start, axisDir), newDia/2.0, diag*1.2);
-    const TopoDS_Shape result = pr::cut(*shape, cutter);
+    const gp_Ax2 ax(start, axisDir);
+
+    TopoDS_Shape result;
+    try {
+        if (newDia > oldDia) {
+            // Enlarge: cut a larger co-axial cylinder.
+            result = pr::cut(*shape, pr::cylinder(ax, newDia/2.0, diag*1.2));
+        } else {
+            // Shrink: fuse a co-axial annulus filling the ring (newR .. oldR),
+            // leaving a smaller Ø(new_dia) hole.  Two robustness measures:
+            //  - radial OVERLAP into the existing wall (oldR + overlap) so the
+            //    union has no coincident cylindrical face (exact-radius fuse fails);
+            //  - axial extent limited to the HOLE's length (entry → far_center,
+            //    +0.5mm each side) so we don't fuse a giant tube protruding from
+            //    the part — only the hole bore is filled.
+            const double overlap = std::max(1.0, oldDia * 0.01);
+            double len = diag * 1.2;            // fallback if far_center is absent
+            gp_Pnt aStart = start;
+            const auto& mg = bestC->matched_geometry;
+            if (mg.is_object() && mg.contains("far_center") && mg["far_center"].is_array()
+                && mg["far_center"].size() == 3) {
+                const auto& fc = mg["far_center"];
+                const gp_Pnt farP(fc[0].get<double>(), fc[1].get<double>(), fc[2].get<double>());
+                len = entry.Distance(farP) + 1.0;
+                aStart = gp_Pnt(entry.X() - axisDir.X()*0.5,
+                                entry.Y() - axisDir.Y()*0.5,
+                                entry.Z() - axisDir.Z()*0.5);
+            }
+            result = pr::fuse(*shape, pr::annularRing(gp_Ax2(aStart, axisDir),
+                                                      oldDia/2.0 + overlap, newDia/2.0, len));
+        }
+    } catch (const Standard_Failure&) {
+        std::cerr << "modify failed (OCCT boolean): "
+                  << (newDia > oldDia ? "enlarge" : "shrink")
+                  << " not feasible on this geometry — adding material into a "
+                     "multi-solid assembly (shrink) is fragile; enlarge "
+                     "(material removal) is robust\n";
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "modify failed: " << e.what() << "\n";
+        return 1;
+    }
+    if (result.IsNull()) { std::cerr << "modify produced a null shape\n"; return 1; }
 
     const double v0 = vol(*shape), v1 = vol(result);
     skill::Workpiece wpNew(result);
-    std::cout << "Enlarged hole " << oldDia << " -> " << newDia << " mm\n";
+    std::cout << (newDia > oldDia ? "Enlarged" : "Shrank") << " hole "
+              << oldDia << " -> " << newDia << " mm\n";
     std::cout << "faces " << wp.faceCount() << " -> " << wpNew.faceCount()
               << "   volume " << v0 << " -> " << v1
-              << "   removed " << (v0 - v1) << " mm3\n";
+              << "   delta " << (v1 - v0) << " mm3\n";
 
     if (!io::StepIO::write(result, outPath, err)) {
         std::cerr << "write failed: " << err << "\n"; return 1;
