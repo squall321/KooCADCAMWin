@@ -13,13 +13,13 @@
 #include <GProp_GProps.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
+#include <TopAbs.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <gp_Cylinder.hxx>
-
-#include <limits>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -205,6 +205,22 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 // depth/dia ≤ 4) versus a drilled hole.  Confidence is high when both
 // criteria match, low when only one does (ambiguous), and the candidate
 // is skipped when neither matches.
+//
+// Hardening for FOREIGN STEP files (real downloaded CAD, not just synthetic
+// round-trips):
+//   * Concavity gate (isBoreWall) — an internal bore is a CONCAVE cylinder
+//     (solid OUTSIDE the wall, outward normal points toward the axis).  A
+//     convex rod / boss / shaft is rejected; a freeform tessellation sliver
+//     that barely wraps the axis is rejected.  Mirrors
+//     drill_hole::isDrillableHoleWall.
+//   * All measurements come straight off BRepAdaptor_Surface::Cylinder()
+//     (radius/axis) and BRepAdaptor_Curve::Circle() (ring radius/centre).
+//   * Axis-orientation-independent: entry vs. blind bottom is decided by
+//     ADJACENCY (which ring opens onto the larger planar workpiece face),
+//     never by "highest Z".  The full 3-D entry point is recovered.
+//   * Size-adaptive tolerances: max(1e-4, 1e-3·radius) instead of a fixed
+//     1e-3, so it works from small precision bores to large ones and
+//     tolerates STEP rebuild noise.
 
 namespace {
 
@@ -216,6 +232,42 @@ EdgeFaceMap buildEdgeFaceMap(const TopoDS_Shape& shape)
     EdgeFaceMap m;
     TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, m);
     return m;
+}
+
+// Machinability gate — is this cylindrical face an actual BORE wall?
+//
+// A bore is CONCAVE: the solid is outside the cylinder, so the face's outward
+// (into-the-void) normal points INWARD, toward the axis.  A rod / boss / pin /
+// shaft is CONVEX (normal points outward) and must be rejected — otherwise the
+// recognizer reports phantom "bores" on every turned shaft of a foreign STEP
+// assembly.  A tessellated sliver on a freeform surface barely wraps the axis
+// and is rejected by the U-span guard.  Identical technique to
+// drill_hole::isDrillableHoleWall.
+bool isBoreWall(const TopoDS_Face& f, const gp_Cylinder& cyl)
+{
+    BRepAdaptor_Surface s(f);
+
+    // (a) Sliver guard: the wall must wrap a meaningful arc of the axis.  A real
+    //     bore is a full cylinder (2π) or a few face-splits (≥ ~90° each).
+    const double uSpan = s.LastUParameter() - s.FirstUParameter();
+    if (uSpan < 0.45 * M_PI) return false;   // < 81° → freeform patch, not a wall
+
+    // (b) Concavity: the solid's outward normal points toward the axis.
+    const double u = 0.5 * (s.FirstUParameter() + s.LastUParameter());
+    const double v = 0.5 * (s.FirstVParameter() + s.LastVParameter());
+    gp_Pnt P; gp_Vec du, dv;
+    s.D1(u, v, P, du, dv);
+    gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1e-9) return false;
+    n.Normalize();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+
+    const gp_Pnt aLoc = cyl.Axis().Location();
+    const gp_Vec aDir(cyl.Axis().Direction());
+    gp_Vec ap(aLoc, P);
+    const gp_Vec radial = ap - aDir * ap.Dot(aDir);   // outward from the axis
+    if (radial.Magnitude() < 1e-9) return false;
+    return n.Dot(radial) < 0.0;                        // inward outward-normal ⇒ bore
 }
 
 }  // namespace
@@ -235,62 +287,84 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const double radius = cyl.Radius();
         const gp_Ax1 axis = cyl.Axis();
 
-        // Gather the two extreme circular edges on this cylinder.
-        std::vector<gp_Pnt> circleCenters;
+        // Concavity gate: only a concave, axis-wrapping cylinder is a bore wall
+        // (rejects convex rods/bosses/shafts and freeform tessellation slivers).
+        if (!isBoreWall(cylFace, cyl)) continue;
+
+        // Gather the circular edges that ring this cylinder.  Record each ring's
+        // centre and the area of the LARGEST planar face adjacent to it — the
+        // workpiece surface it opens onto (large for an entry, ≈ π r² for a blind
+        // bottom).  Radius / axis-parallel tolerances are size-adaptive so the
+        // match survives STEP rebuild noise and scales from small to large bores.
+        const double radTol = std::max(1e-4, 1e-3 * radius);
+        struct Ring { gp_Pnt center; double adjPlanarArea; };
+        std::vector<Ring> rings;
         for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
             const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
             BRepAdaptor_Curve crv(e);
             if (crv.GetType() != GeomAbs_Circle) continue;
             const gp_Circ c = crv.Circle();
+            // Circle must ring the cylinder (its normal parallel to the axis).
             if (std::abs(std::abs(c.Axis().Direction().Dot(axis.Direction())) - 1.0) > 1e-3)
                 continue;
-            if (std::abs(c.Radius() - radius) > 1e-3) continue;
-            circleCenters.push_back(c.Location());
+            if (std::abs(c.Radius() - radius) > radTol) continue;
+            double adjMax = 0.0;
+            if (edgeFaces.Contains(e)) {
+                const auto& adj = edgeFaces.FindFromKey(e);
+                for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
+                    const TopoDS_Face& af = TopoDS::Face(it.Value());
+                    if (af.IsSame(cylFace)) continue;
+                    if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
+                    GProp_GProps gp; BRepGProp::SurfaceProperties(af, gp);
+                    adjMax = std::max(adjMax, gp.Mass());
+                }
+            }
+            rings.push_back({ c.Location(), adjMax });
         }
-        if (circleCenters.size() < 2) continue;
+        if (rings.size() < 2) continue;
 
+        // Two extreme rings along the cylinder axis (orientation-independent —
+        // the axis can point any way; we never assume entry is "up" in Z).
         const gp_Dir adir = axis.Direction();
         auto projOnAxis = [&](const gp_Pnt& p) {
             return (p.X() - axis.Location().X()) * adir.X() +
                    (p.Y() - axis.Location().Y()) * adir.Y() +
                    (p.Z() - axis.Location().Z()) * adir.Z();
         };
-        auto cmp = [&](const gp_Pnt& a, const gp_Pnt& b) {
-            return projOnAxis(a) < projOnAxis(b);
-        };
-        const auto minIt = std::min_element(circleCenters.begin(), circleCenters.end(), cmp);
-        const auto maxIt = std::max_element(circleCenters.begin(), circleCenters.end(), cmp);
-        const gp_Pnt centerLow  = *minIt;
-        const gp_Pnt centerHigh = *maxIt;
-        const double depth = centerHigh.Distance(centerLow);
+        const Ring& loRing = *std::min_element(rings.begin(), rings.end(),
+            [&](const Ring& a, const Ring& b){ return projOnAxis(a.center) < projOnAxis(b.center); });
+        const Ring& hiRing = *std::max_element(rings.begin(), rings.end(),
+            [&](const Ring& a, const Ring& b){ return projOnAxis(a.center) < projOnAxis(b.center); });
+        const double depth    = hiRing.center.Distance(loRing.center);
+        if (depth < 1e-6) continue;
         const double diameter = 2.0 * radius;
 
-        gp_Vec drillVec(centerHigh, centerLow);
-        if (drillVec.Magnitude() < 1e-6) continue;
-        drillVec.Normalize();
+        // Entry vs. blind-bottom from adjacency, NOT from Z order:
+        //   - a ring opening onto a small (≈ π r²) face is the blind bottom;
+        //   - the entry is the ring opening onto the larger workpiece surface;
+        //   - through-bore ⇔ neither ring is a blind bottom.
+        const double bottomArea = M_PI * radius * radius;
+        const bool loIsBottom = loRing.adjPlanarArea > 0.0 && loRing.adjPlanarArea <= bottomArea * 1.5;
+        const bool hiIsBottom = hiRing.adjPlanarArea > 0.0 && hiRing.adjPlanarArea <= bottomArea * 1.5;
+        const bool through    = !loIsBottom && !hiIsBottom;
 
-        // Through-vs-blind detection (same heuristic as drill_hole).
-        const double drillBottomArea = M_PI * radius * radius;
-        double minAdjPlanarArea = std::numeric_limits<double>::max();
-        for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
-            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
-            if (!edgeFaces.Contains(e)) continue;
-            BRepAdaptor_Curve crv(e);
-            if (crv.GetType() != GeomAbs_Circle) continue;
-            const auto& adj = edgeFaces.FindFromKey(e);
-            for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
-                const TopoDS_Face& af = TopoDS::Face(it.Value());
-                if (af.IsSame(cylFace)) continue;
-                if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
-                GProp_GProps gp;
-                BRepGProp::SurfaceProperties(af, gp);
-                minAdjPlanarArea = std::min(minAdjPlanarArea, gp.Mass());
-            }
-        }
-        const bool through = (minAdjPlanarArea > drillBottomArea * 1.5);
+        // bore_cylindrical synthesis is BLIND; a through-bore is line_boring /
+        // drill_through territory, so skip it here.
+        if (through) continue;
+
+        const Ring* entry  = &hiRing;
+        const Ring* bottom = &loRing;
+        if (loIsBottom)            { entry = &hiRing; bottom = &loRing; }
+        else if (hiIsBottom)       { entry = &loRing; bottom = &hiRing; }
+        else if (loRing.adjPlanarArea > hiRing.adjPlanarArea) { entry = &loRing; bottom = &hiRing; }
+
+        // Bore direction: entry → bottom (into the material).  Sign is now
+        // meaningful for ANY axis orientation, not just a Z+ stock.
+        gp_Vec boreVec(entry->center, bottom->center);
+        if (boreVec.Magnitude() < 1e-6) continue;
+        boreVec.Normalize();
 
         // Bore signature: blind, precision diameter, low aspect ratio.
-        if (through) continue;  // bore_cylindrical synthesis is blind
         const double ratio = (diameter > 0.0) ? (depth / diameter) : 0.0;
         const bool diaOk   = diameter >= 6.0;
         const bool ratioOk = ratio <= 4.0;
@@ -306,17 +380,18 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         else                       confidence = 0.45;
 
         json recovered = {
-            { "position_x_mm",   centerHigh.X() },
-            { "position_y_mm",   centerHigh.Y() },
-            { "axis_dir",        { drillVec.X(), drillVec.Y(), drillVec.Z() } },
+            { "position_x_mm",   entry->center.X() },
+            { "position_y_mm",   entry->center.Y() },
+            { "position_z_mm",   entry->center.Z() },   // full 3-D entry point (any axis)
+            { "axis_dir",        { boreVec.X(), boreVec.Y(), boreVec.Z() } },
             { "diameter_mm",     diameter },
             { "depth_mm",        depth },
             { "tolerance_class", "H7" },   // default precision class
         };
         json matched = {
             { "cylindrical_face_id", fIdx },
-            { "top_center", { centerHigh.X(), centerHigh.Y(), centerHigh.Z() } },
-            { "bot_center", { centerLow.X(),  centerLow.Y(),  centerLow.Z()  } },
+            { "top_center", { entry->center.X(),  entry->center.Y(),  entry->center.Z()  } },
+            { "bot_center", { bottom->center.X(), bottom->center.Y(), bottom->center.Z() } },
             { "depth_dia_ratio", ratio },
         };
         out.push_back(RecognizedFeature{

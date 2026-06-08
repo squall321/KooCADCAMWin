@@ -8,9 +8,13 @@
 
 #include "io/StepIO.hpp"
 
+#include "engine/primitives/Tools.hpp"
+#include "engine/primitives/Cuts.hpp"
+
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax2.hxx>
 
 #include <cmath>
 #include <filesystem>
@@ -108,4 +112,77 @@ TEST(SkillMillCircularPocket, BottomCornerFillet)
     // Corner-fillet variant introduces a toroidal face → faceCount increases
     // by more than the no-fillet variant.
     EXPECT_GT(out.workpiece->faceCount(), stock->faceCount());
+}
+
+// ─── Measured geometric recovery from a FRESH workpiece ────────────────────
+//
+// Build a fresh skill::Workpiece directly from the cut shape (NOT the apply
+// output) so it carries NO feature history — this forces recognize() down the
+// GEOMETRIC fallback path.  Every recovered dimension is then MEASURED from the
+// B-rep: diameter = 2·cylinder.Radius(), depth = wall-to-floor span, and the
+// full 3-D entry centre (x,y,z) from the ring opening onto the large top face.
+TEST(SkillMillCircularPocket, MeasuredGeometricRecovery)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 12.0);
+    skill::mill_circular_pocket::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 22.0; in.position_y_mm = 38.0;
+    in.diameter_mm = 14.0; in.depth_mm = 4.5;
+
+    auto out = skill::mill_circular_pocket::apply(*stock, in);
+
+    // Fresh workpiece from the geometry alone — no addFeature() history.
+    skill::Workpiece fresh(out.workpiece->shape());
+    ASSERT_TRUE(fresh.features().empty());
+
+    auto cands = skill::mill_circular_pocket::recognize(fresh);
+    ASSERT_FALSE(cands.empty());
+    const auto& rp = cands[0].recovered_params;
+
+    EXPECT_NEAR(rp["diameter_mm"].get<double>(), in.diameter_mm, 0.1);
+    EXPECT_NEAR(rp["depth_mm"].get<double>(),    in.depth_mm,    0.1);
+    // Entry centre lies on the top face (z=12) at the authored XY.
+    EXPECT_NEAR(rp["position_x_mm"].get<double>(), in.position_x_mm, 0.2);
+    EXPECT_NEAR(rp["position_y_mm"].get<double>(), in.position_y_mm, 0.2);
+    EXPECT_NEAR(rp["position_z_mm"].get<double>(), 12.0,             0.2);
+    // Plunge axis points into the material (−Z) for a top-entry pocket.
+    EXPECT_NEAR(rp["axis_dir"][2].get<double>(), -1.0, 1e-3);
+    EXPECT_NEAR(rp["bottom_corner_r_mm"].get<double>(), 0.0, 1e-6);
+}
+
+// ─── Concavity gate: a convex BOSS is NOT a pocket ─────────────────────────
+//
+// recognize() must reject convex cylinders.  Mill a real pocket at (20,20) and
+// fuse a cylindrical boss at (40,40); only the concave flat-bottom pocket may
+// be recovered — the boss (material INSIDE the cylinder) must not.  Modelled on
+// drill_hole's RejectsConvexBossAsHole.
+TEST(SkillMillCircularPocket, RejectsConvexBossAsPocket)
+{
+    namespace pr = koocadcam::engine::prim;
+    auto stock = skill::createCuboidStock(60.0, 60.0, 12.0);
+
+    // A real circular pocket at (20,20): wide + shallow (aspect ratio < 2).
+    skill::mill_circular_pocket::Input p;
+    p.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    p.position_x_mm = 20.0; p.position_y_mm = 20.0;
+    p.diameter_mm = 12.0; p.depth_mm = 3.0;
+    auto pocketed = skill::mill_circular_pocket::apply(*stock, p);
+
+    // A convex cylindrical boss standing up from the top face at (40,40).  It
+    // butts onto the top plane (a small adjacent planar) yet must be rejected.
+    const TopoDS_Shape boss = pr::cylinder(
+        gp_Ax2(gp_Pnt(40.0, 40.0, 12.0), gp_Dir(0, 0, 1)), 6.0, 5.0);
+    const TopoDS_Shape withBoss = pr::fuse(pocketed.workpiece->shape(), boss);
+    skill::Workpiece wp(withBoss);
+
+    auto cands = skill::mill_circular_pocket::recognize(wp);
+    int atPocket = 0, atBoss = 0;
+    for (const auto& c : cands) {
+        const double x = c.recovered_params.value("position_x_mm", 0.0);
+        const double y = c.recovered_params.value("position_y_mm", 0.0);
+        if (std::abs(x - 20.0) < 1.0 && std::abs(y - 20.0) < 1.0) ++atPocket;
+        if (std::abs(x - 40.0) < 1.0 && std::abs(y - 40.0) < 1.0) ++atBoss;
+    }
+    EXPECT_GT(atPocket, 0) << "the real concave pocket must still be recovered";
+    EXPECT_EQ(atBoss, 0)   << "the convex boss must NOT be recognized as a pocket";
 }

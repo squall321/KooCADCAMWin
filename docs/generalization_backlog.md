@@ -80,3 +80,19 @@ the current tests but fails the general real-world case. Ranked by payoff.
   feature-family dependency DAG.
 - recovered params omit `entry_face` (drill_hole/counterbore) — emit the entry
   datum so a re-executed plan targets the same face after topology change.
+
+## Recognizer hardening (2026-06, 4 precise-tier recognizers)
+
+Done (concavity gate + measured recovery + measured/rejection tests; ctest green):
+- `bore_cylindrical`, `counterbore`, `mill_circular_pocket`, `countersink` now
+  measure real dimensions, are axis-orientation-independent, use size-adaptive
+  tolerances, and reject convex cylinders (rods/bosses) and freeform slivers —
+  mirroring `drill_hole::isDrillableHoleWall`.
+
+Open (validate against ground-truth parts):
+- On the AS1 test assembly, bore/counterbore now report 0 (was 6 + 2) — bore
+  correctly declines through-holes (they are drill_holes, still recovered),
+  but the recovery of LARGE THROUGH-COUNTERBORES (seat + through pilot, no blind
+  floor) needs validation: the hardened counterbore favours a clean blind step.
+  drill_hole (the backbone) still recovers AS1's 17 holes. Needs labelled data
+  to confirm whether 25->19 is correct de-duplication or a counterbore recall loss.

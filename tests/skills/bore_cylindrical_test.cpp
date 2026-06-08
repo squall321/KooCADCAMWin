@@ -20,9 +20,13 @@
 
 #include "io/StepIO.hpp"
 
+#include "engine/primitives/Tools.hpp"
+#include "engine/primitives/Cuts.hpp"
+
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax2.hxx>
 
 #include <cmath>
 #include <filesystem>
@@ -200,4 +204,99 @@ TEST(SkillBoreCylindrical, SmallDiaIsAmbiguousVsDrill)
                 << "small-dia bore should be ambiguous vs drill_hole";
         }
     }
+}
+
+// ─── 6. Measured geometric recovery from a FRESH workpiece ────────────────
+//
+// Build the bore with apply(), then construct a BRAND-NEW skill::Workpiece
+// straight from the resulting shape.  A fresh Workpiece carries NO feature
+// history, so recognize() is forced down the pure-GEOMETRIC path (no
+// metadata replay).  Assert that the measured diameter, depth, 3-D position
+// and axis direction all match the authored values tightly — this is what
+// has to hold on a foreign downloaded STEP, where there is no metadata at all.
+TEST(SkillBoreCylindrical, RecognizeRecoversMeasuredDimensions)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 25.0);
+
+    skill::bore_cylindrical::Input in;
+    in.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 27.0;
+    in.position_y_mm = 33.0;
+    in.axis_dir      = gp_Dir(0, 0, -1);
+    in.diameter_mm   = 14.0;
+    in.depth_mm      = 16.0;
+    in.tolerance_class = "H7";
+
+    auto synth = skill::bore_cylindrical::apply(*stock, in);
+
+    // FRESH workpiece from the bare shape — no feature history → geometric path.
+    skill::Workpiece fresh(synth.workpiece->shape());
+    auto cands = skill::bore_cylindrical::recognize(fresh);
+    ASSERT_GE(cands.size(), 1u);
+
+    auto best = cands.front();
+    for (const auto& c : cands)
+        if (c.confidence > best.confidence) best = c;
+
+    // Measured diameter / depth within a tight band of the authored values.
+    EXPECT_NEAR(best.recovered_params["diameter_mm"].get<double>(), 14.0, 0.1);
+    EXPECT_NEAR(best.recovered_params["depth_mm"].get<double>(),    16.0, 0.2);
+
+    // Full 3-D entry position recovered (top face is at Z = 25 mm).
+    EXPECT_NEAR(best.recovered_params["position_x_mm"].get<double>(), 27.0, 0.2);
+    EXPECT_NEAR(best.recovered_params["position_y_mm"].get<double>(), 33.0, 0.2);
+    ASSERT_TRUE(best.recovered_params.contains("position_z_mm"));
+    EXPECT_NEAR(best.recovered_params["position_z_mm"].get<double>(), 25.0, 0.2);
+
+    // Axis direction points entry → into the material (−Z here), recovered
+    // orientation-independently from adjacency.
+    auto axis = best.recovered_params["axis_dir"];
+    ASSERT_EQ(axis.size(), 3u);
+    EXPECT_NEAR(axis[0].get<double>(),  0.0, 1e-3);
+    EXPECT_NEAR(axis[1].get<double>(),  0.0, 1e-3);
+    EXPECT_NEAR(axis[2].get<double>(), -1.0, 1e-3);
+
+    EXPECT_GT(best.confidence, 0.8);
+}
+
+// ─── 7. Concavity gate: a convex BOSS (rod) is NOT a bore ─────────────────
+//
+// An internal bore is a CONCAVE cylinder (solid OUTSIDE the wall).  A convex
+// boss / shaft (solid INSIDE the cylinder) must be rejected, mirroring
+// drill_hole::RejectsConvexBossAsHole.  We make a real bore at (20,20) and
+// fuse a cylindrical boss at (45,45); only the bore may be recovered.
+TEST(SkillBoreCylindrical, RejectsConvexBoss)
+{
+    namespace pr = koocadcam::engine::prim;
+    auto stock = skill::createCuboidStock(60.0, 60.0, 25.0);
+
+    // A real precision bore at (20,20): concave, dia 12 mm, depth 15 mm.
+    skill::bore_cylindrical::Input b;
+    b.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    b.position_x_mm = 20.0;
+    b.position_y_mm = 20.0;
+    b.axis_dir      = gp_Dir(0, 0, -1);
+    b.diameter_mm   = 12.0;
+    b.depth_mm      = 15.0;
+    b.tolerance_class = "H7";
+    auto bored = skill::bore_cylindrical::apply(*stock, b);
+
+    // A convex cylindrical boss standing up from the top face at (45,45):
+    // a 12 mm-dia rod — same diameter as the bore, so only the concavity gate
+    // can tell them apart.
+    const TopoDS_Shape boss = pr::cylinder(
+        gp_Ax2(gp_Pnt(45.0, 45.0, 25.0), gp_Dir(0, 0, 1)), 6.0, 10.0);
+    const TopoDS_Shape withBoss = pr::fuse(bored.workpiece->shape(), boss);
+    skill::Workpiece wp(withBoss);
+
+    auto cands = skill::bore_cylindrical::recognize(wp);
+    int atBore = 0, atBoss = 0;
+    for (const auto& c : cands) {
+        const double x = c.recovered_params.value("position_x_mm", 0.0);
+        const double y = c.recovered_params.value("position_y_mm", 0.0);
+        if (std::abs(x - 20.0) < 1.5 && std::abs(y - 20.0) < 1.5) ++atBore;
+        if (std::abs(x - 45.0) < 1.5 && std::abs(y - 45.0) < 1.5) ++atBoss;
+    }
+    EXPECT_GT(atBore, 0) << "the real concave bore must still be recovered";
+    EXPECT_EQ(atBoss, 0) << "the convex boss must NOT be recognized as a bore";
 }

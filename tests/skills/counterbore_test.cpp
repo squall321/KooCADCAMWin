@@ -14,11 +14,17 @@
 #include "skills/Workpiece.hpp"
 #include "skills/counterbore.hpp"
 
+#include "engine/primitives/Cuts.hpp"
+#include "engine/primitives/Tools.hpp"
+
 #include "io/StepIO.hpp"
 
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 
 #include <cmath>
 #include <filesystem>
@@ -220,4 +226,112 @@ TEST(SkillCounterbore, RejectsSeatDeeperThanPilot)
     auto r = skill::counterbore::validate(*stock, in);
     EXPECT_FALSE(r.passed);
     EXPECT_THROW(skill::counterbore::apply(*stock, in), skill::SkillError);
+}
+
+// ─── 6. GEOMETRIC path: measured dims from a FRESH workpiece (top entry) ───
+//
+// A FRESH Workpiece built straight from the cut shape has NO feature history,
+// so recognize() is forced down the pure GEOMETRIC path (no metadata replay).
+// We assert the recovered seat/pilot diameters + entry position match the
+// authored values to tight tolerances measured off BRepAdaptor surfaces.
+TEST(SkillCounterbore, GeometricRecoversMeasuredDimsTopEntry)
+{
+    auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
+
+    skill::counterbore::Input in;
+    in.entry_face     = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in.position_x_mm  = 20.0;
+    in.position_y_mm  = 28.0;
+    in.axis_dir       = gp_Dir(0, 0, -1);
+    in.pilot_dia_mm   = 3.0;
+    in.pilot_depth_mm = 8.0;
+    in.seat_dia_mm    = 7.0;
+    in.seat_depth_mm  = 2.5;
+
+    auto synth = skill::counterbore::apply(*stock, in);
+
+    // FRESH workpiece — drops the FeatureSignature history, forcing geometry.
+    skill::Workpiece fresh(synth.workpiece->shape());
+    EXPECT_TRUE(fresh.features().empty()) << "fresh wp must have no feature history";
+
+    auto candidates = skill::counterbore::recognize(fresh);
+    ASSERT_EQ(candidates.size(), 1u) << "geometric path should find one counterbore";
+    const auto& c = candidates.front();
+
+    EXPECT_NEAR(c.recovered_params["seat_dia_mm"].get<double>(),  in.seat_dia_mm,  0.1);
+    EXPECT_NEAR(c.recovered_params["pilot_dia_mm"].get<double>(), in.pilot_dia_mm, 0.1);
+    EXPECT_NEAR(c.recovered_params["seat_depth_mm"].get<double>(),  in.seat_depth_mm,  0.1);
+    EXPECT_NEAR(c.recovered_params["pilot_depth_mm"].get<double>(), in.pilot_depth_mm, 0.1);
+    EXPECT_NEAR(c.recovered_params["position_x_mm"].get<double>(), in.position_x_mm, 0.2);
+    EXPECT_NEAR(c.recovered_params["position_y_mm"].get<double>(), in.position_y_mm, 0.2);
+
+    // Entry is the TOP face → z ≈ 10 (stock top), drill axis points -Z.
+    EXPECT_NEAR(c.recovered_params["position_z_mm"].get<double>(), 10.0, 0.2);
+    EXPECT_LT(c.recovered_params["axis_dir"][2].get<double>(), -0.9)
+        << "top-entry counterbore drills downward (-Z)";
+}
+
+// ─── 7. AXIS-INDEPENDENCE: counterbore from the BOTTOM face ────────────────
+//
+// Identical bore, but entered from the -Z (bottom) face with the drill axis
+// pointing +Z.  A +Z-only recognizer would mis-identify entry vs step here.
+// Proves the adjacency-based entry pick is orientation independent.
+TEST(SkillCounterbore, GeometricRecoversMeasuredDimsBottomEntry)
+{
+    auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
+
+    skill::counterbore::Input in;
+    in.entry_face     = skill::FaceByNormal{ gp_Dir(0, 0, -1), 5.0, "largest" };
+    in.position_x_mm  = 30.0;
+    in.position_y_mm  = 18.0;
+    in.axis_dir       = gp_Dir(0, 0, 1);     // drill UPWARD into the block
+    in.pilot_dia_mm   = 4.0;
+    in.pilot_depth_mm = 7.0;
+    in.seat_dia_mm    = 9.0;
+    in.seat_depth_mm  = 2.0;
+
+    auto synth = skill::counterbore::apply(*stock, in);
+
+    skill::Workpiece fresh(synth.workpiece->shape());
+    EXPECT_TRUE(fresh.features().empty());
+
+    auto candidates = skill::counterbore::recognize(fresh);
+    ASSERT_EQ(candidates.size(), 1u)
+        << "bottom-entry counterbore must still be recognized (axis-independent)";
+    const auto& c = candidates.front();
+
+    EXPECT_NEAR(c.recovered_params["seat_dia_mm"].get<double>(),  in.seat_dia_mm,  0.1);
+    EXPECT_NEAR(c.recovered_params["pilot_dia_mm"].get<double>(), in.pilot_dia_mm, 0.1);
+    EXPECT_NEAR(c.recovered_params["seat_depth_mm"].get<double>(),  in.seat_depth_mm,  0.1);
+    EXPECT_NEAR(c.recovered_params["pilot_depth_mm"].get<double>(), in.pilot_depth_mm, 0.1);
+    EXPECT_NEAR(c.recovered_params["position_x_mm"].get<double>(), in.position_x_mm, 0.2);
+    EXPECT_NEAR(c.recovered_params["position_y_mm"].get<double>(), in.position_y_mm, 0.2);
+
+    // Entry is the BOTTOM face → z ≈ 0, drill axis points +Z.
+    EXPECT_NEAR(c.recovered_params["position_z_mm"].get<double>(), 0.0, 0.2);
+    EXPECT_GT(c.recovered_params["axis_dir"][2].get<double>(), 0.9)
+        << "bottom-entry counterbore drills upward (+Z)";
+}
+
+// ─── 8. REJECTION: a convex stepped SHAFT is NOT a counterbore ─────────────
+//
+// Mirrors drill_hole's RejectsConvexBossAsHole.  Two coaxial cylinders of
+// different radii FUSED into a positive solid (a stepped boss/shaft) present
+// two coaxial cylindrical faces — but they are CONVEX (solid inside).  The
+// concavity gate must reject them so a shaft is never reported as a bore.
+TEST(SkillCounterbore, RejectsConvexSteppedShaftAsCounterbore)
+{
+    namespace pr = koocadcam::engine::prim;
+
+    // Large short cylinder (would-be "seat") + small tall cylinder (would-be
+    // "pilot"), coaxial along +Z, fused into one convex solid.
+    const gp_Ax2 ax(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+    const TopoDS_Shape big   = pr::cylinder(ax, 6.0, 3.0);   // r=6, h=3
+    const TopoDS_Shape small = pr::cylinder(ax, 3.0, 12.0);  // r=3, h=12
+    const TopoDS_Shape shaft = pr::fuse(big, small);
+
+    skill::Workpiece wp(shaft);
+    auto candidates = skill::counterbore::recognize(wp);
+    EXPECT_TRUE(candidates.empty())
+        << "a convex stepped shaft must NOT be recognized as a counterbore";
 }

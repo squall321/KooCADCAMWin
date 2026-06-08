@@ -12,6 +12,7 @@
 #include <TopoDS.hxx>
 #include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -242,20 +243,29 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// Pattern matching strategy:
-//   1. Collect every cylindrical face (with axis, radius, endpoints).
-//   2. Collect every conical face (with axis, semi-angle, radii at the two
-//      bounding circles).
-//   3. For each (cyl, cone) pair sharing the same axis (parallel direction
-//      + same infinite-line), check that the cone's SMALLER bounding
-//      radius matches the cylinder radius (cone tip meets cylinder top).
+// Fast-path: if the workpiece still carries a countersink FeatureSignature,
+// replay its authored params at confidence 1.0 (metadata-replay).
+//
+// Geometric fallback (FOREIGN STEP, no feature history) — all dims MEASURED:
+//   1. Collect every CONCAVE cylindrical face (pilot bore) — convex rods/pins
+//      and freeform slivers are rejected by an orientation-aware concavity +
+//      U-span gate (drill_hole::isDrillableHoleWall idiom).
+//   2. Collect every CONCAVE conical face (countersink seat) — a convex
+//      pointed boss/spike is rejected by the same concavity gate.
+//   3. For each (cyl, cone) pair sharing the same axis (parallel direction +
+//      same infinite-line, size-adaptive position tol), check that the cone's
+//      SMALLER bounding radius matches the cylinder radius (cone meets pilot).
 //   4. Recover parameters:
-//      - pilot_dia    = 2 × cyl.Radius
-//      - cone_top_dia = 2 × (cone's larger bounding radius)
-//      - cone_angle   = 2 × cone.SemiAngle (absolute value)
-//      - axis_dir     = from cone entry → cylinder bottom
-//      - pilot_depth  = distance from entry circle to cylinder's bottom
-//      - position     = entry circle's center XY
+//      - pilot_dia    = 2 × cyl.Radius()
+//      - cone_top_dia = 2 × (cone's larger bounding-rim radius)
+//      - cone_angle   = 2 × |cone.SemiAngle()|     (INCLUDED angle)
+//      - axis_dir     = cylinder axis direction (any orientation)
+//      - pilot_depth  = entry → cylinder-bottom span along the axis
+//      - position     = entry rim centre (full 3-D: position_x/y/z_mm)
+//
+// Tolerances are size-adaptive (max(abs_floor, rel·radius)) and rims are
+// grouped from full OR partial arcs, so STEP-split faces and big/small bores
+// all recover correctly.
 
 namespace {
 
@@ -279,7 +289,110 @@ struct ConeInfo
     gp_Pnt  smallCenter;
 };
 
-// Collect cylinders along with their bounding-circle endpoints.
+// ── Concavity gates ───────────────────────────────────────────────────────
+//
+// A countersink seat is a CONCAVE cone and its pilot is a CONCAVE cylinder:
+// the solid sits OUTSIDE the surface, so the orientation-aware outward normal
+// (pointing into the machined void) has a component pointing TOWARD the axis
+// (negative radial dot).  A pointed boss / turned rod / spike is CONVEX — its
+// outward normal points AWAY from the axis (positive radial dot) — and must be
+// rejected so we never report a phantom countersink on a protruding cone.
+// Modelled on drill_hole::isDrillableHoleWall().  Also guards against freeform
+// tessellation slivers that barely wrap the axis (U-span guard).
+bool surfaceOutwardNormalPointsToAxis(const TopoDS_Face& f,
+                                      const gp_Ax1& axis,
+                                      double minUSpan)
+{
+    BRepAdaptor_Surface s(f);
+
+    // (a) Sliver guard: the wall must wrap a meaningful arc of the axis.  A
+    //     real seat/bore is a full surface (2π) or a few face-splits; a
+    //     freeform tessellation patch barely wraps the axis at all.
+    const double uSpan = s.LastUParameter() - s.FirstUParameter();
+    if (uSpan < minUSpan) return false;
+
+    // (b) Concavity: sample the orientation-aware normal at the UV midpoint
+    //     and compare against the outward-radial direction from the axis.
+    const double u = 0.5 * (s.FirstUParameter() + s.LastUParameter());
+    const double v = 0.5 * (s.FirstVParameter() + s.LastVParameter());
+    gp_Pnt P; gp_Vec du, dv;
+    s.D1(u, v, P, du, dv);
+    gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1e-9) return false;
+    n.Normalize();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+
+    const gp_Pnt aLoc = axis.Location();
+    const gp_Vec aDir(axis.Direction());
+    gp_Vec ap(aLoc, P);
+    const gp_Vec radial = ap - aDir * ap.Dot(aDir);   // outward from the axis
+    if (radial.Magnitude() < 1e-9) return false;
+    return n.Dot(radial) < 0.0;                        // inward normal ⇒ concave
+}
+
+// A rim of a cone/cylinder, recovered from one OR MORE circular edges that
+// share the same radius and axial level.  On foreign STEP a face is often
+// split into halves and each rim arrives as several partial arcs; we group
+// them so the recovered rim diameter/centre is correct rather than counting a
+// partial arc as a distinct (phantom) full circle.
+struct Rim
+{
+    double radius   = 0.0;
+    gp_Pnt center;          // circle centre (on the axis)
+    double axialProj = 0.0; // signed projection along the feature axis
+};
+
+// Gather rims of a face by grouping its circular edges (full or partial) along
+// the axis.  `radius` is taken from the surface (NOT a per-arc guess), so even
+// a 90° trim arc resolves to the true rim radius via its own Circle().Radius()
+// after the axis/radius filter.
+std::vector<Rim> gatherRims(const TopoDS_Face& f, const gp_Ax1& axis,
+                            double radiusHint, double radTol)
+{
+    const gp_Dir adir = axis.Direction();
+    auto proj = [&](const gp_Pnt& p) {
+        return (p.X() - axis.Location().X()) * adir.X() +
+               (p.Y() - axis.Location().Y()) * adir.Y() +
+               (p.Z() - axis.Location().Z()) * adir.Z();
+    };
+
+    std::vector<Rim> rims;
+    for (TopExp_Explorer exp(f, TopAbs_EDGE); exp.More(); exp.Next()) {
+        const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
+        BRepAdaptor_Curve crv(e);
+        if (crv.GetType() != GeomAbs_Circle) continue;
+        const gp_Circ c = crv.Circle();
+        // Must ring the feature: circle normal parallel to the axis.
+        if (std::abs(std::abs(c.Axis().Direction().Dot(adir)) - 1.0) > 1e-3)
+            continue;
+        // For a cylinder all rims share the surface radius; for a cone the rim
+        // radius varies, so only filter against the hint when one is given.
+        if (radiusHint > 0.0 && std::abs(c.Radius() - radiusHint) > radTol)
+            continue;
+
+        const double pr = proj(c.Location());
+        // Merge with an existing rim at the same axial level + radius (collapses
+        // partial-arc duplicates from STEP face-splitting).  Arcs of the SAME
+        // rim are coincident to rebuild precision, so a tight ABSOLUTE level tol
+        // is correct (and avoids over-merging on parts placed far from origin);
+        // the radius tol is size-adaptive.
+        constexpr double kLevelTol = 1e-4;   // mm — same-rim arcs are coincident
+        bool merged = false;
+        for (Rim& r : rims) {
+            const double rTol = std::max(1e-4, 1e-3 * std::max(r.radius, c.Radius()));
+            if (std::abs(r.axialProj - pr) < kLevelTol &&
+                std::abs(r.radius   - c.Radius()) < rTol) {
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) rims.push_back(Rim{ c.Radius(), c.Location(), pr });
+    }
+    return rims;
+}
+
+// Collect cylinders along with their bounding-circle endpoints.  Only CONCAVE,
+// axis-wrapping cylinders (real pilot bores) survive — rods/bosses rejected.
 std::vector<CylInfo> collectCylinders(const Workpiece& wp)
 {
     std::vector<CylInfo> out;
@@ -293,83 +406,83 @@ std::vector<CylInfo> collectCylinders(const Workpiece& wp)
         info.faceIdx = fIdx;
         info.radius  = cyl.Radius();
         info.axis    = cyl.Axis();
+        if (info.radius <= 0.0) continue;
 
-        std::vector<gp_Pnt> centers;
-        for (TopExp_Explorer exp(f, TopAbs_EDGE); exp.More(); exp.Next()) {
-            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
-            BRepAdaptor_Curve crv(e);
-            if (crv.GetType() != GeomAbs_Circle) continue;
-            const gp_Circ c = crv.Circle();
-            if (std::abs(std::abs(c.Axis().Direction().Dot(info.axis.Direction())) - 1.0) > 1e-3)
-                continue;
-            if (std::abs(c.Radius() - info.radius) > 1e-3) continue;
-            centers.push_back(c.Location());
-        }
-        if (centers.size() < 2) continue;
+        // Concavity gate: a pilot bore wraps ≥ ~81° and is concave (solid
+        // outside).  Rejects turned rods / pins that are coaxial with a cone.
+        if (!surfaceOutwardNormalPointsToAxis(f, info.axis, 0.45 * M_PI))
+            continue;
 
-        const gp_Dir adir = info.axis.Direction();
-        auto proj = [&](const gp_Pnt& p) {
-            return (p.X() - info.axis.Location().X()) * adir.X() +
-                   (p.Y() - info.axis.Location().Y()) * adir.Y() +
-                   (p.Z() - info.axis.Location().Z()) * adir.Z();
-        };
-        auto cmp = [&](const gp_Pnt& a, const gp_Pnt& b) {
-            return proj(a) < proj(b);
-        };
-        const auto minIt = std::min_element(centers.begin(), centers.end(), cmp);
-        const auto maxIt = std::max_element(centers.begin(), centers.end(), cmp);
-        info.topCenter = *minIt;   // shallow (lower projection along axis direction)
-        info.botCenter = *maxIt;   // deeper
+        // Size-adaptive radius tolerance (drill_hole idiom): tolerant of STEP
+        // rebuild noise on big bores, tight on sub-mm pilots.
+        const double radTol = std::max(1e-4, 1e-3 * info.radius);
+        const auto rims = gatherRims(f, info.axis, info.radius, radTol);
+        if (rims.size() < 2) continue;
+
+        const auto minIt = std::min_element(rims.begin(), rims.end(),
+            [](const Rim& a, const Rim& b){ return a.axialProj < b.axialProj; });
+        const auto maxIt = std::max_element(rims.begin(), rims.end(),
+            [](const Rim& a, const Rim& b){ return a.axialProj < b.axialProj; });
+        info.topCenter = minIt->center;   // shallow (lower projection along axis)
+        info.botCenter = maxIt->center;   // deeper
         out.push_back(info);
     }
     return out;
 }
 
-// Collect conical faces with bounding-circle radii + endpoints.
+// Collect conical faces with bounding-circle radii + endpoints.  Only CONCAVE,
+// axis-wrapping cones (real countersink seats) survive — pointed bosses
+// (convex cones / spikes) and freeform slivers are rejected.
 std::vector<ConeInfo> collectCones(const Workpiece& wp)
 {
     std::vector<ConeInfo> out;
     for (int fIdx = 0; fIdx < wp.faceCount(); ++fIdx) {
-        BRepAdaptor_Surface surf(wp.face(fIdx));
+        const TopoDS_Face& f = wp.face(fIdx);
+        BRepAdaptor_Surface surf(f);
         if (surf.GetType() != GeomAbs_Cone) continue;
         const gp_Cone cone = surf.Cone();
 
         ConeInfo info;
         info.faceIdx      = fIdx;
-        info.semiAngleRad = std::abs(cone.SemiAngle());
+        info.semiAngleRad = std::abs(cone.SemiAngle());     // MEASURED half-angle
         info.axis         = cone.Axis();
 
-        // Collect circular edges with axis-aligned normal.
-        std::vector<std::pair<double, gp_Pnt>> circles;  // (radius, center)
-        for (TopExp_Explorer exp(wp.face(fIdx), TopAbs_EDGE); exp.More(); exp.Next()) {
-            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
-            BRepAdaptor_Curve crv(e);
-            if (crv.GetType() != GeomAbs_Circle) continue;
-            const gp_Circ c = crv.Circle();
-            if (std::abs(std::abs(c.Axis().Direction().Dot(info.axis.Direction())) - 1.0) > 1e-3)
-                continue;
-            circles.emplace_back(c.Radius(), c.Location());
-        }
-        if (circles.size() < 2) continue;
+        // Concavity gate: a countersink seat is a CONCAVE cone (solid outside).
+        // Rejects a pointed boss / turned spike (a convex protruding cone),
+        // mirroring drill_hole's RejectsConvexBossAsHole guarantee.
+        if (!surfaceOutwardNormalPointsToAxis(f, info.axis, 0.45 * M_PI))
+            continue;
+
+        // Gather the cone's bounding rims (large entry, small junction).  Cone
+        // rim radius VARIES with axial level, so we pass no radius hint and let
+        // gatherRims group partial arcs by axial level — STEP-split-safe.
+        const auto rims = gatherRims(f, info.axis, /*radiusHint*/ 0.0, /*radTol*/ 0.0);
+        if (rims.size() < 2) continue;
 
         // Largest / smallest by radius.
-        const auto minR = std::min_element(circles.begin(), circles.end(),
-            [](const auto& a, const auto& b){ return a.first < b.first; });
-        const auto maxR = std::max_element(circles.begin(), circles.end(),
-            [](const auto& a, const auto& b){ return a.first < b.first; });
-        if (std::abs(maxR->first - minR->first) < 1e-4) continue;  // not a frustum
+        const auto minR = std::min_element(rims.begin(), rims.end(),
+            [](const Rim& a, const Rim& b){ return a.radius < b.radius; });
+        const auto maxR = std::max_element(rims.begin(), rims.end(),
+            [](const Rim& a, const Rim& b){ return a.radius < b.radius; });
+        // Frustum guard: the two rims must differ in radius.  Tolerance scales
+        // with the rim size so it works from sub-mm seats to large bores.
+        const double rimSep = std::max(1e-4, 1e-3 * maxR->radius);
+        if (std::abs(maxR->radius - minR->radius) < rimSep) continue;  // not a frustum
 
-        info.rSmall      = minR->first;
-        info.smallCenter = minR->second;
-        info.rLarge      = maxR->first;
-        info.largeCenter = maxR->second;
+        info.rSmall      = minR->radius;
+        info.smallCenter = minR->center;
+        info.rLarge      = maxR->radius;
+        info.largeCenter = maxR->center;
         out.push_back(info);
     }
     return out;
 }
 
-// Two axes share an infinite-line (parallel + same support line)?
-bool sameAxis(const gp_Ax1& a, const gp_Ax1& b, double angTolDeg = 0.5, double posTolMm = 1e-3)
+// Two axes share an infinite-line (parallel + same support line)?  The caller
+// passes a size-adaptive posTolMm so coaxiality survives STEP rebuild jitter on
+// large features while staying tight on small ones.
+bool sameAxis(const gp_Ax1& a, const gp_Ax1& b,
+              double angTolDeg = 0.5, double posTolMm = 1e-3)
 {
     const gp_Dir da = a.Direction();
     const gp_Dir db = b.Direction();
@@ -388,6 +501,32 @@ bool sameAxis(const gp_Ax1& a, const gp_Ax1& b, double angTolDeg = 0.5, double p
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
+
+    // ── Metadata-replay fast-path ─────────────────────────────────────────
+    // If this workpiece still carries the countersink feature in its history
+    // (same instance that apply() produced, or a chain mirrored by the
+    // Executor), replay the authored params verbatim at confidence 1.0.  The
+    // GEOMETRIC fallback below is what hardens recognition on FOREIGN STEP
+    // (re-imported shapes with no feature history).
+    for (const auto& feat : wp.features()) {
+        if (feat.skill_id != kSkillId) continue;
+        const json& p = feat.params;
+        json recovered = {
+            { "position_x_mm",   p.value("position_x_mm",   0.0) },
+            { "position_y_mm",   p.value("position_y_mm",   0.0) },
+            { "axis_dir",        p.value("axis_dir", json::array({ 0.0, 0.0, -1.0 })) },
+            { "pilot_dia_mm",    p.value("pilot_dia_mm",    0.0) },
+            { "pilot_depth_mm",  p.value("pilot_depth_mm",  0.0) },
+            { "cone_top_dia_mm", p.value("cone_top_dia_mm", 0.0) },
+            { "cone_angle_deg",  p.value("cone_angle_deg",  0.0) },
+            { "cone_depth_mm",   p.value("cone_depth_mm",   0.0) },
+        };
+        json matched = { { "source", "metadata_replay" } };
+        out.push_back(RecognizedFeature{ kSkillId, recovered, 1.0, matched });
+    }
+    if (!out.empty()) return out;
+
+    // ── Geometric fallback ────────────────────────────────────────────────
     const auto cyls  = collectCylinders(wp);
     const auto cones = collectCones(wp);
     if (cyls.empty() || cones.empty()) return out;
@@ -403,9 +542,15 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             if (consumedCyl[yi]) continue;
             const CylInfo& cyl = cyls[yi];
 
-            if (!sameAxis(cone.axis, cyl.axis)) continue;
-            // The cone's SMALL end must match the cylinder radius
-            if (std::abs(cone.rSmall - cyl.radius) > 1e-2) continue;
+            // Size-adaptive coaxiality tolerance: scales with the rim radius so
+            // big bores survive STEP rebuild jitter without loosening sub-mm fits.
+            const double axisPosTol = std::max(1e-3, 1e-3 * std::max(cone.rLarge, cyl.radius));
+            if (!sameAxis(cone.axis, cyl.axis, 0.5, axisPosTol)) continue;
+            // The cone's SMALL end must match the pilot cylinder radius.
+            // Size-adaptive: tight on sub-mm pilots, tolerant of STEP rebuild
+            // noise on large bores.
+            const double dtol = std::max(1e-3, 1e-2 * cyl.radius);
+            if (std::abs(cone.rSmall - cyl.radius) > dtol) continue;
 
             // Drilling axis direction = from cone's large circle toward
             // cylinder's bottom (deeper end).
@@ -427,30 +572,42 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                 coneLargeProj, coneSmallProj, cylTopProj, cylBotProj
             });
 
-            if (std::abs(coneLargeProj - entryProj) > 1e-2) {
+            // Position/junction tolerances scale with the feature size (rim
+            // radius), so they hold on both watch-scale and big-bore parts.
+            const double sizeRef   = std::max(cone.rLarge, cyl.radius);
+            const double entryTol  = std::max(1e-2, 1e-2 * sizeRef);
+            const double junctTol  = std::max(1e-1, 2e-2 * sizeRef);
+
+            if (std::abs(coneLargeProj - entryProj) > entryTol) {
                 // The cone's LARGE end is NOT on the entry side → not a
-                // countersink in our orientation.
+                // countersink in our orientation (this also rejects a cone
+                // whose wide end points INTO the material).
                 continue;
             }
 
             // The cone's small end should meet the cylinder's top.
             const double junctionGap =
                 std::abs(coneSmallProj - cylTopProj);
-            if (junctionGap > 1e-1) continue;  // cone doesn't meet cylinder
+            if (junctionGap > junctTol) continue;  // cone doesn't meet cylinder
 
-            // Recover parameters.
+            // Recover parameters — all MEASURED off the OCCT surfaces:
+            //   pilot_dia    = 2 × cyl.Radius()
+            //   cone_top_dia = 2 × cone's larger bounding-rim radius
+            //   cone_angle   = 2 × |cone.SemiAngle()|   (INCLUDED angle)
+            //   pilot_depth  = entry→cylinder-bottom span along the axis
+            //   position     = entry rim centre (full 3-D, any axis)
             const double coneDepth = std::abs(coneLargeProj - coneSmallProj);
-            // pilot depth = total distance from entry to cylinder bottom.
             const double pilotDepth = std::abs(cylBotProj - entryProj);
             const double coneAngleDeg = 2.0 * cone.semiAngleRad * 180.0 / M_PI;
 
-            // Confidence heuristic
+            // Confidence heuristic (size-adaptive junction penalty).
             double conf = 0.92;
-            if (junctionGap > 1e-3) conf -= 0.1;
+            if (junctionGap > std::max(1e-3, 1e-3 * sizeRef)) conf -= 0.1;
 
             json recovered = {
                 { "position_x_mm",    cone.largeCenter.X() },
                 { "position_y_mm",    cone.largeCenter.Y() },
+                { "position_z_mm",    cone.largeCenter.Z() },   // full 3-D entry (any axis)
                 { "axis_dir",         { adir.X(), adir.Y(), adir.Z() } },
                 { "pilot_dia_mm",     2.0 * cyl.radius },
                 { "pilot_depth_mm",   pilotDepth },

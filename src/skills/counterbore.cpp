@@ -8,9 +8,17 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_List.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
+#include <TopAbs.hxx>
 #include <TopoDS.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -194,32 +202,109 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
 // ── Recognition ──────────────────────────────────────────────────────────
 //
-// Pattern matching strategy:
-//   1. Collect every cylindrical face into a list with its (radius, axis,
-//      top center along axis, bottom center along axis).
-//   2. For every pair (A, B) sharing the same axis (parallel direction +
-//      shared infinite-line within tolerance):
-//        - The one with LARGER radius and shallower extent from entry side
-//          is the SEAT.
-//        - The other (smaller, deeper) is the PILOT.
-//   3. Recover parameters: pilot_dia = 2·r_small, seat_dia = 2·r_large,
-//      seat_depth = |seat top − seat bottom|, pilot_depth = |seat top −
-//      pilot bottom|.
+// Pattern matching strategy (geometric, axis-orientation independent):
+//   1. Collect every CONCAVE cylindrical bore face (concavity gate rejects
+//      convex rods / stepped shafts / bosses + freeform slivers) with its
+//      radius, axis, both rim centers, and the largest planar face each rim
+//      opens onto.  All tolerances are size-adaptive (∝ radius).
+//   2. For every coaxial pair (parallel axis + shared infinite-line within a
+//      radius-scaled tolerance) with distinct radii:
+//        - SEAT  = larger radius, PILOT = smaller radius.
+//        - ENTRY = the seat rim that opens onto the LARGEST planar workpiece
+//          face (adjacency, NOT an assumed +Z) — works for a counterbore cut
+//          from any face, including the bottom.
+//        - The other seat rim is the step; the drill axis points entry → step.
+//   3. Recover: pilot_dia = 2·r_small, seat_dia = 2·r_large, seat_depth =
+//      proj(step), pilot_depth = proj(pilot deepest rim), all from the entry
+//      origin.  Reject unless seat_depth < pilot_depth and the pilot starts at
+//      the seat step (clean coaxial junction).
 
 namespace {
+
+// OCCT 8.0: use NCollection types directly; TopTools_* typedefs are deprecated.
+using EdgeFaceMap = NCollection_IndexedDataMap<
+    TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>;
+
+EdgeFaceMap buildEdgeFaceMap(const TopoDS_Shape& shape)
+{
+    EdgeFaceMap m;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, m);
+    return m;
+}
+
+// Machinability / concavity gate — is this cylindrical face an actual BORE
+// wall (concave), not a convex rod / boss / pin?
+//
+// A bore is CONCAVE: the solid is OUTSIDE the cylinder, so the face's
+// orientation-aware outward normal points INWARD, toward the axis.  A stepped
+// shaft / pin / boss is CONVEX (normal points outward) and must be rejected —
+// otherwise two coaxial convex cylinders of different radii (a stepped shaft)
+// would be mis-recognized as a counterbore.  A freeform tessellation sliver
+// barely wraps the axis and is also rejected.  Mirrors drill_hole's
+// isDrillableHoleWall().
+bool isConcaveBoreWall(const TopoDS_Face& f, const gp_Cylinder& cyl)
+{
+    BRepAdaptor_Surface s(f);
+
+    // (a) Sliver guard: the wall must wrap a meaningful arc of the axis.  A
+    //     real bore is a full cylinder (2π) or a few face-splits (≥ ~90° each).
+    const double uSpan = s.LastUParameter() - s.FirstUParameter();
+    if (uSpan < 0.45 * M_PI) return false;   // < 81° → freeform patch, not a wall
+
+    // (b) Concavity: the solid's outward normal points toward the axis.
+    const double u = 0.5 * (s.FirstUParameter() + s.LastUParameter());
+    const double v = 0.5 * (s.FirstVParameter() + s.LastVParameter());
+    gp_Pnt P; gp_Vec du, dv;
+    s.D1(u, v, P, du, dv);
+    gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1e-9) return false;
+    n.Normalize();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+
+    const gp_Pnt aLoc = cyl.Axis().Location();
+    const gp_Vec aDir(cyl.Axis().Direction());
+    gp_Vec ap(aLoc, P);
+    const gp_Vec radial = ap - aDir * ap.Dot(aDir);   // outward from the axis
+    if (radial.Magnitude() < 1e-9) return false;
+    return n.Dot(radial) < 0.0;                        // inward outward-normal ⇒ bore
+}
 
 struct CylInfo
 {
     int        faceIdx = -1;
     double     radius  = 0.0;
     gp_Ax1     axis;
-    gp_Pnt     topCenter;    // along axis direction, "entry" side
-    gp_Pnt     botCenter;    // along axis direction, deeper side
+    gp_Pnt     topCenter;       // ring with smaller proj along axis direction
+    gp_Pnt     botCenter;       // ring with larger  proj along axis direction
+    double     topAdjPlanar = 0.0;  // area of largest planar face the top ring opens onto
+    double     botAdjPlanar = 0.0;  // area of largest planar face the bot ring opens onto
     double     length = 0.0;
 };
 
-// Collect cylindrical faces with their bounding-circle endpoints.
-std::vector<CylInfo> collectCylinders(const Workpiece& wp)
+// Largest planar face (by area) adjacent to edge `e`, excluding `self`.  This
+// is the workpiece surface that a circular rim "opens onto" — large for an
+// entry face, ≈ π r² (the step annulus / blind bottom) for an interior rim.
+double largestAdjacentPlanarArea(const EdgeFaceMap& edgeFaces,
+                                 const TopoDS_Edge& e,
+                                 const TopoDS_Face& self)
+{
+    double area = 0.0;
+    if (!edgeFaces.Contains(e)) return area;
+    const auto& adj = edgeFaces.FindFromKey(e);
+    for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
+        const TopoDS_Face& af = TopoDS::Face(it.Value());
+        if (af.IsSame(self)) continue;
+        if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
+        GProp_GProps gp; BRepGProp::SurfaceProperties(af, gp);
+        area = std::max(area, gp.Mass());
+    }
+    return area;
+}
+
+// Collect CONCAVE cylindrical bore faces with their bounding-circle endpoints
+// and the planar-face adjacency at each rim (so entry can be picked by which
+// rim opens onto the larger workpiece face, axis-orientation independent).
+std::vector<CylInfo> collectCylinders(const Workpiece& wp, const EdgeFaceMap& edgeFaces)
 {
     std::vector<CylInfo> out;
     for (int fIdx = 0; fIdx < wp.faceCount(); ++fIdx) {
@@ -228,63 +313,80 @@ std::vector<CylInfo> collectCylinders(const Workpiece& wp)
         BRepAdaptor_Surface surf(cylFace);
         const gp_Cylinder cyl = surf.Cylinder();
 
+        // Concavity gate: only inward-facing bore walls — reject convex
+        // rods/bosses (a stepped shaft) and freeform slivers.
+        if (!isConcaveBoreWall(cylFace, cyl)) continue;
+
         CylInfo info;
         info.faceIdx = fIdx;
         info.radius  = cyl.Radius();
         info.axis    = cyl.Axis();
 
-        // Find circular edges on this face, along the same axis.
-        std::vector<gp_Pnt> centers;
-        for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
-            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
-            BRepAdaptor_Curve crv(e);
-            if (crv.GetType() != GeomAbs_Circle) continue;
-            const gp_Circ c = crv.Circle();
-            if (std::abs(std::abs(c.Axis().Direction().Dot(info.axis.Direction())) - 1.0) > 1e-3)
-                continue;
-            if (std::abs(c.Radius() - info.radius) > 1e-3) continue;
-            centers.push_back(c.Location());
-        }
-        if (centers.size() < 2) continue;
-
         const gp_Dir adir = info.axis.Direction();
+        // Size-adaptive radius match: works from sub-mm bores to large seats
+        // and tolerates STEP-rebuild noise (a fixed 1e-3 is too tight for a
+        // re-tessellated face and too loose for a 0.5 mm pilot).
+        const double radTol = std::max(1e-4, 1e-3 * info.radius);
+
         auto projOnAxis = [&](const gp_Pnt& p) {
             return (p.X() - info.axis.Location().X()) * adir.X() +
                    (p.Y() - info.axis.Location().Y()) * adir.Y() +
                    (p.Z() - info.axis.Location().Z()) * adir.Z();
         };
-        auto cmp = [&](const gp_Pnt& a, const gp_Pnt& b) {
-            return projOnAxis(a) < projOnAxis(b);
-        };
-        const auto minIt = std::min_element(centers.begin(), centers.end(), cmp);
-        const auto maxIt = std::max_element(centers.begin(), centers.end(), cmp);
-        // The "top" (entry) center is the one against the drilling
-        // direction (smaller projection along axis_into-material), so
-        // higher in workpiece-Z for a top-face drill.  We treat axis
-        // direction as "into material", so botCenter (deeper) has
-        // LARGER projection along axis direction.
-        info.botCenter = *maxIt;
-        info.topCenter = *minIt;
-        info.length    = info.botCenter.Distance(info.topCenter);
+
+        // Find circular rims on this face, along the same axis, recording the
+        // largest planar face each rim opens onto.
+        struct Rim { gp_Pnt center; double adjPlanar; double proj; };
+        std::vector<Rim> rims;
+        for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
+            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
+            BRepAdaptor_Curve crv(e);
+            if (crv.GetType() != GeomAbs_Circle) continue;
+            const gp_Circ c = crv.Circle();
+            if (std::abs(std::abs(c.Axis().Direction().Dot(adir)) - 1.0) > 1e-3)
+                continue;
+            if (std::abs(c.Radius() - info.radius) > radTol) continue;
+            rims.push_back({ c.Location(),
+                             largestAdjacentPlanarArea(edgeFaces, e, cylFace),
+                             projOnAxis(c.Location()) });
+        }
+        if (rims.size() < 2) continue;
+
+        const auto minIt = std::min_element(rims.begin(), rims.end(),
+            [](const Rim& a, const Rim& b){ return a.proj < b.proj; });
+        const auto maxIt = std::max_element(rims.begin(), rims.end(),
+            [](const Rim& a, const Rim& b){ return a.proj < b.proj; });
+        // Axis direction is a geometric label only (a cylinder's axis can point
+        // either way after STEP import); "top"/"bot" here just mean the two
+        // extreme rims along that direction.  Entry vs deep is decided later by
+        // ADJACENCY, never by an assumed +Z.
+        info.topCenter    = minIt->center;
+        info.botCenter    = maxIt->center;
+        info.topAdjPlanar = minIt->adjPlanar;
+        info.botAdjPlanar = maxIt->adjPlanar;
+        info.length       = info.botCenter.Distance(info.topCenter);
         out.push_back(info);
     }
     return out;
 }
 
-// Two cylinders share an axis (infinite-line) within tolerance?
-bool sameAxis(const CylInfo& a, const CylInfo& b, double angTolDeg = 0.5, double posTolMm = 1e-3)
+// Two cylinders share an axis (infinite-line) within size-adaptive tolerance?
+bool sameAxis(const CylInfo& a, const CylInfo& b, double angTolDeg = 0.5)
 {
     const gp_Dir da = a.axis.Direction();
     const gp_Dir db = b.axis.Direction();
     const double dot = std::abs(da.X() * db.X() + da.Y() * db.Y() + da.Z() * db.Z());
     if (dot < std::cos(angTolDeg * M_PI / 180.0)) return false;
     // Position check: distance from b.axis.Location() to the infinite line
-    // through a.axis.Location() along da.
+    // through a.axis.Location() along da.  Tolerance scales with the larger
+    // radius so a big seat survives STEP-rebuild axis jitter while a tiny
+    // pilot still demands genuine coaxiality.
     const gp_Pnt& pa = a.axis.Location();
     const gp_Pnt& pb = b.axis.Location();
     gp_Vec v(pa, pb);
     gp_Vec axV(da.X(), da.Y(), da.Z());
     gp_Vec perp = v - axV * v.Dot(axV);
+    const double posTolMm = std::max(1e-3, 1e-3 * std::max(a.radius, b.radius));
     return perp.Magnitude() < posTolMm;
 }
 
@@ -293,7 +395,8 @@ bool sameAxis(const CylInfo& a, const CylInfo& b, double angTolDeg = 0.5, double
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
-    const auto cyls = collectCylinders(wp);
+    const EdgeFaceMap edgeFaces = buildEdgeFaceMap(wp.shape());
+    const auto cyls = collectCylinders(wp, edgeFaces);
     if (cyls.size() < 2) return out;
 
     std::vector<bool> consumed(cyls.size(), false);
@@ -307,60 +410,69 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             const CylInfo& small = (cyls[i].radius < cyls[j].radius) ? cyls[i] : cyls[j];
             const CylInfo& large = (cyls[i].radius < cyls[j].radius) ? cyls[j] : cyls[i];
 
-            if (std::abs(large.radius - small.radius) < 1e-3) continue;  // same dia
+            // Distinct radii required (size-adaptive on the larger seat).
+            const double diaTol = std::max(1e-4, 1e-3 * large.radius);
+            if (std::abs(large.radius - small.radius) < diaTol) continue;
 
-            // Determine the drilling direction (entry → deeper).
-            // The seat (large) must be on the entry side.  Sample the
-            // axis direction "into material" by picking the orientation
-            // that places `large` shallower than `small`.
-            const gp_Dir adir = small.axis.Direction();
+            // ── Entry identification by ADJACENCY, not by an assumed +Z ──────
+            //
+            // The four rims of the pair each open onto a planar face.  The seat
+            // entry rim opens onto the LARGE workpiece surface (the part face
+            // where the screw head seats); the step annulus and pilot bottom
+            // open onto ≈ π r² planar faces.  Whichever seat rim has the
+            // largest planar neighbour is the entry — this is what makes the
+            // recognizer work for a counterbore cut from ANY face, including
+            // the bottom (axis pointing +Z), not just a top-face (-Z) bore.
+            //
+            // Pick the seat entry rim by max adjacent planar area; the OTHER
+            // seat rim is the step.  This is robust to STEP face-area noise
+            // because the entry surface (50×50 block face) dwarfs the annulus.
+            const bool seatTopIsEntry = large.topAdjPlanar >= large.botAdjPlanar;
+            const gp_Pnt seatEntryCenter = seatTopIsEntry ? large.topCenter : large.botCenter;
+            const gp_Pnt seatStepCenter  = seatTopIsEntry ? large.botCenter : large.topCenter;
+
+            // Drill direction = entry → into the material (entry → step), with
+            // a meaningful sign for ANY axis orientation.
+            gp_Vec drillVec(seatEntryCenter, seatStepCenter);
+            if (drillVec.Magnitude() < 1e-6) continue;
+            drillVec.Normalize();
+            const gp_Dir adir(drillVec);
+
+            // Project every relevant center onto the drill axis; entry is the
+            // origin (proj 0), deeper is positive.
             auto proj = [&](const gp_Pnt& p) {
-                return (p.X() - small.axis.Location().X()) * adir.X() +
-                       (p.Y() - small.axis.Location().Y()) * adir.Y() +
-                       (p.Z() - small.axis.Location().Z()) * adir.Z();
+                return (p.X() - seatEntryCenter.X()) * adir.X() +
+                       (p.Y() - seatEntryCenter.Y()) * adir.Y() +
+                       (p.Z() - seatEntryCenter.Z()) * adir.Z();
             };
-            // Pick the entry side: between the four endpoints
-            // {large.topCenter, large.botCenter, small.topCenter,
-            // small.botCenter}, the entry is the SHALLOWEST along axis_dir.
-            const double entryProj = std::min({
-                proj(large.topCenter), proj(large.botCenter),
-                proj(small.topCenter), proj(small.botCenter)
-            });
 
-            const double largeEntryProj = std::min(proj(large.topCenter), proj(large.botCenter));
-            if (std::abs(largeEntryProj - entryProj) > 1e-3) {
-                // Large is NOT on entry — not a counterbore arrangement.
-                continue;
-            }
+            const double seatDepth = proj(seatStepCenter);                // > 0
+            if (seatDepth <= 1e-6) continue;                              // seat must descend
 
-            const double smallEntryProj = std::min(proj(small.topCenter), proj(small.botCenter));
-            // Seat depth = how far the large extends from entry.
-            const double seatDepth   = std::abs(proj(large.topCenter) - proj(large.botCenter));
-            // Pilot depth: total pilot extent from entry to the small's
-            // deeper end.  Small.topCenter sits at seatDepth (right where
-            // seat ends); pilot ends at smallBotCenter.
-            const double smallDeepProj = std::max(proj(small.topCenter), proj(small.botCenter));
-            const double pilotDepth    = smallDeepProj - entryProj;
+            // Pilot deepest rim along the drill axis → pilot depth from entry.
+            const double pilotDeepProj = std::max(proj(small.topCenter), proj(small.botCenter));
+            const double pilotShallowProj = std::min(proj(small.topCenter), proj(small.botCenter));
+            const double pilotDepth = pilotDeepProj;
 
-            // Verify pilot starts at (or beyond) the seat-bottom — i.e.
-            // small.topCenter is near large.botCenter along the axis
-            // (small's shallow end ≈ large's deep end).
-            const double junctionGap = std::abs(smallEntryProj -
-                                                (entryProj + seatDepth));
-            if (junctionGap > 1e-2) continue;  // not a clean step
+            // Counterbore geometry sanity: seat is shallower than pilot.
+            if (seatDepth >= pilotDepth) continue;
 
-            // Recover position from the seat top circle (entry-face circle).
-            const gp_Pnt seatEntryCenter =
-                (proj(large.topCenter) < proj(large.botCenter)) ? large.topCenter
-                                                                : large.botCenter;
+            // Verify the pilot starts at the seat step (clean coaxial step):
+            // the pilot's shallow rim sits at ≈ seatDepth along the axis.
+            // Tolerance scales with the seat depth so STEP rebuild jitter on a
+            // large feature doesn't reject a genuine step.
+            const double junctionTol = std::max(1e-2, 1e-3 * seatDepth);
+            const double junctionGap = std::abs(pilotShallowProj - seatDepth);
+            if (junctionGap > 10.0 * junctionTol) continue;   // not a clean step
 
-            // Confidence heuristic: penalize loose axis alignment / gap.
+            // Confidence heuristic: penalize a loose step junction.
             double conf = 0.92;
-            if (junctionGap > 1e-3) conf -= 0.2;
+            if (junctionGap > junctionTol) conf -= 0.2;
 
             json recovered = {
                 { "position_x_mm",   seatEntryCenter.X() },
                 { "position_y_mm",   seatEntryCenter.Y() },
+                { "position_z_mm",   seatEntryCenter.Z() },   // full 3-D entry (any axis)
                 { "axis_dir",        { adir.X(), adir.Y(), adir.Z() } },
                 { "pilot_dia_mm",    2.0 * small.radius },
                 { "pilot_depth_mm",  pilotDepth },

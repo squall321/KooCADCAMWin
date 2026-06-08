@@ -19,13 +19,13 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace koocadcam::skill::mill_circular_pocket {
 
@@ -209,6 +209,45 @@ EdgeFaceMap buildEdgeFaceMap(const TopoDS_Shape& shape)
     return m;
 }
 
+// Concavity gate — is this cylindrical face an actual POCKET / BORE wall?
+//
+// A milled circular pocket is a CONCAVE cylinder: the solid lies OUTSIDE the
+// cylinder, so the face's orientation-aware outward normal (into the void)
+// points INWARD, toward the axis.  A rod / boss / pin / spigot is CONVEX (its
+// outward normal points away from the axis) and must be rejected — otherwise
+// the recognizer would report a turned post that happens to butt against a
+// small flat as a "pocket".  A tessellated sliver on a freeform surface barely
+// wraps the axis at all, so we also require the wall to span a meaningful arc.
+// Mirrors drill_hole::isDrillableHoleWall so drill and pocket agree on what a
+// concave bore wall is; the two skills are then separated by aspect ratio.
+bool isConcavePocketWall(const TopoDS_Face& f, const gp_Cylinder& cyl)
+{
+    BRepAdaptor_Surface s(f);
+
+    // (a) Sliver guard: the wall must wrap a meaningful arc of the axis.  A
+    //     real pocket wall is a full cylinder (2π) or a few face-splits
+    //     (>= ~90° each).  < 81° ⇒ freeform patch, not a machined wall.
+    const double uSpan = s.LastUParameter() - s.FirstUParameter();
+    if (uSpan < 0.45 * M_PI) return false;
+
+    // (b) Concavity: the solid's outward normal points TOWARD the axis.
+    const double u = 0.5 * (s.FirstUParameter() + s.LastUParameter());
+    const double v = 0.5 * (s.FirstVParameter() + s.LastVParameter());
+    gp_Pnt P; gp_Vec du, dv;
+    s.D1(u, v, P, du, dv);
+    gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1e-9) return false;
+    n.Normalize();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+
+    const gp_Pnt aLoc = cyl.Axis().Location();
+    const gp_Vec aDir(cyl.Axis().Direction());
+    gp_Vec ap(aLoc, P);
+    const gp_Vec radial = ap - aDir * ap.Dot(aDir);   // outward from the axis
+    if (radial.Magnitude() < 1e-9) return false;
+    return n.Dot(radial) < 0.0;                        // inward normal ⇒ concave bore
+}
+
 }  // namespace
 
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
@@ -227,9 +266,25 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Ax1   axis   = cyl.Axis();
         const gp_Dir   adir   = axis.Direction();
 
-        // Collect circular edges that bound the cylinder, taking only the
-        // two extreme circles (top + bottom) along the cyl axis.
-        std::vector<gp_Pnt> circleCenters;
+        // Concavity gate: only a concave, axis-wrapping cylinder is a pocket
+        // wall.  Rejects convex rods/bosses/spigots and freeform tessellation
+        // slivers (mirrors drill_hole::isDrillableHoleWall).
+        if (!isConcavePocketWall(cylFace, cyl)) continue;
+
+        // Size-adaptive tolerances: a fixed 1e-2 mm rejects sub-mm pockets and
+        // over-accepts large bores, and STEP rebuild noise scales with radius.
+        const double radTol = std::max(1e-4, 1e-3 * radius);
+
+        // Each circular edge that rings the cylinder is recorded together with
+        // the area of the LARGEST planar face adjacent to it — that is the
+        // workpiece surface the ring opens onto: large for the open entry
+        // mouth, ≈ π r² for the flat pocket bottom.  We use this adjacency
+        // (NOT an "entry is higher in Z" assumption) to tell entry from bottom,
+        // so the recovery is correct for a pocket milled along ANY axis.
+        struct Ring { gp_Pnt center; double adjPlanarArea; };
+        std::vector<Ring> rings;
+        bool hasToroidalAdjacent  = false;
+        double recoveredCornerR   = 0.0;
         for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
             const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
             BRepAdaptor_Curve crv(e);
@@ -237,56 +292,51 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             const gp_Circ c = crv.Circle();
             if (std::abs(std::abs(c.Axis().Direction().Dot(adir)) - 1.0) > 1e-3)
                 continue;
-            if (std::abs(c.Radius() - radius) > 1e-2) continue;
-            circleCenters.push_back(c.Location());
+            if (std::abs(c.Radius() - radius) > radTol) continue;
+            double adjMax = 0.0;
+            if (edgeFaces.Contains(e)) {
+                const auto& adj = edgeFaces.FindFromKey(e);
+                for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
+                    const TopoDS_Face& af = TopoDS::Face(it.Value());
+                    if (af.IsSame(cylFace)) continue;
+                    BRepAdaptor_Surface as(af);
+                    if (as.GetType() == GeomAbs_Plane) {
+                        GProp_GProps gp; BRepGProp::SurfaceProperties(af, gp);
+                        adjMax = std::max(adjMax, gp.Mass());
+                    } else if (as.GetType() == GeomAbs_Torus) {
+                        hasToroidalAdjacent = true;
+                        // Corner-radius end-mill ⇒ MEASURE the blend minor
+                        // radius directly from the torus rather than guessing.
+                        if (recoveredCornerR <= 0.0)
+                            recoveredCornerR = as.Torus().MinorRadius();
+                    }
+                }
+            }
+            rings.push_back({ c.Location(), adjMax });
         }
-        if (circleCenters.size() < 2) continue;
+        if (rings.size() < 2) continue;
 
+        // A pocket must open onto at least one bounded flat: the floor (small,
+        // ≈ π r²) and/or the entry mouth (large).  If NO ring opens onto a
+        // planar face, this is not a flat-bottom pocket.
+        bool hasPlanarAdjacent = false;
+        for (const Ring& r : rings) if (r.adjPlanarArea > 0.0) hasPlanarAdjacent = true;
+        if (!hasPlanarAdjacent) continue;
+
+        // Two extreme rings along the cylinder axis — orientation-independent.
         auto projOnAxis = [&](const gp_Pnt& p) {
             return (p.X() - axis.Location().X()) * adir.X() +
                    (p.Y() - axis.Location().Y()) * adir.Y() +
                    (p.Z() - axis.Location().Z()) * adir.Z();
         };
-        auto cmp = [&](const gp_Pnt& a, const gp_Pnt& b) {
-            return projOnAxis(a) < projOnAxis(b);
-        };
-        const auto minIt = std::min_element(circleCenters.begin(), circleCenters.end(), cmp);
-        const auto maxIt = std::max_element(circleCenters.begin(), circleCenters.end(), cmp);
-        const gp_Pnt centerLow  = *minIt;
-        const gp_Pnt centerHigh = *maxIt;
-        const double depth = centerHigh.Distance(centerLow);
+        const Ring& loRing = *std::min_element(rings.begin(), rings.end(),
+            [&](const Ring& a, const Ring& b){ return projOnAxis(a.center) < projOnAxis(b.center); });
+        const Ring& hiRing = *std::max_element(rings.begin(), rings.end(),
+            [&](const Ring& a, const Ring& b){ return projOnAxis(a.center) < projOnAxis(b.center); });
 
-        // We need TWO planar adjacent faces:
-        //   - the large planar (the entry face — the workpiece top)
-        //   - the small planar (the pocket bottom) of area ≈ π r² OR a
-        //     smaller area if there's a bottom-corner fillet (in which case
-        //     a toroidal adjacent face also exists).
-        //
-        // If the smallest adjacent planar is NOT close to π r² we skip
-        // (it may be a drill_hole's blind bottom which is exactly π r²
-        // anyway — we use ASPECT RATIO to distinguish drill from pocket).
-        bool hasSmallPlanarBottom = false;
-        bool hasToroidalAdjacent  = false;
-        double smallestAdjPlanarArea = std::numeric_limits<double>::max();
-        for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
-            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
-            if (!edgeFaces.Contains(e)) continue;
-            const auto& adj = edgeFaces.FindFromKey(e);
-            for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
-                const TopoDS_Face& af = TopoDS::Face(it.Value());
-                if (af.IsSame(cylFace)) continue;
-                BRepAdaptor_Surface as(af);
-                if (as.GetType() == GeomAbs_Plane) {
-                    GProp_GProps gp;
-                    BRepGProp::SurfaceProperties(af, gp);
-                    smallestAdjPlanarArea = std::min(smallestAdjPlanarArea, gp.Mass());
-                    hasSmallPlanarBottom = true;
-                } else if (as.GetType() == GeomAbs_Torus) {
-                    hasToroidalAdjacent = true;
-                }
-            }
-        }
-        if (!hasSmallPlanarBottom) continue;
+        // depth = wall length = cylinder-wall span to the flat bottom.
+        const double depth = hiRing.center.Distance(loRing.center);
+        if (depth < 1e-6) continue;
 
         // Distinguish from drill_hole by aspect ratio: pockets are wide
         // (depth/dia < 2).  Above 2, defer to drill_hole skill.
@@ -294,43 +344,38 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const double ratio = (dia > 0.0) ? depth / dia : 0.0;
         if (ratio >= 2.0) continue;
 
-        // The expected pocket-bottom area is π r² (sharp corner) or
-        // π (r - rCorner)² + toroidal area for the fillet case.  We don't
-        // try to invert this exactly — we just check "small planar exists".
+        // Entry vs flat bottom from ADJACENCY, not axis order: the floor opens
+        // onto a small (≈ π r²) face, the entry mouth onto the larger surface.
+        // The recovered position is the ENTRY centre (where the tool plunges).
+        const double bottomArea = M_PI * radius * radius;
+        const bool loIsBottom = loRing.adjPlanarArea > 0.0 && loRing.adjPlanarArea <= bottomArea * 1.5;
+        const bool hiIsBottom = hiRing.adjPlanarArea > 0.0 && hiRing.adjPlanarArea <= bottomArea * 1.5;
+
+        const Ring* entry  = &hiRing;
+        const Ring* bottom = &loRing;
+        if (loIsBottom && !hiIsBottom)            { entry = &hiRing; bottom = &loRing; }
+        else if (hiIsBottom && !loIsBottom)       { entry = &loRing; bottom = &hiRing; }
+        else if (loRing.adjPlanarArea > hiRing.adjPlanarArea) { entry = &loRing; bottom = &hiRing; }
+        // else: keep entry=hiRing (both/neither resolved → fall back to axis order)
+
+        // The pocket-bottom planar area drives confidence: a clean flat bottom
+        // is ≈ π r² (sharp corner) or π (r - rCorner)² for a corner-radius mill.
         const double expectedSharpBottom = M_PI * radius * radius;
-        // Confidence drops if planar area is far off the disc-area expectation.
-        const double areaErr = std::abs(smallestAdjPlanarArea - expectedSharpBottom)
-                             / std::max(1e-6, expectedSharpBottom);
+        const double floorArea = bottom->adjPlanarArea;
+        const double areaErr = (floorArea > 0.0)
+            ? std::abs(floorArea - expectedSharpBottom) / std::max(1e-6, expectedSharpBottom)
+            : 1.0;
         const double conf = std::clamp(0.90 - 0.5 * std::min(areaErr, 1.0), 0.4, 0.95);
 
-        // Recover bottom_corner_r heuristically: if we saw a torus, look it up.
-        double recoveredCornerR = 0.0;
-        if (hasToroidalAdjacent) {
-            for (TopExp_Explorer exp(cylFace, TopAbs_EDGE); exp.More(); exp.Next()) {
-                const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
-                if (!edgeFaces.Contains(e)) continue;
-                const auto& adj = edgeFaces.FindFromKey(e);
-                for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
-                    const TopoDS_Face& af = TopoDS::Face(it.Value());
-                    if (af.IsSame(cylFace)) continue;
-                    BRepAdaptor_Surface as(af);
-                    if (as.GetType() == GeomAbs_Torus) {
-                        recoveredCornerR = as.Torus().MinorRadius();
-                        break;
-                    }
-                }
-                if (recoveredCornerR > 0.0) break;
-            }
-        }
-
-        // drill direction = from high → low (entry → bottom)
-        gp_Vec drillVec(centerHigh, centerLow);
+        // Plunge direction points entry → bottom (sign meaningful for any axis).
+        gp_Vec drillVec(entry->center, bottom->center);
         if (drillVec.Magnitude() < 1e-6) continue;
         drillVec.Normalize();
 
         json recovered = {
-            { "position_x_mm",       centerHigh.X() },
-            { "position_y_mm",       centerHigh.Y() },
+            { "position_x_mm",       entry->center.X() },
+            { "position_y_mm",       entry->center.Y() },
+            { "position_z_mm",       entry->center.Z() },   // full 3-D entry (any axis)
             { "axis_dir",            { drillVec.X(), drillVec.Y(), drillVec.Z() } },
             { "diameter_mm",         dia },
             { "depth_mm",            depth },
@@ -338,9 +383,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         };
         json matched = {
             { "cylindrical_face_id",   fIdx },
-            { "top_center",            { centerHigh.X(), centerHigh.Y(), centerHigh.Z() } },
-            { "bottom_center",         { centerLow.X(),  centerLow.Y(),  centerLow.Z()  } },
-            { "bottom_planar_area",    smallestAdjPlanarArea },
+            { "top_center",            { entry->center.X(),  entry->center.Y(),  entry->center.Z()  } },
+            { "bottom_center",         { bottom->center.X(), bottom->center.Y(), bottom->center.Z() } },
+            { "bottom_planar_area",    floorArea },
             { "has_torus_blend",       hasToroidalAdjacent },
         };
         out.push_back(RecognizedFeature{ kSkillId, recovered, conf, matched });
