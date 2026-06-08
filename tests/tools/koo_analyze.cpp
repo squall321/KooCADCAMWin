@@ -27,11 +27,17 @@ using namespace koocadcam;
 int main(int argc, char* argv[])
 {
     if (argc < 2) {
-        std::cerr << "Usage: koo_analyze <file.step> [min_confidence=0.5]\n";
+        std::cerr << "Usage: koo_analyze <file.step> [min_confidence=0.5] [csv]\n";
         return 2;
     }
     const std::string path = argv[1];
-    const double minConf = (argc >= 3) ? std::atof(argv[2]) : 0.5;
+    double minConf = 0.5;
+    bool csvMode = false;
+    for (int i = 2; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "csv" || a == "--csv") csvMode = true;
+        else minConf = std::atof(a.c_str());
+    }
 
     std::string err;
     auto shape = io::StepIO::read(path, err);
@@ -48,20 +54,45 @@ int main(int argc, char* argv[])
     try { GProp_GProps gp; BRepGProp::VolumeProperties(*shape, gp); vol = gp.Mass(); }
     catch (...) {}
 
-    std::cout << "=== koo_analyze: " << path << " ===\n";
-    std::cout << "faces=" << wp.faceCount()
-              << "  edges=" << wp.edgeCount()
-              << "  volume_mm3=" << vol << "\n";
-    std::cout << "bbox_mm = [" << xMin << ", " << yMin << ", " << zMin << "] .. ["
-              << xMax << ", " << yMax << ", " << zMax << "]"
-              << "  (" << (xMax - xMin) << " x " << (yMax - yMin)
-              << " x " << (zMax - zMin) << ")\n\n";
+    if (!csvMode) {
+        std::cout << "=== koo_analyze: " << path << " ===\n";
+        std::cout << "faces=" << wp.faceCount()
+                  << "  edges=" << wp.edgeCount()
+                  << "  volume_mm3=" << vol << "\n";
+        std::cout << "bbox_mm = [" << xMin << ", " << yMin << ", " << zMin << "] .. ["
+                  << xMax << ", " << yMax << ", " << zMax << "]"
+                  << "  (" << (xMax - xMin) << " x " << (yMax - yMin)
+                  << " x " << (zMax - zMin) << ")\n\n";
+    }
 
     // Reverse-engineer: every recognizer, de-duplicated, above the threshold.
     auto cands = re::analyze(wp);
     auto deduped = re::dedupe(cands);
     std::sort(deduped.begin(), deduped.end(),
               [](const auto& a, const auto& b){ return a.confidence > b.confidence; });
+
+    // CSV feature table (machining-feature BOM) — one row per recovered feature.
+    if (csvMode) {
+        auto cell = [](const nlohmann::json& p, const char* k) -> std::string {
+            return (p.contains(k) && p[k].is_number())
+                       ? std::to_string(p[k].get<double>()) : "";
+        };
+        std::cout << "skill,dia_mm,seat_dia_mm,pilot_dia_mm,depth_mm,angle_deg,"
+                     "x_mm,y_mm,z_mm,through,confidence\n";
+        for (const auto& c : deduped) {
+            if (c.confidence < minConf) continue;
+            const auto& p = c.recovered_params;
+            const bool thru = p.value("through_hole", false);
+            std::cout << c.skill_id << ','
+                      << cell(p, "diameter_mm") << ',' << cell(p, "seat_dia_mm") << ','
+                      << cell(p, "pilot_dia_mm") << ',' << cell(p, "depth_mm") << ','
+                      << cell(p, "angle_deg") << ','
+                      << cell(p, "position_x_mm") << ',' << cell(p, "position_y_mm") << ','
+                      << cell(p, "position_z_mm") << ','
+                      << (thru ? "yes" : "no") << ',' << c.confidence << '\n';
+        }
+        return 0;
+    }
 
     std::map<std::string, int> bySkill;
     int shown = 0;
