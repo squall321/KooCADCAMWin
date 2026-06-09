@@ -1235,6 +1235,17 @@ koo_apply_compiler_flags(integration_frame_reframe)
 add_test(NAME integration_frame_reframe COMMAND integration_frame_reframe)
 set_tests_properties(integration_frame_reframe PROPERTIES TIMEOUT 180)
 
+# ── Integration: modify a foreign hole in place + re-verify (koo_modify core) ─
+add_executable(integration_modify_in_place
+    integration/modify_in_place_test.cpp)
+target_link_libraries(integration_modify_in_place PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills koo_process koo_re koo_io koo_engine)
+target_include_directories(integration_modify_in_place SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(integration_modify_in_place)
+add_test(NAME integration_modify_in_place COMMAND integration_modify_in_place)
+set_tests_properties(integration_modify_in_place PROPERTIES TIMEOUT 120)
+
 # ── Parts layout + datum graph + reframePlanForMoves (Layer 6) ────────────
 # (was previously unregistered — never built/run; now wired in.)
 add_executable(parts_layout_test parts/parts_layout_test.cpp)
