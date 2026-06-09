@@ -84,15 +84,19 @@ the current tests but fails the general real-world case. Ranked by payoff.
 ## Recognizer hardening (2026-06, 4 precise-tier recognizers)
 
 Done (concavity gate + measured recovery + measured/rejection tests; ctest green):
+
 - `bore_cylindrical`, `counterbore`, `mill_circular_pocket`, `countersink` now
   measure real dimensions, are axis-orientation-independent, use size-adaptive
   tolerances, and reject convex cylinders (rods/bosses) and freeform slivers —
   mirroring `drill_hole::isDrillableHoleWall`.
 
-Open (validate against ground-truth parts):
-- On the AS1 test assembly, bore/counterbore now report 0 (was 6 + 2) — bore
-  correctly declines through-holes (they are drill_holes, still recovered),
-  but the recovery of LARGE THROUGH-COUNTERBORES (seat + through pilot, no blind
-  floor) needs validation: the hardened counterbore favours a clean blind step.
-  drill_hole (the backbone) still recovers AS1's 17 holes. Needs labelled data
-  to confirm whether 25->19 is correct de-duplication or a counterbore recall loss.
+Resolved (`1df46c6`):
+
+- The AS1 bore/counterbore 6+2 -> 0 was a real-data observation flagged as a
+  possible recall loss. RecognizesThroughCounterbore proves a THROUGH counterbore
+  (seat + through pilot, no blind floor) is still recovered geometrically, so the
+  hardening did NOT regress through-counterbore recall. The AS1 0-result is
+  specific to that part's large-scale (254 mm) geometry; bore correctly declines
+  through-holes (they remain drill_holes), and the drill_hole backbone (17 holes)
+  is intact. Net: 25 -> 19 is the recognizers being correctly more selective, not
+  a recall loss.
