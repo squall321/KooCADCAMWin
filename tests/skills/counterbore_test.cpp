@@ -335,3 +335,33 @@ TEST(SkillCounterbore, RejectsConvexSteppedShaftAsCounterbore)
     EXPECT_TRUE(candidates.empty())
         << "a convex stepped shaft must NOT be recognized as a counterbore";
 }
+
+// ─── Through-counterbore recovery (resolves the AS1 0-recall question) ─────
+//
+// A counterbore whose pilot goes THROUGH the plate (no blind floor). The
+// hardened recognizer must still recover it geometrically; if it cannot, the
+// hardening lost through-counterbore recall (the AS1 regression risk).
+TEST(SkillCounterbore, RecognizesThroughCounterbore)
+{
+    auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
+    skill::counterbore::Input in;
+    in.entry_face    = skill::FaceByNormal{ gp_Dir(0,0,1) };
+    in.position_x_mm = 25.0; in.position_y_mm = 25.0;
+    in.axis_dir      = gp_Dir(0,0,-1);
+    in.pilot_dia_mm  = 4.0; in.pilot_depth_mm = 12.0;   // through the 10mm plate
+    in.seat_dia_mm   = 9.0; in.seat_depth_mm  = 3.0;
+    auto out = skill::counterbore::apply(*stock, in);
+
+    skill::Workpiece fresh(out.workpiece->shape());
+    auto cands = skill::counterbore::recognize(fresh);
+
+    bool found = false;
+    for (const auto& c : cands) {
+        const auto& p = c.recovered_params;
+        if (std::abs(p.value("seat_dia_mm", 0.0)  - 9.0) < 0.2 &&
+            std::abs(p.value("pilot_dia_mm", 0.0) - 4.0) < 0.2) { found = true; break; }
+    }
+    EXPECT_TRUE(found)
+        << "hardened counterbore must still recover a THROUGH counterbore "
+           "(seat 9 + pilot 4) — else AS1's counterbore recall was lost";
+}
