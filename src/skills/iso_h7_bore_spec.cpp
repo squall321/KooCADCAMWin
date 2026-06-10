@@ -293,6 +293,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     };
 
     auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::iso_h7_bore_spec applied: nominal {} → final {} mm, depth {}",

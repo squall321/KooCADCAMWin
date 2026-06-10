@@ -83,7 +83,9 @@ TEST(SkillReam, ApplyEnlargesExistingBore)
     EXPECT_NEAR(rAfter, rBefore + 0.10, 1e-3)
         << "ream should enlarge bore radius by enlarge_by_mm";
 
-    EXPECT_EQ(out.workpiece->features().size(), 1u);
+    // Chain contract: prior bore feature + ream = 2 (full history).
+    EXPECT_EQ(out.workpiece->features().size(), 2u);
+    EXPECT_EQ(out.workpiece->features().back().skill_id, std::string("ream"));
     EXPECT_EQ(out.signature.skill_id, std::string("ream"));
 
     // Removed volume = annulus area × extent (≈ depth).
@@ -196,9 +198,10 @@ TEST(SkillReam, ComposedWorkflowProducesFinalDiameter)
     auto reamed = skill::ream::apply(*drilled.workpiece, rin);
     EXPECT_NEAR(largestCylinderRadius(*reamed.workpiece), 2.50, 1e-3);
 
-    // Feature history should contain BOTH steps.
-    EXPECT_EQ(reamed.workpiece->features().size(), 1u)
-        << "ream's workpiece carries only its own feature; the prior drill_hole "
-           "lives on the input workpiece — process planner stitches history at "
+    // Feature history contains BOTH steps (Workpiece chain contract, B2):
+    // [drill_hole, ream] — apply() carries the full prior history forward.
+    EXPECT_EQ(reamed.workpiece->features().size(), 2u)
+        << "ream must carry the prior drill_hole feature per the chain "
+           "contract enforced by finalizeOutput/check_feature_chain at "
            "the plan level";
 }

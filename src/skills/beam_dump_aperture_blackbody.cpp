@@ -180,6 +180,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     FeatureSignature sig{ kSkillId, params, pattern, tooling };
     auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
     spdlog::debug("skill::beam_dump_aperture_blackbody: ap={} ch={} cone_deg={}",
                   in.aperture_dia_mm, in.internal_chamber_dia_mm, in.cone_angle_deg);

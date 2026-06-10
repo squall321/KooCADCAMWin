@@ -157,6 +157,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     FeatureSignature sig{ kSkillId, params, pattern, tooling };
     auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
     spdlog::debug("skill::optical_axis_alignment_pin_pair: dia={} tol={}",
                   in.pin_dia_mm, in.tolerance_class);

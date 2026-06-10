@@ -168,6 +168,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     FeatureSignature sig { kSkillId, params, pattern_js, tooling };
 
     auto wpNew = std::make_shared<Workpiece>(afterRecess, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug(

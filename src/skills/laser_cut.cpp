@@ -88,6 +88,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         "through-cut only.";
 
     auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::laser_cut applied: kind={} thickness={} faces {}→{}",

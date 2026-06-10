@@ -98,6 +98,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // consistent with the slice-1 skill contract.
     std::shared_ptr<Workpiece> cur =
         std::make_shared<Workpiece>(wp.shape(), wp.material());
+    for (const auto& prev : wp.features()) cur->addFeature(prev);  // keep full chain history
 
     for (const auto& [cx, cy] : corners) {
         drill_hole::Input dh;

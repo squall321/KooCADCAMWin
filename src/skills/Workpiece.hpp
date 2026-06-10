@@ -69,6 +69,13 @@ public:
     std::optional<int>   resolve(const VertexDatum& datum) const;
 
     // ── Feature history ───────────────────────────────────────────────────
+    //
+    // CONTRACT (breakthrough plan B2): every skill apply() MUST return a
+    // workpiece whose features() is the FULL build history — all prior
+    // signatures, in order, plus exactly one new signature appended.  Use
+    // finalizeOutput() below; hand-rolled construction needs a propagation
+    // loop and is checked by tests/tools/check_feature_chain.py
+    // (ctest: feature_chain_guard) + the SkillContract runtime test.
     void                                      addFeature(const FeatureSignature& s);
     // Set the entire feature list (replaces existing features).  Used by
     // the process Executor to mirror its accumulator into each step's output
@@ -86,5 +93,26 @@ private:
     std::vector<TopoDS_Vertex>         m_vertices;
     std::vector<FeatureSignature>      m_features;
 };
+
+// ── Canonical apply() epilogue ─────────────────────────────────────────────
+//
+// The single sanctioned way to finish a skill apply(): builds the output
+// workpiece from `newShape`, carries the FULL prior feature chain, appends
+// the new signature, and packages the SkillOutput.  New skills should end
+// with:
+//
+//     return finalizeOutput(wp, newShape, sig);
+//
+// (Delegating compounds that reuse an inner skill's output workpiece are the
+// documented exception — see tests/tools/check_feature_chain.py.)
+inline SkillOutput finalizeOutput(const Workpiece& wp,
+                                  const TopoDS_Shape& newShape,
+                                  const FeatureSignature& sig)
+{
+    auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);
+    wpNew->addFeature(sig);
+    return SkillOutput{ wpNew, sig };
+}
 
 }  // namespace koocadcam::skill

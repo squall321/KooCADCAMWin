@@ -241,6 +241,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     FeatureSignature sig{ kSkillId, params, pattern, tooling };
 
     auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::cam_with_profile applied: n={} t={} shaft={} faces {}→{}",

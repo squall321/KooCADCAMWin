@@ -118,6 +118,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     //    we wrap by constructing a fresh workpiece around the same shape so
     //    that only the surface_grind history is recorded.
     auto wpNew = std::make_shared<Workpiece>(fmOut.workpiece->shape(), wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::surface_grind applied: removal={} mm finish='{}' "

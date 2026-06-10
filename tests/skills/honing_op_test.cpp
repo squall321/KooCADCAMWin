@@ -84,7 +84,10 @@ TEST(SkillHoningOp, ApplyEnlargesBoreByRemoval)
     EXPECT_NEAR(rAfter, rBefore + 0.005, 5e-3);
 
     EXPECT_EQ(out.signature.skill_id, std::string("honing_op"));
-    EXPECT_EQ(out.workpiece->features().size(), 1u);
+    // Chain contract: prior bore feature + honing_op = 2 (full history).
+    EXPECT_EQ(out.workpiece->features().size(), 2u);
+    EXPECT_EQ(out.workpiece->features().back().skill_id,
+              std::string("honing_op"));
 }
 
 // ─── 2. DFM rejects out-of-range removal AND too-small bore ───────────────

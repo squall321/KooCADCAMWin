@@ -217,6 +217,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     FeatureSignature sig{ kSkillId, params, pattern, tooling };
     auto wpNew = std::make_shared<Workpiece>(composite, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::terminal_block_post applied: stud d{}xh{} faces {}->{}",

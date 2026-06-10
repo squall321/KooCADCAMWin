@@ -216,6 +216,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     FeatureSignature sig{ kSkillId, params, pattern, tooling };
     auto wpNew = std::make_shared<Workpiece>(current, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::full_round_fillet: faces {}/{}/{} r={} filleted={} skipped={} dVol={}",

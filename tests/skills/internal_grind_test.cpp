@@ -81,7 +81,10 @@ TEST(SkillInternalGrind, ApplyEnlargesBore)
     EXPECT_NEAR(rAfter, rBefore + 0.05, 1e-3);
 
     EXPECT_EQ(out.signature.skill_id, std::string("internal_grind"));
-    EXPECT_EQ(out.workpiece->features().size(), 1u);
+    // Chain contract: prior bore feature + internal_grind = 2 (full history).
+    EXPECT_EQ(out.workpiece->features().size(), 2u);
+    EXPECT_EQ(out.workpiece->features().back().skill_id,
+              std::string("internal_grind"));
 }
 
 // ─── 2. DFM rejects out-of-range removal AND too-small bore ───────────────
@@ -186,5 +189,6 @@ TEST(SkillInternalGrind, ComposedWorkflowProducesFinalDiameter)
     auto ground = skill::internal_grind::apply(*drilled.workpiece, gin);
 
     EXPECT_NEAR(largestCylinderRadius(*ground.workpiece), 3.5, 1e-3);
-    EXPECT_EQ(ground.workpiece->features().size(), 1u);
+    // [drill_hole, internal_grind] — full chain history (B2 contract).
+    EXPECT_EQ(ground.workpiece->features().size(), 2u);
 }

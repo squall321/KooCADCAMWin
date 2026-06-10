@@ -241,6 +241,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     FeatureSignature sig{ kSkillId, params, pattern, tooling };
 
     auto wpNew = std::make_shared<Workpiece>(finalShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::curved_lip_around_face applied: spec='{}' face={}x{} inset={} T={} H={} faces {}→{}",
