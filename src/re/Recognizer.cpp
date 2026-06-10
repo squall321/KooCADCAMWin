@@ -6,6 +6,9 @@
 
 #include "skills/bore_cylindrical.hpp"
 #include "skills/bore_with_shelf.hpp"
+#include "skills/micro_drill.hpp"
+#include "skills/gun_drill.hpp"
+#include "skills/multi_step_bore.hpp"
 #include "skills/chamfer_edge.hpp"
 #include "skills/counterbore.hpp"
 #include "skills/countersink.hpp"
@@ -207,6 +210,12 @@ std::vector<RecognizeFn> buildRegistry()
     reg.emplace_back(&skill::countersink::recognize);
     reg.emplace_back(&skill::bore_cylindrical::recognize);
     reg.emplace_back(&skill::bore_with_shelf::recognize);
+    // Previously implemented but never registered (breakthrough-plan audit
+    // finding): their recognize() existed yet could not run.  Non-precise
+    // tier, so the foreign-CAD fallback cap (0.5) bounds their candidates.
+    reg.emplace_back(&skill::micro_drill::recognize);
+    reg.emplace_back(&skill::gun_drill::recognize);
+    reg.emplace_back(&skill::multi_step_bore::recognize);
     // Edge operations.
     reg.emplace_back(&skill::fillet_edge::recognize);
     reg.emplace_back(&skill::chamfer_edge::recognize);
