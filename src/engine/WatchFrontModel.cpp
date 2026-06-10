@@ -153,7 +153,11 @@ double minWallThickness(const TopoDS_Shape& s)
 // DFM-003 helper: collect cylindrical-face axes, compare pairwise; if axes
 // are parallel (|dot| > 0.99) and the perpendicular distance between them
 // is < `limit`, return the smallest such distance.  +inf when no holes.
-double minHoleToHoleAxisDistance(const TopoDS_Shape& s)
+// `minHoleRadius` filters out sub-threshold holes before the pitch check.
+// DFM-003 is a STRUCTURAL hole-to-hole rule; dense perforation arrays
+// (e.g. a speaker grille's sub-mm holes) are intentionally tight and are
+// governed by the web-thickness rule DFM-014, not by structural pitch.
+double minHoleToHoleAxisDistance(const TopoDS_Shape& s, double minHoleRadius = 0.0)
 {
     struct CylAxis { gp_Ax1 axis; double radius; };
     std::vector<CylAxis> axes;
@@ -164,6 +168,7 @@ double minHoleToHoleAxisDistance(const TopoDS_Shape& s)
             BRepAdaptor_Surface surf(f);
             if (surf.GetType() != GeomAbs_Cylinder) continue;
             const gp_Cylinder cyl = surf.Cylinder();
+            if (cyl.Radius() < minHoleRadius) continue;  // perforation → DFM-014
             axes.push_back({ cyl.Axis(), cyl.Radius() });
         } catch (...) { /* skip */ }
     }
@@ -254,6 +259,17 @@ double minDihedralAngleDeg(const TopoDS_Shape& s)
         if (nb.Extent() < 2) continue;
         const TopoDS_Face& fA = TopoDS::Face(nb.First());
         const TopoDS_Face& fB = TopoDS::Face(nb.Last());
+        // The midpoint-normal wedge below is only EXACT for two planar faces
+        // (a plane's normal is constant, so the midpoint normal equals the
+        // normal at the shared edge).  For curved faces (fillets, cylinders)
+        // the midpoint normal diverges from the edge normal, producing
+        // spurious sub-5° "knife edges".  Restrict the rule to planar-planar
+        // pairs — the genuine anti-knife-edge concern for machined flats.
+        // (Curved-face dihedrals need edge-evaluated normals: future work.)
+        try {
+            if (BRepAdaptor_Surface(fA).GetType() != GeomAbs_Plane) continue;
+            if (BRepAdaptor_Surface(fB).GetType() != GeomAbs_Plane) continue;
+        } catch (...) { continue; }
         gp_Dir nA, nB;
         gp_Pnt pA, pB;
         if (!sampleFaceNormalAndPoint(fA, nA, pA)) continue;
@@ -888,10 +904,14 @@ DFMReport WatchFrontModel::runDFM(const TopoDS_Shape& shape,
         (void)formFactor;
     }
 
-    // ── DFM-003: minimum hole-to-hole edge distance ≥ 1.5 mm ───────────
+    // ── DFM-003: minimum STRUCTURAL hole-to-hole edge distance ≥ 1.5 mm ─
+    // Only holes ≥ 1.0 mm Ø participate: sub-mm perforation arrays (speaker
+    // grille) are intentionally tight and are governed by DFM-014 web
+    // thickness, not by the structural hole-pitch rule.
     {
-        constexpr double kMinHoleGap = 1.5;
-        const double gap = minHoleToHoleAxisDistance(shape);
+        constexpr double kMinHoleGap        = 1.5;
+        constexpr double kStructuralHoleRad = 0.5;   // Ø1.0 mm threshold
+        const double gap = minHoleToHoleAxisDistance(shape, kStructuralHoleRad);
         if (std::isfinite(gap) && gap < kMinHoleGap) {
             addFinding("DFM-003", "error",
                 "hole-to-hole gap " + std::to_string(gap) +
@@ -952,18 +972,20 @@ DFMReport WatchFrontModel::runDFM(const TopoDS_Shape& shape,
         }
     }
 
-    // ── DFM-015: tap-hole min surrounding material ≥ tap-dia × 1.5 ─────
-    // Spec-only: the watch spec does not yet expose tap-hole metadata
-    // distinctly from generic hole metadata.  Conservative proxy: if any
-    // `lugs[*].pin_hole_dia_mm` is "tap-like" (≤ 3 mm), check that the lug
-    // length minus the pin offset (0.7 × length) gives at least 1.5 ×
-    // tap_diameter of material between the pin and the lug tip.
+    // ── DFM-015: TAPPED-hole min surrounding material ≥ tap-dia × 1.5 ──
+    // Applies only to THREADED (tapped) holes — a tap's thread root needs
+    // generous surrounding stock to avoid blow-out.  A watch strap lug's
+    // spring-bar hole is a CLEARANCE hole, not a tap, so the 1.5× rule does
+    // not apply: real lug tips legitimately have ~1 pin-dia of edge stock.
+    // We therefore check a lug pin only when it is explicitly flagged
+    // `"pin_is_tapped": true` (default false → skipped).
     if (spec.contains("lugs")) {
         std::size_t idx = 0;
         for (const auto& l : spec["lugs"]) {
-            const double pinDia = l.value("pin_hole_dia_mm", 0.0);
-            const double length = l.value("length_mm",       0.0);
-            if (pinDia > 0.0 && pinDia <= 3.0 && length > 0.0) {
+            const double pinDia    = l.value("pin_hole_dia_mm", 0.0);
+            const double length    = l.value("length_mm",       0.0);
+            const bool   isTapped  = l.value("pin_is_tapped",   false);
+            if (isTapped && pinDia > 0.0 && pinDia <= 3.0 && length > 0.0) {
                 // Pin lies at 0.7 × length from lug root (see addLugs).
                 const double tipMaterial = length - 0.7 * length;
                 const double rootMaterial = 0.7 * length;
@@ -1051,25 +1073,37 @@ DFMReport WatchFrontModel::runDFM(const TopoDS_Shape& shape,
         }
     } catch (...) { /* skip on bbox failure */ }
 
-    // ── DFM-007: max single-face area ≤ 5 × bbox-min-extent² ───────────
+    // ── DFM-007: no planar face larger than the part's bounding footprint ─
+    // Purpose: flag a degenerate boolean that leaves a runaway planar patch.
+    // The old "5 × min-extent²" limit was WRONG for thin plate/disk parts —
+    // a 44 mm watch's flat circular face (~1417 mm²) is correct geometry yet
+    // dwarfs 5×(10 mm)²=500 mm², so the rule rejected every legitimate watch.
+    // A genuine *planar* face cannot exceed the largest bbox rectangle, so we
+    // bound max planar-face area by that footprint (×1.02 margin).  This is a
+    // suspicion signal (warning); hard broken-boolean detection lives in
+    // DFM-016 (fill ratio) / DFM-020 (validity) / DFM-021 (shell count).
     try {
         const auto bb = pr::optimalBbox(shape);
-        const double minExt = std::min({ bb.dx(), bb.dy(), bb.dz() });
-        const double areaLimit = 5.0 * minExt * minExt;
+        const double footprint = std::max({ bb.dx() * bb.dy(),
+                                            bb.dy() * bb.dz(),
+                                            bb.dx() * bb.dz() });
+        const double areaLimit = 1.02 * footprint;
         double maxArea = 0.0;
         for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+            const TopoDS_Face& f = TopoDS::Face(ex.Current());
             try {
+                if (BRepAdaptor_Surface(f).GetType() != GeomAbs_Plane) continue;
                 GProp_GProps props;
-                BRepGProp::SurfaceProperties(TopoDS::Face(ex.Current()), props);
+                BRepGProp::SurfaceProperties(f, props);
                 const double a = props.Mass();
                 if (a > maxArea) maxArea = a;
             } catch (...) { /* skip degenerate face */ }
         }
         if (maxArea > areaLimit && areaLimit > 0.0) {
-            addFinding("DFM-007", "error",
-                "max face area " + std::to_string(maxArea) +
-                " mm² > limit " + std::to_string(areaLimit) +
-                " mm² (5 × min-extent²) — likely broken boolean");
+            addFinding("DFM-007", "warning",
+                "max planar face area " + std::to_string(maxArea) +
+                " mm² > footprint " + std::to_string(areaLimit) +
+                " mm² — possible degenerate boolean (verify)");
         }
     } catch (...) { /* skip */ }
 

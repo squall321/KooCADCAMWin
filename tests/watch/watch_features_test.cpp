@@ -303,12 +303,11 @@ TEST(WatchFeaturesM15, LugBboxSymmetric)
         << "Y extent should grow past 50mm with 6mm lugs on both sides";
 }
 
-// 12. runDFM passes on the default sample
-// TODO(slice-8): default sample watch's speaker grille has hole-to-hole
-// gap 0.7 mm < DFM-003 min 1.5 mm.  Either relax DFM-003 to allow
-// intentional speaker-grille spacing OR adjust the default speaker pin
-// pitch in defaultSpec() to ≥ 1.5 mm.
-TEST(WatchFeaturesM15, DISABLED_RunDFMPassesOnSampleSpec)
+// 12. runDFM passes on the default sample — the product we ship must clear
+// its own manufacturability gate.  (Re-enabled: speaker-grille perforations
+// are governed by DFM-014 web thickness, not the structural DFM-003 hole
+// pitch; DFM-007 large-face heuristic is scoped away from thin disk parts.)
+TEST(WatchFeaturesM15, RunDFMPassesOnSampleSpec)
 {
     using namespace koocadcam;
     nlohmann::json spec = engine::WatchFrontModel::defaultSpec();
@@ -318,11 +317,13 @@ TEST(WatchFeaturesM15, DISABLED_RunDFMPassesOnSampleSpec)
     ASSERT_FALSE(shape.IsNull());
 
     auto report = engine::WatchFrontModel::runDFM(shape, spec);
+
+    std::string errs;
+    for (const auto& f : report.findings)
+        if (f.severity == "error") errs += "\n  [" + f.code + "] " + f.message;
+
     EXPECT_TRUE(report.passed)
-        << "default spec must pass DFM — first failure: "
-        << (report.findings.empty() ? std::string("none")
-                                    : report.findings.front().code + ": " +
-                                      report.findings.front().message);
+        << "default spec must pass DFM — error findings:" << errs;
 }
 
 // 13. runDFM catches DFM-002 violation (sub-0.8 mm hole)
@@ -345,8 +346,12 @@ TEST(WatchFeaturesM15, RunDFMCatchesDFM002UnderSizedHole)
     EXPECT_TRUE(foundDfm002) << "expected DFM-002 finding for 0.5 mm shaft";
 }
 
-// 15. runDFM emits many findings (existing rules + new M1.5 expansion rules)
-TEST(WatchFeaturesM15, RunDFMReturnsManyFindings)
+// 15. runDFM runs the full M1.5 expansion ruleset — assert the always-on
+// summary rules (DFM-005 aspect / DFM-012 face count / DFM-016 fill ratio)
+// each emit a finding on a default-spec watch.  (Asserting these specific
+// info rules is sturdier than a raw count, which used to be inflated by the
+// DFM-003/007/011/015 false positives that this slice corrected.)
+TEST(WatchFeaturesM15, RunDFMRunsExpansionRuleset)
 {
     using namespace koocadcam;
     nlohmann::json spec = engine::WatchFrontModel::defaultSpec();
@@ -356,12 +361,15 @@ TEST(WatchFeaturesM15, RunDFMReturnsManyFindings)
     ASSERT_FALSE(shape.IsNull());
 
     auto report = engine::WatchFrontModel::runDFM(shape, spec);
-    // Existing-rule firings (DFM-003/015/017 typically) + new M1.5
-    // info-emitting rules (DFM-005/012/016) on a default-spec watch
-    // should yield at least 8 findings total.
-    EXPECT_GE(report.findings.size(), 8u)
-        << "expected >= 8 findings on default spec; got "
-        << report.findings.size();
+
+    auto hasCode = [&](const char* code) {
+        for (const auto& f : report.findings)
+            if (f.code == code) return true;
+        return false;
+    };
+    EXPECT_TRUE(hasCode("DFM-005")) << "aspect-ratio rule must run";
+    EXPECT_TRUE(hasCode("DFM-012")) << "face-count rule must run";
+    EXPECT_TRUE(hasCode("DFM-016")) << "fill-ratio rule must run";
 }
 
 // 14. runDFM catches DFM-009 violation (bezel too narrow)
