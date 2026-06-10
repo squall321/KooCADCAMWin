@@ -9,6 +9,10 @@
 #include "skills/micro_drill.hpp"
 #include "skills/gun_drill.hpp"
 #include "skills/multi_step_bore.hpp"
+#include "skills/drill_through_hole.hpp"
+#include "skills/ream.hpp"
+#include "skills/spot_drill.hpp"
+#include "skills/spot_face.hpp"
 #include "skills/chamfer_edge.hpp"
 #include "skills/counterbore.hpp"
 #include "skills/countersink.hpp"
@@ -216,6 +220,13 @@ std::vector<RecognizeFn> buildRegistry()
     reg.emplace_back(&skill::micro_drill::recognize);
     reg.emplace_back(&skill::gun_drill::recognize);
     reg.emplace_back(&skill::multi_step_bore::recognize);
+    // PRECISE-tier skills that were never registered (corpus audit, plan B7):
+    // their recognize() existed and the cap exempts them, yet analyze()
+    // never called them — structural recall 0 until now.
+    reg.emplace_back(&skill::drill_through_hole::recognize);
+    reg.emplace_back(&skill::ream::recognize);
+    reg.emplace_back(&skill::spot_drill::recognize);
+    reg.emplace_back(&skill::spot_face::recognize);
     // Edge operations.
     reg.emplace_back(&skill::fillet_edge::recognize);
     reg.emplace_back(&skill::chamfer_edge::recognize);
