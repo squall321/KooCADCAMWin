@@ -3,6 +3,7 @@ add_library(koo_engine STATIC
     PlaceholderCylinder.cpp
     WatchFrontModel.cpp
     PhoneFrontModel.cpp
+    probe/GeometryProbe.cpp
 )
 target_include_directories(koo_engine PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(koo_engine SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})

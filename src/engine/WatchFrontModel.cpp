@@ -15,6 +15,7 @@
 #include "primitives/Frames.hpp"
 #include "primitives/StepGuard.hpp"
 #include "primitives/Tools.hpp"
+#include "probe/GeometryProbe.hpp"
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -244,50 +245,8 @@ double minConcaveCornerRadius(const TopoDS_Shape& s)
     return minR;
 }
 
-// DFM-011 helper: walk shared edges; compute dihedral angle between adjacent
-// face normals sampled at the edge midpoint.  Returns the smallest dihedral
-// (in degrees) observed across the shape — small angles indicate a knife
-// edge.  +inf when there are no shared edges (single-face shape).
-double minDihedralAngleDeg(const TopoDS_Shape& s)
-{
-    NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> e2f;
-    TopExp::MapShapesAndAncestors(s, TopAbs_EDGE, TopAbs_FACE, e2f);
-
-    double minAng = std::numeric_limits<double>::infinity();
-    for (int i = 1; i <= e2f.Extent(); ++i) {
-        const NCollection_List<TopoDS_Shape>& nb = e2f.FindFromIndex(i);
-        if (nb.Extent() < 2) continue;
-        const TopoDS_Face& fA = TopoDS::Face(nb.First());
-        const TopoDS_Face& fB = TopoDS::Face(nb.Last());
-        // The midpoint-normal wedge below is only EXACT for two planar faces
-        // (a plane's normal is constant, so the midpoint normal equals the
-        // normal at the shared edge).  For curved faces (fillets, cylinders)
-        // the midpoint normal diverges from the edge normal, producing
-        // spurious sub-5° "knife edges".  Restrict the rule to planar-planar
-        // pairs — the genuine anti-knife-edge concern for machined flats.
-        // (Curved-face dihedrals need edge-evaluated normals: future work.)
-        try {
-            if (BRepAdaptor_Surface(fA).GetType() != GeomAbs_Plane) continue;
-            if (BRepAdaptor_Surface(fB).GetType() != GeomAbs_Plane) continue;
-        } catch (...) { continue; }
-        gp_Dir nA, nB;
-        gp_Pnt pA, pB;
-        if (!sampleFaceNormalAndPoint(fA, nA, pA)) continue;
-        if (!sampleFaceNormalAndPoint(fB, nB, pB)) continue;
-        (void)pA; (void)pB;
-        const double dot = std::clamp(
-            nA.X() * nB.X() + nA.Y() * nB.Y() + nA.Z() * nB.Z(), -1.0, 1.0);
-        // Knife-edge angle = exterior wedge angle = 180° - acos(dot).
-        // dot ≈ +1 → faces near-coplanar → wedge ≈ 180° (fine);
-        // dot ≈ -1 → faces back-to-back  → wedge ≈ 0°  (knife).
-        const double interiorDeg = std::acos(dot) * 180.0 / M_PI;
-        const double wedgeDeg    = 180.0 - interiorDeg;
-        // Skip tangent-continuous edges where wedge ≈ 180° (no knife).
-        if (wedgeDeg > 175.0) continue;
-        if (wedgeDeg < minAng) minAng = wedgeDeg;
-    }
-    return minAng;
-}
+// DFM-011 helper moved to probe::minDihedralAngleDeg (B5.2) — the
+// product-agnostic GeometryProbe module carries the verbatim logic.
 
 // DFM-013 helper: find the largest planar face whose normal points -Z
 // (downward) — a candidate display pocket floor — then sample a 10×10
@@ -950,7 +909,7 @@ DFMReport WatchFrontModel::runDFM(const TopoDS_Shape& shape,
     // ── DFM-011: anti-knife edge — adjacent face wedge ≥ 5° ────────────
     {
         constexpr double kMinDihedral = 5.0;
-        const double ang = minDihedralAngleDeg(shape);
+        const double ang = probe::minDihedralAngleDeg(shape);
         if (std::isfinite(ang) && ang < kMinDihedral) {
             addFinding("DFM-011", "error",
                 "minimum adjacent-face wedge angle " + std::to_string(ang) +
