@@ -132,6 +132,67 @@ koo_apply_compiler_flags(skill_contract_test)
 add_test(NAME skill_contract COMMAND skill_contract_test)
 set_tests_properties(skill_contract PROPERTIES TIMEOUT 120 LABELS "skill;contract")
 
+# ── koo_corpus CLI: self-labelled synthetic corpus + recall meter ────
+# (breakthrough plan B7.1-B7.2)
+# Usage: koo_corpus [samples_per_skill=3] [--gate <recall>] [--scale <f>]
+add_executable(koo_corpus tools/koo_corpus.cpp)
+target_link_libraries(koo_corpus PRIVATE
+    koo_io koo_skills koo_re koo_engine koo_process)
+target_include_directories(koo_corpus SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(koo_corpus)
+
+# Gate policy (measured 2026-06-11, 15 skills x 3 samples):
+#  - recall_pre (does the recognizer itself see its feature) = 1.000 for
+#    13/15 skills → gated at 0.99.
+#  - ream (conf 0.35) / spot_face (0.65) sit below the 0.7 analysis
+#    threshold BY DESIGN → exempt, reported but not gated.
+#  - post-dedupe recall is NOT gated yet: the generic-beats-specific dedupe
+#    defect (drill_hole@0.95 shadows counterbore/bore/pocket candidates)
+#    suppresses 9 skills to 0 — fix tracked in plan B3/B1.4; gate via
+#    --gate once it lands.
+add_test(NAME corpus_basic
+    COMMAND koo_corpus 3 --gate-pre 0.99 --exempt ream,spot_face)
+set_tests_properties(corpus_basic PROPERTIES TIMEOUT 600 LABELS "corpus;re")
+
+# ── Product-spec JSON Schema conformance test (breakthrough plan B6.1) ──
+add_executable(spec_schema_test schema/spec_schema_test.cpp)
+target_link_libraries(spec_schema_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_engine
+    koo_io
+)
+target_include_directories(spec_schema_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(spec_schema_test)
+add_test(NAME spec_schema COMMAND spec_schema_test)
+set_tests_properties(spec_schema PROPERTIES
+    TIMEOUT 30
+    ENVIRONMENT "KOO_SCHEMA_DIR=${CMAKE_SOURCE_DIR}/data/schemas"
+    LABELS "io;schema"
+)
+
+# ── GeometryProbe unit test (breakthrough plan B5.2-B5.3) ───────────
+add_executable(geometry_probe_test engine/geometry_probe_test.cpp)
+target_link_libraries(geometry_probe_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_engine
+)
+target_include_directories(geometry_probe_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(geometry_probe_test)
+add_test(NAME geometry_probe COMMAND geometry_probe_test)
+set_tests_properties(geometry_probe PROPERTIES TIMEOUT 60 LABELS "engine")
+
+# ── Feature-chain contract drift guard (breakthrough plan B2) ───────
+# Static source scan: fails when any skill stamps a signature without a
+# recognized propagation mechanism.  Complements skill_contract (runtime).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_FOUND)
+    add_test(NAME feature_chain_guard
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_feature_chain.py)
+    set_tests_properties(feature_chain_guard PROPERTIES
+        TIMEOUT 30 LABELS "skill;contract")
+endif()
+
 koo_add_skill_test(drill_hole)
 koo_add_skill_test(counterbore)
 koo_add_skill_test(countersink)
