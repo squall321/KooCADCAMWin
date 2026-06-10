@@ -739,14 +739,16 @@ TEST(BearingHousing, RecognizerInfersAtLeast4SkillIds)
 // To keep the round-trip robust we drop hollow_cavity from the replay
 // (it accounts for at most ~0.1 % of the actual removed volume — the
 // recognizer fires on the EXTERIOR cuboid envelope).
-// TODO(slice-11): the dedupe-collapsed recovered_plan re-executes 29/40
-// steps with continue_on_error, but the chained subtractive ops on
-// duplicated drill_hole atoms cumulate into an empty shape (vC=0).
-// The dispatch + recognizer pipeline themselves work — see passing
-// PlanExecutesAndProducesRealGeometry + RecognizerInfersPlan tests.
-// Slice-11 needs: smarter dedupe (collapse N drill_hole atoms at the
-// same (x,y,r,depth) into one) OR Boolean fallback in chained replay.
-TEST(BearingHousing, DISABLED_RecoveredPlanReExecutes)
+//
+// HISTORY: this test was DISABLED at slice-10 when duplicated drill_hole
+// atoms cumulated into an EMPTY shape (vC=0).  Re-measured 2026-06-10:
+// the geometric-fingerprint dedupe (c35f72c) fixed the duplication — the
+// replay now closes volume to |dV|/V_A = 0.078.  The one remaining defect
+// was the test itself inferring at 0.5, below the foreign-CAD fallback cap,
+// which let material-ADDING false-positive compounds into the plan (bbox Z
+// grew 50 -> 71.9 mm).  Inferring at the standard 0.7 threshold resolves
+// it; re-enabled with the volume-closure assertion tightened to 30 %.
+TEST(BearingHousing, RecoveredPlanReExecutes)
 {
     // ── 1. Synthesize the original workpiece A ───────────────────────
     auto stockA = skill::createCuboidStock(100.0, 100.0, 50.0, "aluminum_6061");
@@ -786,7 +788,13 @@ TEST(BearingHousing, DISABLED_RecoveredPlanReExecutes)
         << "dedupe collapsed too aggressively (only "
         << dedupedCands.size() << " candidates remain)";
 
-    const process::ProcessPlan inferred = re::inferProcessPlan(wpB, 0.5);
+    // Infer at the STANDARD RE threshold 0.7 — not 0.5.  The foreign-CAD
+    // fallback cap (50975ad) deliberately parks loose domain-compound
+    // candidates at 0.5; inferring at 0.5 lets those false positives
+    // (auto_gusset / rib / post / flange — MATERIAL-ADDING compounds) into
+    // the plan, and re-executing them stacked +21.9 mm onto the bbox.  At
+    // 0.7 only measured precise-tier atoms (drills, chamfer) replay.
+    const process::ProcessPlan inferred = re::inferProcessPlan(wpB, 0.7);
     ASSERT_FALSE(inferred.empty()) << "inferred plan is empty";
 
     // ── 4. Build a replayable plan ───────────────────────────────────
@@ -875,20 +883,17 @@ TEST(BearingHousing, DISABLED_RecoveredPlanReExecutes)
         std::printf("[ReExec] bbox_C computation skipped: %s\n", e.what());
     }
 
-    // 6b. Volume: compound recovery via inferProcessPlan + re-execute
-    //     is a heuristic chain — 29/40 success on this part — and the
-    //     cumulative subtractive ops on the dedupe-collapsed atoms can
-    //     either UNDER-remove (when continue_on_error skips a chain) or
-    //     OVER-remove (when redundant drill_hole atoms stack).  Practical
-    //     recovery doesn't guarantee a tight volume match.  We assert
-    //     only the WEAK signal: recovery produced a non-empty shape.
-    //     A tight volume comparison is parked in slice-11 (smarter
-    //     dedupe + Boolean fallback).
+    // 6b. Volume closure: with fingerprint dedupe collapsing duplicate
+    //     atoms and the 0.7 inference threshold excluding material-adding
+    //     false positives, the replay must land within 30 % of the
+    //     original volume (measured 2026-06-10: 0.078).
     const double volRatio = std::abs(vA - vC) / std::max(1.0, vA);
-    (void)volRatio;
     EXPECT_GT(vC, 0.0)
         << "re-execute produced an EMPTY workpiece (vA=" << vA
         << ", vC=" << vC << ")";
+    EXPECT_LE(volRatio, 0.30)
+        << "volume closure degraded: |dV|/V_A = " << volRatio
+        << " (vA=" << vA << ", vC=" << vC << ")";
 
     // 6c. Removed-volume sanity: C must actually have removed SOME
     //     material from the stock.
