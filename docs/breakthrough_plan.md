@@ -44,6 +44,7 @@
    compound = { atomic_prerequisites, geometric_constraints, confidence_formula(min) } YAML/JSON 룰 + 경량 인터프리터. 5종 검증 후 상위 20-30 compound 이식. **777개 손코딩 휴리스틱의 유지보수 천장을 데이터로 전환.**
 4. **B1.4 compound dedupe 보강** (G-RECOG-4 수정판, S, ~15줄)
    dedupe()에 `is_compound` 후보용 (skill_id + subfeature_count) 2차 키 추가.
+5. **B1.5 [신규·실측 확정] dedupe 특이성(specificity) 결함** (M) — 코퍼스 첫 실측(2026-06-11)이 정량화: recall_pre=1.000 인 9개 precise 스킬(counterbore/countersink/bore_*/mill_*pocket/mill_slot/bolt_hole/drill_through_hole)이 **dedupe 이후 0** — drill_hole(0.95)이 공유 실린더 면을 선점하면 dedupe 가 raw confidence 만으로 더 구체적인 후보를 버린다 (AS1 counterbore 2→0 과 동일 메커니즘). 수정 방향: face-ID 겹침 시 **더 많은 기하를 설명하는 후보 우선**(matched face-set 크기 → 동률이면 confidence). 수정 후 corpus_basic 의 `--gate`(post-dedupe)를 켠다.
 
 수용 기준: 자기-라벨 코퍼스(B7)에서 compound recall 측정 가능 + bare-stock false-positive 0 유지 + 798 테스트 green.
 
@@ -146,8 +147,10 @@
 **Phase 0 — 즉효 (1주) ✅ 완료 (2026-06-10)**
 B3.1 재측정→PASS·재활성 ✅ → B3.2 보류(증거 대기) ⏸ → B8.1 verify 스크립트 ✅ → B8.2 LABELS ✅ → B2.3 계약 테스트 Phase1 ✅ (+precise-tier 7스킬 전파 수정) → B5.1 DFMReport 통일 ✅ → B8.4 repo 위생 ✅ → 보너스: micro_drill/gun_drill/multi_step_bore 미등록 확인·등록 ✅
 
-**Phase 1 — 계약·측정 기반 (2-3주)**
-B2.1-B2.2 finalizeOutput + codemod 332 → B7.1-B7.2 코퍼스+메트릭 Phase1 → B5.2-B5.3 GeometryProbe → B6.1 JSON Schema 파일
+**Phase 1 — 계약·측정 기반 ✅ 완료 (2026-06-11)**
+B2.1 finalizeOutput 헬퍼+계약 문서화 ✅ → B2.2 codemod 307건(자동 304+수동 3: lapping_op/rest_milling/pocket_with_corner_relief; 위임형 11 검증·화이트리스트) ✅ → B2 가드 check_feature_chain.py(ctest: feature_chain_guard) ✅ → B7.1-7.2 koo_corpus+corpus_basic 게이트(`--gate-pre 0.99 --exempt ream,spot_face`) ✅ → B5.2-5.3 GeometryProbe(+holeToOuterMinDistance, geometry_probe ctest) ✅ → B6.1 watch/phone JSON Schema+spec_schema ctest ✅ → 보너스: precise-tier 미등록 인식기 4종(drill_through_hole/ream/spot_drill/spot_face) 등록 ✅
+
+**Phase 1 실측 베이스라인 (corpus 3샘플/스킬, scale 1.0)**: recall_pre 1.000 = 13/15 (ream/spot_face 는 설계상 conf<0.7); post-dedupe recall 0 = 9스킬 — B1.5 dedupe 특이성 결함으로 등록. dim_err 최대 0.014mm.
 
 **Phase 2 — 일반화 코어 (3-5주)**
 B1.1 증거 부스트 → B1.2 의존성 인식(5종) → B3.3-B3.5 재실행 견고화 → B4.1 defeature enlarge → B5.4-B5.5 룰 레지스트리+폰 DFM → B6.2-B6.3 GUI 팩토리+step7-10 → B9.1-B9.2 치수 스케일링+수용 테스트
