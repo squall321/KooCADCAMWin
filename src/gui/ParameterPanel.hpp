@@ -97,6 +97,13 @@ private:
 
     QPushButton*     m_rebuildButton{nullptr};
     QTimer*          m_debounce{nullptr};
+
+    // Last spec handed to setSpec(), retained so currentSpec() can preserve
+    // keys the panel has no widgets for (speaker_grille / rear_sensors /
+    // lugs / secondary_fillets, plus any future keys).  Without this, a
+    // load → edit-one-field → save/rebuild silently strips those steps.
+    // unique_ptr keeps the heavy json type out of this header (json_fwd only).
+    std::unique_ptr<nlohmann::json> m_baseSpec;
 };
 
 }  // namespace koocadcam::gui

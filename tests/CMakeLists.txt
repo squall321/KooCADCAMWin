@@ -92,6 +92,21 @@ set_tests_properties(watch_features PROPERTIES
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
 
+# ── ParameterPanel round-trip preservation test (headless Qt offscreen) ──
+add_executable(parameter_panel_test gui/parameter_panel_test.cpp)
+target_link_libraries(parameter_panel_test PRIVATE
+    GTest::gtest
+    koo_gui
+    koo_engine
+)
+target_include_directories(parameter_panel_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(parameter_panel_test)
+add_test(NAME parameter_panel COMMAND parameter_panel_test)
+set_tests_properties(parameter_panel PROPERTIES
+    TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # ── Skill round-trip tests (slice 1 + slice 2) ────────────────
 # Helper macro to keep entries terse.
 macro(koo_add_skill_test name)

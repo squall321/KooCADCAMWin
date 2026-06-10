@@ -418,17 +418,21 @@ nlohmann::json ParameterPanel::currentSpec() const
     }
     base["thickness_mm"] = m_thickness->value();
 
-    nlohmann::json spec = {
-        {"schema_version", "1.0.0"},
-        {"product_name",   "Custom"},
-        {"form_factor",    ff},
-        {"base",           base},
-        {"corner_radius",  {{"r_top_mm",  m_rTop->value()},
-                            {"r_side_mm", m_rSide->value()}}},
-        {"bezel",          {{"width_mm",   m_bezelWidth->value()},
-                            {"depth_mm",   m_bezelDepth->value()},
-                            {"taper_deg",  m_bezelTaper->value()}}}
-    };
+    // Start from the retained base spec so steps the panel does not edit
+    // (speaker_grille / rear_sensors / lugs / secondary_fillets, and any
+    // unknown future keys) are preserved, then overwrite every panel-owned
+    // key below.
+    nlohmann::json spec = m_baseSpec ? *m_baseSpec : nlohmann::json::object();
+    spec["schema_version"] = "1.0.0";
+    if (!spec.contains("product_name"))
+        spec["product_name"] = "Custom";
+    spec["form_factor"]   = ff;
+    spec["base"]          = base;
+    spec["corner_radius"] = {{"r_top_mm",  m_rTop->value()},
+                             {"r_side_mm", m_rSide->value()}};
+    spec["bezel"]         = {{"width_mm",  m_bezelWidth->value()},
+                             {"depth_mm",  m_bezelDepth->value()},
+                             {"taper_deg", m_bezelTaper->value()}};
 
     // Display pocket
     spec["display_pocket"] = {
@@ -437,7 +441,9 @@ nlohmann::json ParameterPanel::currentSpec() const
         {"glass_offset_mm", m_glassOffset->value()}
     };
 
-    // Crown cavity (omitted when unchecked — engine treats missing key as pass-through)
+    // Crown cavity: overwrite when enabled; ERASE when unchecked so toggling
+    // it off also drops a crown that arrived via the base spec (engine
+    // treats a missing key as pass-through).
     if (m_crownEnabled->isChecked()) {
         spec["crown_cavity"] = {
             {"side_angle_deg", m_crownAngle->value()},
@@ -446,6 +452,8 @@ nlohmann::json ParameterPanel::currentSpec() const
             {"diameter_mm",    m_crownDiameter->value()},
             {"shaft_dia_mm",   m_crownShaft->value()}
         };
+    } else {
+        spec.erase("crown_cavity");
     }
 
     // Side buttons
@@ -470,6 +478,12 @@ nlohmann::json ParameterPanel::currentSpec() const
 
 void ParameterPanel::setSpec(const nlohmann::json& spec)
 {
+    // Retain the full incoming spec so currentSpec() can preserve the keys
+    // this panel has no widgets for (speaker_grille / rear_sensors / lugs /
+    // secondary_fillets).  Otherwise load → edit-one-field → save silently
+    // drops those steps.
+    m_baseSpec = std::make_unique<nlohmann::json>(spec);
+
     // Block all signals while we update widgets.
     const QSignalBlocker bCombo(m_formFactor);
     const QSignalBlocker bDiam(m_diameter);
