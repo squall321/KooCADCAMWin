@@ -190,6 +190,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     // 7) Build new workpiece, register feature
     auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::counterbore applied: pilot {}x{}, seat {}x{}, faces {}→{}",
