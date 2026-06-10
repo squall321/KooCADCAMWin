@@ -57,8 +57,8 @@
 수용 기준: `grep -L finalizeOutput src/skills/*.cpp` = 0 (예외 화이트리스트 제외) + 계약 테스트 green.
 
 ### B3. 복원 플랜 재실행 견고화
-1. **B3.1 [첫걸음] DISABLED 테스트 재활성 실측** (S) — c35f72c fingerprint dedupe가 테스트 비활성화 이후 랜딩됨. 그냥 켜서 vC를 측정하라 (G-INTEGRATION-TEST-DEDUPE refute의 핵심 발견). 통과하면 트랙 절반 종료.
-2. **B3.2 fingerprint 위치 라운딩 보정** (G-DEDUPE-STABILITY-1 수정판, S, 1줄+주석) — position 필드만 0.1mm 그리드(현 0.05), 치수는 0.05 유지. STEP 재빌드 노이즈 흡수.
+1. **B3.1 ✅ 완료 (2026-06-10 실측)** — 재활성 측정 결과 빈-shape(vC=0)는 이미 해소돼 있었다(fingerprint dedupe c35f72c). 잔여 결함은 테스트 자체가 0.5로 추론해 캡된 material-adding false-positive(gusset/rib/post)가 플랜에 유입, bbox Z 50→71.9mm. 표준 임계 0.7로 수정 후 **PASS, 볼륨 폐합 |dV|/V_A=0.078** (30% 단언으로 강화, DISABLED 제거). slice-11 TODO 종결.
+2. **B3.2 ⏸ 보류 (증거 대기)** — B3.1 실측이 현 dedupe로 충분함을 보임. 검증 가능한 이득 없는 변경 금지 원칙에 따라 코퍼스(B7)에서 실패 사례가 나올 때만 적용.
 3. **B3.3 공간 정준화(canonicalization)** (G-SPATIAL-1 수정판, M) — dedupe 후 skill_id 그룹 내 (x,y,dia,depth) 클러스터링, z 제외(관통홀 양끝 수렴). 최고 신뢰도 대표 1개만 플랜에.
 4. **B3.4 복원 파라미터 검증·클램프 레이어** (G-RECOVERED-PARAMS-1, **viable**, M) — Executor::execute 디스패치 직전 ValidatorFn 레지스트리: stock bbox 대비 클램프, 실패 시 사유 기록+skip. hollow_cavity wall_thickness 크래시類 차단.
 5. **B3.5 liftRecoveredStep 프로덕션 승격** (수정판, S) — chamfer/fillet의 nested edge_selector 리프팅만 re:: 로 이동 (drill의 position_z는 이미 무해 — 검증자 확인).
@@ -143,8 +143,8 @@
 
 ## 3. 실행 로드맵 (의존성 순)
 
-**Phase 0 — 즉효 (1주)**
-B3.1 DISABLED 재측정 → B3.2 fingerprint 라운딩 → B8.1 verify 스크립트 → B8.2 LABELS → B2.3 계약 테스트 Phase1 → B5.1 DFMReport 통일 → B8.4 repo 위생 → (보너스) micro_drill/gun_drill/multi_step_bore 레지스트리 등록 확인
+**Phase 0 — 즉효 (1주) ✅ 완료 (2026-06-10)**
+B3.1 재측정→PASS·재활성 ✅ → B3.2 보류(증거 대기) ⏸ → B8.1 verify 스크립트 ✅ → B8.2 LABELS ✅ → B2.3 계약 테스트 Phase1 ✅ (+precise-tier 7스킬 전파 수정) → B5.1 DFMReport 통일 ✅ → B8.4 repo 위생 ✅ → 보너스: micro_drill/gun_drill/multi_step_bore 미등록 확인·등록 ✅
 
 **Phase 1 — 계약·측정 기반 (2-3주)**
 B2.1-B2.2 finalizeOutput + codemod 332 → B7.1-B7.2 코퍼스+메트릭 Phase1 → B5.2-B5.3 GeometryProbe → B6.1 JSON Schema 파일
