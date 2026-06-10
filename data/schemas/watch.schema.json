@@ -1,0 +1,345 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://koocadcam.dev/schemas/watch.schema.json",
+    "title": "KooCADCAM Watch Front-Case Spec",
+    "description": "Product spec consumed by WatchFrontModel (build steps 1-10 + runDFM). Source of truth: src/engine/WatchFrontModel.cpp; numeric ranges mirror src/gui/ParameterPanel.cpp spin-box ranges where a widget exists, otherwise conservative DFM/physical floors.",
+    "type": "object",
+    "required": ["base", "corner_radius", "bezel"],
+    "properties": {
+        "schema_version": {
+            "type": "string",
+            "description": "Spec format version (semver string, e.g. \"1.0.0\")."
+        },
+        "product_name": {
+            "type": "string",
+            "description": "Human-readable product display name."
+        },
+        "form_factor": {
+            "type": "string",
+            "enum": ["round", "square"],
+            "description": "Case silhouette; engine defaults to \"round\" when omitted."
+        },
+        "base": {
+            "type": "object",
+            "description": "Step 1 buildBase. diameter_mm is read for form_factor=round; width_mm/height_mm for square (conditionality not expressible with the mini-validator keyword set).",
+            "required": ["thickness_mm"],
+            "properties": {
+                "diameter_mm": {
+                    "type": "number",
+                    "minimum": 30.0,
+                    "maximum": 55.0,
+                    "description": "Case outer diameter in mm (round form factor only)."
+                },
+                "width_mm": {
+                    "type": "number",
+                    "minimum": 30.0,
+                    "maximum": 55.0,
+                    "description": "Case width (X) in mm (square form factor only)."
+                },
+                "height_mm": {
+                    "type": "number",
+                    "minimum": 30.0,
+                    "maximum": 60.0,
+                    "description": "Case height (Y) in mm (square form factor only)."
+                },
+                "thickness_mm": {
+                    "type": "number",
+                    "minimum": 5.0,
+                    "maximum": 20.0,
+                    "description": "Case thickness (Z) in mm."
+                },
+                "initial_corner_r_mm": {
+                    "type": "number",
+                    "minimum": 0.2,
+                    "maximum": 10.0,
+                    "description": "Vertical-corner fillet radius in mm (square form only; engine default 2.0)."
+                }
+            }
+        },
+        "corner_radius": {
+            "type": "object",
+            "description": "Step 2 applyCornerRadius — top/bottom rim fillets.",
+            "required": ["r_top_mm", "r_side_mm"],
+            "properties": {
+                "r_top_mm": {
+                    "type": "number",
+                    "minimum": 0.2,
+                    "maximum": 5.0,
+                    "description": "Top rim (zMax) fillet radius in mm."
+                },
+                "r_side_mm": {
+                    "type": "number",
+                    "minimum": 0.2,
+                    "maximum": 3.0,
+                    "description": "Bottom rim (zMin) fillet radius in mm."
+                }
+            }
+        },
+        "bezel": {
+            "type": "object",
+            "description": "Step 3 buildBezel — annular ring cut at the top face.",
+            "required": ["width_mm", "depth_mm"],
+            "properties": {
+                "width_mm": {
+                    "type": "number",
+                    "minimum": 1.0,
+                    "maximum": 8.0,
+                    "description": "Bezel ring radial width in mm (DFM-009 hard floor 0.6)."
+                },
+                "depth_mm": {
+                    "type": "number",
+                    "minimum": 0.3,
+                    "maximum": 3.0,
+                    "description": "Bezel ring cut depth in mm."
+                },
+                "taper_deg": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 10.0,
+                    "description": "Bezel outer-wall taper angle in degrees (0 = straight walls; engine default 0)."
+                }
+            }
+        },
+        "display_pocket": {
+            "type": "object",
+            "description": "Step 4 buildDisplayPocket (optional step — omit the object to skip).",
+            "required": ["d_pocket_mm", "depth_pocket_mm"],
+            "properties": {
+                "d_pocket_mm": {
+                    "type": "number",
+                    "minimum": 20.0,
+                    "maximum": 50.0,
+                    "description": "Display pocket diameter in mm."
+                },
+                "depth_pocket_mm": {
+                    "type": "number",
+                    "minimum": 0.3,
+                    "maximum": 2.0,
+                    "description": "Display pocket depth from the top face in mm."
+                },
+                "glass_offset_mm": {
+                    "type": "number",
+                    "minimum": -1.0,
+                    "maximum": 0.5,
+                    "description": "Glass seating offset in mm (negative = recessed below rim; engine default 0)."
+                }
+            }
+        },
+        "crown_cavity": {
+            "type": "object",
+            "description": "Step 5 addCrownCavity (optional step — omit the object to skip).",
+            "required": ["side_angle_deg", "height_pos_mm", "depth_mm", "diameter_mm", "shaft_dia_mm"],
+            "properties": {
+                "side_angle_deg": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 360.0,
+                    "description": "Angular position on the side wall in degrees (0 = +X = 3 o'clock, CCW)."
+                },
+                "height_pos_mm": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 20.0,
+                    "description": "Cavity centre height above the case bottom in mm."
+                },
+                "depth_mm": {
+                    "type": "number",
+                    "minimum": 1.0,
+                    "maximum": 5.0,
+                    "description": "Crown counterbore radial depth in mm."
+                },
+                "diameter_mm": {
+                    "type": "number",
+                    "minimum": 2.0,
+                    "maximum": 10.0,
+                    "description": "Crown counterbore diameter in mm (DFM-002 floor 0.8)."
+                },
+                "shaft_dia_mm": {
+                    "type": "number",
+                    "minimum": 0.8,
+                    "maximum": 3.0,
+                    "description": "Crown shaft through-hole diameter in mm (DFM-002 floor 0.8)."
+                }
+            }
+        },
+        "side_buttons": {
+            "type": "array",
+            "description": "Step 6 addSideButtons — side pocket cut per entry (optional step; empty array = skip).",
+            "items": {
+                "type": "object",
+                "required": ["angle_deg", "height_mm", "length_mm", "width_mm", "depth_mm"],
+                "properties": {
+                    "angle_deg": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 360.0,
+                        "description": "Angular position on the side wall in degrees (0 = +X = 3 o'clock, CCW)."
+                    },
+                    "height_mm": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 20.0,
+                        "description": "Pocket centre height above the case bottom in mm."
+                    },
+                    "length_mm": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "description": "Pocket length along the side-wall tangent in mm."
+                    },
+                    "width_mm": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "description": "Pocket width along the case axis in mm."
+                    },
+                    "depth_mm": {
+                        "type": "number",
+                        "minimum": 0.1,
+                        "maximum": 0.8,
+                        "description": "Pocket radial depth in mm (DFM-006 cap = min(0.8, thickness - 0.3))."
+                    },
+                    "taper_deg": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 10.0,
+                        "description": "Pocket wall taper in degrees (not implemented in M1.5; engine treats values > 0 as 0 with warning)."
+                    }
+                }
+            }
+        },
+        "speaker_grille": {
+            "type": "object",
+            "description": "Step 7 addSpeakerGrille — rows x cols radial perforation array (optional step).",
+            "required": ["angle_deg", "height_pos_mm", "rows", "cols", "row_spacing_mm", "col_spacing_mm", "hole_dia_mm", "depth_mm"],
+            "properties": {
+                "angle_deg": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 360.0,
+                    "description": "Grille centre angular position in degrees (0 = +X = 3 o'clock, CCW)."
+                },
+                "height_pos_mm": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 20.0,
+                    "description": "Grille centre height above the case bottom in mm."
+                },
+                "rows": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Number of hole rows along the case axis (count)."
+                },
+                "cols": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Number of hole columns along the wall tangent (count)."
+                },
+                "row_spacing_mm": {
+                    "type": "number",
+                    "minimum": 1.05,
+                    "description": "Row pitch in mm (DFM-014: pitch - hole_dia >= 0.25; floor = 0.8 + 0.25)."
+                },
+                "col_spacing_mm": {
+                    "type": "number",
+                    "minimum": 1.05,
+                    "description": "Column pitch in mm (DFM-014: pitch - hole_dia >= 0.25; floor = 0.8 + 0.25)."
+                },
+                "hole_dia_mm": {
+                    "type": "number",
+                    "minimum": 0.8,
+                    "description": "Perforation hole diameter in mm (DFM-002 floor 0.8)."
+                },
+                "depth_mm": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "description": "Hole radial depth in mm."
+                }
+            }
+        },
+        "rear_sensors": {
+            "type": "array",
+            "description": "Step 8 addRearSensors — circular recesses drilled up from the rear face (optional step; empty array = skip).",
+            "items": {
+                "type": "object",
+                "required": ["offset_x_mm", "offset_y_mm", "dia_mm", "depth_mm"],
+                "properties": {
+                    "offset_x_mm": {
+                        "type": "number",
+                        "minimum": -27.5,
+                        "maximum": 27.5,
+                        "description": "Sensor centre X offset from the case centre in mm (bounded by max case radius)."
+                    },
+                    "offset_y_mm": {
+                        "type": "number",
+                        "minimum": -27.5,
+                        "maximum": 27.5,
+                        "description": "Sensor centre Y offset from the case centre in mm (bounded by max case radius)."
+                    },
+                    "dia_mm": {
+                        "type": "number",
+                        "minimum": 0.8,
+                        "maximum": 20.0,
+                        "description": "Sensor recess diameter in mm (DFM-002 floor 0.8)."
+                    },
+                    "depth_mm": {
+                        "type": "number",
+                        "minimum": 0.1,
+                        "maximum": 10.0,
+                        "description": "Recess depth into the rear face in mm (must stay below base thickness)."
+                    }
+                }
+            }
+        },
+        "lugs": {
+            "type": "array",
+            "description": "Step 9 addLugs — strap-lug protrusions fused onto the case (optional step; empty array = skip).",
+            "items": {
+                "type": "object",
+                "required": ["angle_deg", "length_mm", "width_mm", "thickness_mm"],
+                "properties": {
+                    "angle_deg": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 360.0,
+                        "description": "Lug angular position in degrees (0 = +X = 3 o'clock, CCW; 90 = 12 o'clock)."
+                    },
+                    "length_mm": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "description": "Lug radial protrusion length in mm."
+                    },
+                    "width_mm": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "description": "Lug width along the side-wall tangent in mm."
+                    },
+                    "thickness_mm": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "description": "Lug thickness along the case axis in mm."
+                    },
+                    "pin_hole_dia_mm": {
+                        "type": "number",
+                        "minimum": 0.8,
+                        "description": "Spring-bar pin through-hole diameter in mm (omit the key for no hole; DFM-002 floor 0.8, engine skips < 0.6 with warning)."
+                    },
+                    "pin_is_tapped": {
+                        "type": "boolean",
+                        "description": "True if the pin hole is tapped — enables the DFM-015 surrounding-stock rule (default false = clearance hole)."
+                    }
+                }
+            }
+        },
+        "secondary_fillets": {
+            "type": "object",
+            "description": "Step 10 addSecondaryFillets — cosmetic fillets on the top rim and bezel inner step (optional step).",
+            "properties": {
+                "r_mm": {
+                    "type": "number",
+                    "minimum": 0.05,
+                    "maximum": 2.0,
+                    "description": "Cosmetic fillet radius in mm (engine default 0.2; bezel step uses r * 0.5)."
+                }
+            }
+        }
+    }
+}

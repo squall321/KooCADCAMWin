@@ -1,0 +1,150 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://koocadcam.dev/schemas/phone.schema.json",
+    "title": "KooCADCAM Phone Front-Case Spec",
+    "description": "Product spec consumed by PhoneFrontModel (build steps 1-4). Source of truth: src/engine/PhoneFrontModel.cpp; numeric ranges are conservative physical bounds (no GUI panel exists for phone yet).",
+    "type": "object",
+    "required": ["base", "corner_radius"],
+    "properties": {
+        "schema_version": {
+            "type": "string",
+            "description": "Spec format version (semver string, e.g. \"0.1.0\")."
+        },
+        "product_name": {
+            "type": "string",
+            "description": "Human-readable product display name."
+        },
+        "form_factor": {
+            "type": "string",
+            "enum": ["phone"],
+            "description": "Optional product discriminator; phone-scoped DFM rules (DFM-013/018) key on the value \"phone\"."
+        },
+        "base": {
+            "type": "object",
+            "description": "Step 1 buildBase — rounded-corner rectangular slab.",
+            "required": ["width_mm", "height_mm", "thickness_mm"],
+            "properties": {
+                "width_mm": {
+                    "type": "number",
+                    "minimum": 40.0,
+                    "maximum": 120.0,
+                    "description": "Body width (X) in mm."
+                },
+                "height_mm": {
+                    "type": "number",
+                    "minimum": 80.0,
+                    "maximum": 220.0,
+                    "description": "Body height (Y) in mm."
+                },
+                "thickness_mm": {
+                    "type": "number",
+                    "minimum": 4.0,
+                    "maximum": 15.0,
+                    "description": "Body thickness (Z) in mm."
+                },
+                "initial_corner_r_mm": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 20.0,
+                    "description": "Vertical-corner fillet radius in mm (engine default 8.0; 0 = sharp box, fillet skipped)."
+                }
+            }
+        },
+        "corner_radius": {
+            "type": "object",
+            "description": "Step 2 applyCornerRadius — top/bottom rim fillets.",
+            "required": ["r_top_mm", "r_side_mm"],
+            "properties": {
+                "r_top_mm": {
+                    "type": "number",
+                    "minimum": 0.2,
+                    "maximum": 5.0,
+                    "description": "Top rim (zMax) fillet radius in mm."
+                },
+                "r_side_mm": {
+                    "type": "number",
+                    "minimum": 0.2,
+                    "maximum": 3.0,
+                    "description": "Bottom rim (zMin) fillet radius in mm."
+                }
+            }
+        },
+        "display_pocket": {
+            "type": "object",
+            "description": "Step 3 buildDisplayPocket — rounded-rect pocket cut from the top face (optional step — omit the object to skip).",
+            "required": ["width_mm", "height_mm", "depth_mm"],
+            "properties": {
+                "width_mm": {
+                    "type": "number",
+                    "minimum": 20.0,
+                    "maximum": 115.0,
+                    "description": "Pocket width (X) in mm (must fit inside base width)."
+                },
+                "height_mm": {
+                    "type": "number",
+                    "minimum": 40.0,
+                    "maximum": 215.0,
+                    "description": "Pocket height (Y) in mm (must fit inside base height)."
+                },
+                "depth_mm": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 3.0,
+                    "description": "Pocket depth from the top face in mm (DFM-013 floor flatness <= 0.02 applies)."
+                },
+                "corner_r_mm": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 15.0,
+                    "description": "Pocket corner radius in mm (engine default 0 = sharp corners)."
+                },
+                "offset_x_mm": {
+                    "type": "number",
+                    "minimum": -30.0,
+                    "maximum": 30.0,
+                    "description": "Pocket centre X offset from the body centre in mm (engine default 0)."
+                },
+                "offset_y_mm": {
+                    "type": "number",
+                    "minimum": -50.0,
+                    "maximum": 50.0,
+                    "description": "Pocket centre Y offset from the body centre in mm (engine default 0)."
+                }
+            }
+        },
+        "cameras": {
+            "type": "array",
+            "description": "Step 4 addCameraHoles — circular holes drilled up from the rear face (optional step; empty array = skip).",
+            "items": {
+                "type": "object",
+                "required": ["offset_x_mm", "offset_y_mm", "hole_dia_mm", "depth_mm"],
+                "properties": {
+                    "offset_x_mm": {
+                        "type": "number",
+                        "minimum": -60.0,
+                        "maximum": 60.0,
+                        "description": "Hole centre X offset from the body centre in mm (bounded by max body half-width)."
+                    },
+                    "offset_y_mm": {
+                        "type": "number",
+                        "minimum": -110.0,
+                        "maximum": 110.0,
+                        "description": "Hole centre Y offset from the body centre in mm (bounded by max body half-height)."
+                    },
+                    "hole_dia_mm": {
+                        "type": "number",
+                        "minimum": 0.8,
+                        "maximum": 30.0,
+                        "description": "Camera hole diameter in mm (DFM-002 floor 0.8)."
+                    },
+                    "depth_mm": {
+                        "type": "number",
+                        "minimum": 0.1,
+                        "maximum": 15.0,
+                        "description": "Hole depth from the rear face in mm (bounded by max body thickness)."
+                    }
+                }
+            }
+        }
+    }
+}
