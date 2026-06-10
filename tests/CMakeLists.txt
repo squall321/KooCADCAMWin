@@ -12,7 +12,7 @@ target_link_libraries(smoke_test PRIVATE
 target_include_directories(smoke_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(smoke_test)
 add_test(NAME smoke COMMAND smoke_test)
-set_tests_properties(smoke PROPERTIES TIMEOUT 30)
+set_tests_properties(smoke PROPERTIES TIMEOUT 30 LABELS "smoke")
 
 # ── STEP IO round-trip test ───────────────────────────────────
 add_executable(step_io_test step_io/step_io_test.cpp)
@@ -24,7 +24,7 @@ target_link_libraries(step_io_test PRIVATE
 target_include_directories(step_io_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(step_io_test)
 add_test(NAME step_io COMMAND step_io_test)
-set_tests_properties(step_io PROPERTIES TIMEOUT 60)
+set_tests_properties(step_io PROPERTIES TIMEOUT 60 LABELS "io")
 
 # ── make_sample_step tool ─────────────────────────────────────
 # Builds a golden cylinder STEP at build time → tests/data/golden_cylinder.step
@@ -75,6 +75,7 @@ add_test(NAME watch COMMAND watch_test)
 set_tests_properties(watch PROPERTIES
     TIMEOUT 60
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
+    LABELS "watch"
 )
 
 # ── Watch features test (M1.2) — steps 4-6 ──────────────────
@@ -90,6 +91,7 @@ add_test(NAME watch_features COMMAND watch_features_test)
 set_tests_properties(watch_features PROPERTIES
     TIMEOUT 180
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
+    LABELS "watch"
 )
 
 # ── ParameterPanel round-trip preservation test (headless Qt offscreen) ──
@@ -105,6 +107,7 @@ add_test(NAME parameter_panel COMMAND parameter_panel_test)
 set_tests_properties(parameter_panel PROPERTIES
     TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    LABELS "gui"
 )
 
 # ── Skill round-trip tests (slice 1 + slice 2) ────────────────
@@ -116,8 +119,18 @@ macro(koo_add_skill_test name)
     target_include_directories(skill_${name}_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
     koo_apply_compiler_flags(skill_${name}_test)
     add_test(NAME skill_${name} COMMAND skill_${name}_test)
-    set_tests_properties(skill_${name} PROPERTIES TIMEOUT 60)
+    set_tests_properties(skill_${name} PROPERTIES TIMEOUT 60 LABELS "skill")
 endmacro()
+
+# ── Skill feature-chain contract test (breakthrough plan B2.3) ──────
+# Verifies apply() preserves the FULL prior feature history (precise tier).
+add_executable(skill_contract_test skills/skill_contract_test.cpp)
+target_link_libraries(skill_contract_test PRIVATE
+    GTest::gtest GTest::gtest_main koo_skills koo_engine koo_io)
+target_include_directories(skill_contract_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(skill_contract_test)
+add_test(NAME skill_contract COMMAND skill_contract_test)
+set_tests_properties(skill_contract PROPERTIES TIMEOUT 120 LABELS "skill;contract")
 
 koo_add_skill_test(drill_hole)
 koo_add_skill_test(counterbore)
@@ -1097,7 +1110,7 @@ target_link_libraries(compound_step_rt_check PRIVATE
 target_include_directories(compound_step_rt_check SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(compound_step_rt_check)
 add_test(NAME compound_step_rt_check COMMAND compound_step_rt_check)
-set_tests_properties(compound_step_rt_check PROPERTIES TIMEOUT 180)
+set_tests_properties(compound_step_rt_check PROPERTIES TIMEOUT 180 LABELS "integration")
 
 # ── Engine primitive unit tests (slice 4 — helical sweep, polyline offset) ─
 macro(koo_add_primitive_test name)
@@ -1107,7 +1120,7 @@ macro(koo_add_primitive_test name)
     target_include_directories(prim_${name}_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
     koo_apply_compiler_flags(prim_${name}_test)
     add_test(NAME prim_${name} COMMAND prim_${name}_test)
-    set_tests_properties(prim_${name} PROPERTIES TIMEOUT 60)
+    set_tests_properties(prim_${name} PROPERTIES TIMEOUT 60 LABELS "primitive")
 endmacro()
 
 koo_add_primitive_test(helical_sweep)
@@ -1124,7 +1137,7 @@ target_link_libraries(process_plan_test PRIVATE
 target_include_directories(process_plan_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(process_plan_test)
 add_test(NAME process_plan COMMAND process_plan_test)
-set_tests_properties(process_plan PROPERTIES TIMEOUT 60)
+set_tests_properties(process_plan PROPERTIES TIMEOUT 60 LABELS "process")
 
 # ── Layer 5 LLM adapter / PlanEditor tests ────────────────────
 add_executable(plan_editor_test adapt/plan_editor_test.cpp)
@@ -1138,7 +1151,7 @@ target_link_libraries(plan_editor_test PRIVATE
 target_include_directories(plan_editor_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(plan_editor_test)
 add_test(NAME plan_editor COMMAND plan_editor_test)
-set_tests_properties(plan_editor PROPERTIES TIMEOUT 60)
+set_tests_properties(plan_editor PROPERTIES TIMEOUT 60 LABELS "process")
 
 # ── Layer 5 LlmBridge tests ───────────────────────────────────
 add_executable(llm_bridge_test adapt/llm_bridge_test.cpp)
@@ -1152,7 +1165,7 @@ target_link_libraries(llm_bridge_test PRIVATE
 target_include_directories(llm_bridge_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(llm_bridge_test)
 add_test(NAME llm_bridge COMMAND llm_bridge_test)
-set_tests_properties(llm_bridge PROPERTIES TIMEOUT 30)
+set_tests_properties(llm_bridge PROPERTIES TIMEOUT 30 LABELS "process")
 
 # ── Layer 6 CAM toolpath + collision-check tests ──────────────
 add_executable(cam_test cam/cam_test.cpp)
@@ -1165,7 +1178,7 @@ target_link_libraries(cam_test PRIVATE
 target_include_directories(cam_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(cam_test)
 add_test(NAME cam COMMAND cam_test)
-set_tests_properties(cam PROPERTIES TIMEOUT 60)
+set_tests_properties(cam PROPERTIES TIMEOUT 60 LABELS "cam")
 
 # ── Layer 4 RE / Recognizer tests ─────────────────────────────
 add_executable(recognizer_test re/recognizer_test.cpp)
@@ -1179,7 +1192,7 @@ target_link_libraries(recognizer_test PRIVATE
 target_include_directories(recognizer_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(recognizer_test)
 add_test(NAME recognizer COMMAND recognizer_test)
-set_tests_properties(recognizer PROPERTIES TIMEOUT 60)
+set_tests_properties(recognizer PROPERTIES TIMEOUT 60 LABELS "re")
 
 # ── Phone parametric build test (M2-phase-1) ──────────────────
 add_executable(phone_test phone/phone_test.cpp)
@@ -1194,6 +1207,7 @@ add_test(NAME phone COMMAND phone_test)
 set_tests_properties(phone PROPERTIES
     TIMEOUT 60
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
+    LABELS "phone"
 )
 
 # ── JsonSpec validate/roundtrip test (M1.1) ───────────────────
@@ -1208,6 +1222,7 @@ add_test(NAME json_spec COMMAND json_spec_test)
 set_tests_properties(json_spec PROPERTIES
     TIMEOUT 30
     ENVIRONMENT "KOO_TESTS_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data"
+    LABELS "io"
 )
 
 # ── Integration: watch built as a skill::ProcessPlan ──────────
@@ -1221,7 +1236,7 @@ target_link_libraries(integration_watch PRIVATE
 target_include_directories(integration_watch SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_watch)
 add_test(NAME integration_watch COMMAND integration_watch)
-set_tests_properties(integration_watch PROPERTIES TIMEOUT 120)
+set_tests_properties(integration_watch PROPERTIES TIMEOUT 120 LABELS "integration")
 
 # ── Integration: full RE round-trip on watch workpiece ────────
 # Deliverable 2 — stock → exec → STEP → exec → analyze → inferPlan →
@@ -1235,7 +1250,7 @@ target_link_libraries(integration_watch_re_roundtrip PRIVATE
 target_include_directories(integration_watch_re_roundtrip SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_watch_re_roundtrip)
 add_test(NAME integration_watch_re_roundtrip COMMAND integration_watch_re_roundtrip)
-set_tests_properties(integration_watch_re_roundtrip PROPERTIES TIMEOUT 180)
+set_tests_properties(integration_watch_re_roundtrip PROPERTIES TIMEOUT 180 LABELS "integration")
 
 # ── Integration: reframe loop — original vision proven with measured dims ──
 # synth frame -> STEP(strip metadata) -> geometric recognize -> part moves
@@ -1248,7 +1263,7 @@ target_link_libraries(integration_frame_reframe PRIVATE
 target_include_directories(integration_frame_reframe SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_frame_reframe)
 add_test(NAME integration_frame_reframe COMMAND integration_frame_reframe)
-set_tests_properties(integration_frame_reframe PROPERTIES TIMEOUT 180)
+set_tests_properties(integration_frame_reframe PROPERTIES TIMEOUT 180 LABELS "integration")
 
 # ── Integration: modify a foreign hole in place + re-verify (koo_modify core) ─
 add_executable(integration_modify_in_place
@@ -1259,7 +1274,7 @@ target_link_libraries(integration_modify_in_place PRIVATE
 target_include_directories(integration_modify_in_place SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_modify_in_place)
 add_test(NAME integration_modify_in_place COMMAND integration_modify_in_place)
-set_tests_properties(integration_modify_in_place PROPERTIES TIMEOUT 120)
+set_tests_properties(integration_modify_in_place PROPERTIES TIMEOUT 120 LABELS "integration")
 
 # ── Parts layout + datum graph + reframePlanForMoves (Layer 6) ────────────
 # (was previously unregistered — never built/run; now wired in.)
@@ -1269,7 +1284,7 @@ target_link_libraries(parts_layout_test PRIVATE
 target_include_directories(parts_layout_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(parts_layout_test)
 add_test(NAME parts_layout COMMAND parts_layout_test)
-set_tests_properties(parts_layout PROPERTIES TIMEOUT 60)
+set_tests_properties(parts_layout PROPERTIES TIMEOUT 60 LABELS "process")
 
 # ── Integration: COMPLETE watch as a 11-step ProcessPlan ──────
 # Slice-1 end-to-end demo — build a full M1.5 watch using ONLY the
@@ -1283,7 +1298,7 @@ target_link_libraries(integration_watch_complete PRIVATE
 target_include_directories(integration_watch_complete SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_watch_complete)
 add_test(NAME integration_watch_complete COMMAND integration_watch_complete)
-set_tests_properties(integration_watch_complete PROPERTIES TIMEOUT 240)
+set_tests_properties(integration_watch_complete PROPERTIES TIMEOUT 240 LABELS "integration")
 
 # ── Integration: bearing-housing compound-skill process plan ──
 # Slice-8 end-to-end demo — build a realistic bearing-housing using a 9-step
@@ -1302,4 +1317,4 @@ target_link_libraries(integration_bearing_housing PRIVATE
 target_include_directories(integration_bearing_housing SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_bearing_housing)
 add_test(NAME integration_bearing_housing COMMAND integration_bearing_housing)
-set_tests_properties(integration_bearing_housing PROPERTIES TIMEOUT 240)
+set_tests_properties(integration_bearing_housing PROPERTIES TIMEOUT 240 LABELS "integration")

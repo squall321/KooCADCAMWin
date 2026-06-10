@@ -46,6 +46,9 @@ _*/
 # Claude Code session / agent working dir (never commit)
 .claude/
 
+# CTest scratch output (created when ctest runs in the source tree)
+/Testing/
+
 # Throwaway dev build wrappers + logs (root-level scratch from agent runs)
 /build_*.cmd
 /build_*.log
