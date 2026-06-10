@@ -791,8 +791,7 @@ DFMReport WatchFrontModel::runDFM(const TopoDS_Shape& shape,
     DFMReport report;
     auto addFinding = [&](const char* code, const char* severity,
                           const std::string& msg) {
-        report.findings.push_back(DFMFinding{ code, severity, msg });
-        if (std::string_view(severity) == "error") report.passed = false;
+        report.add(code, severity, msg);
     };
 
     if (shape.IsNull()) {

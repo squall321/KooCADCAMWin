@@ -24,6 +24,15 @@ struct DFMReport
 {
     bool                     passed = true;   // false if any "error" finding
     std::vector<DFMFinding>  findings;
+
+    // Uniform accumulator (mirrors skill::DFMReport::add) — prerequisite
+    // for the product-agnostic DFM rule registry (breakthrough plan B5).
+    void add(std::string code, std::string severity, std::string message)
+    {
+        if (severity == "error") passed = false;
+        findings.push_back(DFMFinding{ std::move(code), std::move(severity),
+                                       std::move(message) });
+    }
 };
 
 // M1.5: full 11-step watch front-case builder (M1.1 steps 1-3, M1.2 steps
