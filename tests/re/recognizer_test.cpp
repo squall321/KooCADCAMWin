@@ -159,9 +159,12 @@ TEST(Recognizer, InferPlanSequence)
     // Build a workpiece with one of each group.  We deliberately use
     // hollow_cavity (not mill_circular_pocket) for the stock-removal stage
     // because its rectangular cavity creates only planar walls, so it does
-    // NOT compete with drill_hole on a shared cylindrical face during
-    // dedupe.  Chamfer the BOTTOM rim (z = 0) so its EdgesAtZBand does not
-    // accidentally trim the drill's top entry circle (z = 12).
+    // NOT compete with drill_hole on a shared cylindrical face during dedupe.
+    // hollow_cavity is recognised here via metadata replay (the signature is
+    // in the synthetic chain history), so it stays above the 0.7 inference
+    // threshold despite the foreign-CAD geometric-fallback cap.  Chamfer the
+    // BOTTOM rim (z = 0) so its EdgesAtZBand does not accidentally trim the
+    // drill's top entry circle (z = 12).
     //   A_stock:  hollow_cavity (rectangular cavity)
     //   B_hole:   drill_hole    (in the rim, away from the cavity)
     //   C_edge:   chamfer_edge  (bottom outer rim)

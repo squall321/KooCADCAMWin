@@ -197,6 +197,9 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "entry_face_id",     *entryId },
         { "wall_thickness_mm", in.wall_thickness_mm },
         { "depth_mm",          in.depth_mm },
+        { "cavity_shape",      cavityKind },   // recorded so metadata replay
+                                               // recovers the same params the
+                                               // geometric recognizer reports
     };
     json pattern = {
         { "kind",                kSkillId },
@@ -234,6 +237,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     };
 
     auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);  // keep full chain history
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::hollow_cavity applied: kind={} wall={} depth={} faces {}→{}",
@@ -255,6 +259,24 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
+
+    // Metadata replay: on a workpiece WE built, the hollow_cavity signature is
+    // in the chain history — replay it at full confidence.  This carries the
+    // "metadata_replay" source tag, which exempts it from the foreign-CAD
+    // fallback cap in re::analyze (so a synthesised cavity stays above the RE
+    // inference threshold), while a FOREIGN STEP — which has no signature —
+    // falls through to the geometric scan below and is correctly capped.
+    // Mirrors every other domain-compound skill; hollow_cavity was missing it.
+    for (const auto& f : wp.features()) {
+        if (f.skill_id != kSkillId) continue;
+        RecognizedFeature r;
+        r.skill_id         = kSkillId;
+        r.recovered_params = f.params;
+        r.confidence       = 1.0;
+        r.matched_geometry = { { "source", "metadata_replay" } };
+        out.push_back(r);
+    }
+    if (!out.empty()) return out;
 
     const auto outerBb = pr::optimalBbox(wp.shape());
 

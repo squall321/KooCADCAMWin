@@ -189,8 +189,10 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         tooling,
     };
 
-    // 7) Build new workpiece, register feature
+    // 7) Build new workpiece, register feature (preserve the chain history so
+    //    wp.features() stays the FULL build history, per the Workpiece contract).
     auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    for (const auto& prev : wp.features()) wpNew->addFeature(prev);
     wpNew->addFeature(sig);
 
     spdlog::debug("skill::drill_hole applied: dia={} depth={} faces {}→{}",
