@@ -6,6 +6,8 @@
 
 #include "PhoneFrontModel.hpp"
 
+#include "dfm/ProductDFM.hpp"
+
 #include "primitives/Bbox.hpp"
 #include "primitives/Cuts.hpp"
 #include "primitives/Fillets.hpp"
@@ -182,6 +184,14 @@ nlohmann::json PhoneFrontModel::defaultSpec()
             }
         })}
     };
+}
+
+// ── DFM: shared product-agnostic catalog, phone profile ───────────────────
+// @lat: [[engine/feature-phone#runDFM]]
+DFMReport PhoneFrontModel::runDFM(const TopoDS_Shape& shape,
+                                   const nlohmann::json& spec)
+{
+    return dfm::runProductDFM(shape, spec, dfm::phoneProfile());
 }
 
 }  // namespace koocadcam::engine

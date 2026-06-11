@@ -2,6 +2,7 @@
 // @lat: [[engine/feature-watch#Build Sequence]]
 
 #include "ProductFrontModel.hpp"
+#include "dfm/DFMReport.hpp"
 
 #include <TopoDS_Shape.hxx>
 
@@ -12,28 +13,8 @@
 
 namespace koocadcam::engine {
 
-// ── DFM finding (per [[engine/dfm-rules]] catalog) ────────────────────────
-struct DFMFinding
-{
-    std::string code;       // "DFM-002", "DFM-009", ...
-    std::string severity;   // "error" | "warning" | "info"
-    std::string message;
-};
-
-struct DFMReport
-{
-    bool                     passed = true;   // false if any "error" finding
-    std::vector<DFMFinding>  findings;
-
-    // Uniform accumulator (mirrors skill::DFMReport::add) — prerequisite
-    // for the product-agnostic DFM rule registry (breakthrough plan B5).
-    void add(std::string code, std::string severity, std::string message)
-    {
-        if (severity == "error") passed = false;
-        findings.push_back(DFMFinding{ std::move(code), std::move(severity),
-                                       std::move(message) });
-    }
-};
+// DFMFinding / DFMReport moved to dfm/DFMReport.hpp (shared by all product
+// models — breakthrough plan B5); included above for source compatibility.
 
 // M1.5: full 11-step watch front-case builder (M1.1 steps 1-3, M1.2 steps
 // 4-6, M1.5 steps 7-10 + runDFM).

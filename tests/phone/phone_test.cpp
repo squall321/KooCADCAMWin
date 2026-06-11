@@ -156,3 +156,34 @@ TEST(PhoneFrontModel, OptionalSectionsArePassThrough)
     EXPECT_NEAR(bb.dy(), 140.0, 0.5);
     EXPECT_NEAR(bb.dz(),   8.0, 0.5);
 }
+
+// ── DFM: the default phone must clear the shared rule catalog ─────────────
+// (breakthrough plan B5.5 — phone profile of dfm::runProductDFM; same gate
+// philosophy as watch_features' RunDFMPassesOnSampleSpec.)
+TEST(PhoneFrontModel, RunDFMPassesOnDefaultSpec)
+{
+    using namespace koocadcam;
+    nlohmann::json spec = engine::PhoneFrontModel::defaultSpec();
+
+    std::vector<engine::BuildWarning> warnings;
+    TopoDS_Shape shape = engine::PhoneFrontModel::buildAll(spec, warnings);
+    ASSERT_FALSE(shape.IsNull());
+
+    auto report = engine::PhoneFrontModel::runDFM(shape, spec);
+
+    std::string errs;
+    for (const auto& f : report.findings)
+        if (f.severity == "error")
+            errs += "\n  [" + f.code + "] " + f.message;
+
+    EXPECT_TRUE(report.passed)
+        << "default phone spec must pass DFM — error findings:" << errs;
+    // The expansion summary rules must run for phones too.
+    auto hasCode = [&](const char* code) {
+        for (const auto& f : report.findings)
+            if (f.code == code) return true;
+        return false;
+    };
+    EXPECT_TRUE(hasCode("DFM-012")) << "face-count rule must run";
+    EXPECT_TRUE(hasCode("DFM-016")) << "fill-ratio rule must run";
+}

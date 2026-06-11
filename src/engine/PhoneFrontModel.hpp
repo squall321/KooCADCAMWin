@@ -7,6 +7,7 @@
 // rectangular geometries as cleanly as the round watch case.
 
 #include "ProductFrontModel.hpp"
+#include "dfm/DFMReport.hpp"
 
 #include <TopoDS_Shape.hxx>
 
@@ -52,6 +53,12 @@ public:
     // ── Convenience: run all 4 M2-phase-1 steps in order.
     static TopoDS_Shape buildAll(const nlohmann::json& spec,
                                  std::vector<BuildWarning>& warnings);
+
+    // ── DFM rule-catalog validation (shared engine, phone profile) ──
+    // Same DFM-001..DFM-023 catalog as the watch via dfm::runProductDFM —
+    // phone profile: minWall 0.40 mm, DFM-013 display flatness enabled.
+    static DFMReport runDFM(const TopoDS_Shape& shape,
+                            const nlohmann::json& spec);
 
     // Default spec — 76 × 160 × 8 mm modern-smartphone baseline.
     // Used by "File > New Phone (Rectangular)" menu and phone_test fixture.
