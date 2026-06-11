@@ -8,6 +8,7 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <NCollection_IndexedDataMap.hxx>
@@ -439,6 +440,23 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             drillVec.Normalize();
             const gp_Dir adir(drillVec);
 
+            // PHYSICAL gate (B1.5 follow-up): the tool must be able to REACH
+            // the entry — the point just before the entry rim along the
+            // drill axis must be open air (or an open cavity), never solid
+            // material.  Without this, a blind UNDERCUT bore (narrow upper,
+            // wide lower — bore_with_shelf geometry) recognizes as a
+            // counterbore seen upside-down with the blind floor as "entry",
+            // shadowing the correct bws candidate in dedupe (corpus B7
+            // measurement, 2026-06-11).
+            {
+                const gp_Pnt probe(seatEntryCenter.X() - adir.X() * 0.5,
+                                   seatEntryCenter.Y() - adir.Y() * 0.5,
+                                   seatEntryCenter.Z() - adir.Z() * 0.5);
+                BRepClass3d_SolidClassifier cls(wp.shape());
+                cls.Perform(probe, 1e-6);
+                if (cls.State() == TopAbs_IN) continue;   // entry buried in material
+            }
+
             // Project every relevant center onto the drill axis; entry is the
             // origin (proj 0), deeper is positive.
             auto proj = [&](const gp_Pnt& p) {
@@ -480,12 +498,50 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                 { "seat_dia_mm",     2.0 * large.radius },
                 { "seat_depth_mm",   seatDepth },
             };
+            // Claim the planar ENTRY face and the STEP ANNULUS (shoulder) in
+            // matched_geometry.  dedupe's specificity rule (B1.5) replaces a
+            // shadowing drill candidate only when this candidate's face set
+            // STRICTLY CONTAINS the drill's — and a drill recognized on the
+            // pilot reports the shoulder as ITS entry face, so without the
+            // shoulder id here the counterbore stays blocked forever.
+            int    entryFaceId    = -1;
+            int    shoulderFaceId = -1;
+            double entryArea      = 0.0;
+            for (int fi = 0; fi < wp.faceCount(); ++fi) {
+                if (!wp.isFacePlanar(fi)) continue;
+                gp_Dir n;
+                try { n = wp.faceNormal(fi); } catch (...) { continue; }
+                const double nDot = std::abs(n.X() * adir.X() +
+                                             n.Y() * adir.Y() +
+                                             n.Z() * adir.Z());
+                if (nDot < 0.99) continue;            // not ⊥ to the bore axis
+                const gp_Pnt c = wp.faceCenter(fi);
+                const double p = proj(c);
+                if (std::abs(p) < 0.05) {
+                    // Entry plane: the largest coplanar face at proj ≈ 0.
+                    const double area = wp.faceArea(fi);
+                    if (area > entryArea) { entryArea = area; entryFaceId = fi; }
+                } else if (std::abs(p - seatDepth) <
+                           std::max(0.05, junctionTol)) {
+                    // Step annulus: centroid sits on the axis at seat depth.
+                    const gp_Vec rel(seatEntryCenter, c);
+                    const double along = rel.X() * adir.X() +
+                                         rel.Y() * adir.Y() +
+                                         rel.Z() * adir.Z();
+                    const gp_Vec radial = rel - gp_Vec(adir) * along;
+                    if (radial.Magnitude() <= large.radius)
+                        shoulderFaceId = fi;
+                }
+            }
+
             json matched = {
                 { "seat_cyl_face_id",  large.faceIdx },
                 { "pilot_cyl_face_id", small.faceIdx },
                 { "entry_center", { seatEntryCenter.X(), seatEntryCenter.Y(),
                                     seatEntryCenter.Z() } },
             };
+            if (entryFaceId >= 0)    matched["entry_face_id"]    = entryFaceId;
+            if (shoulderFaceId >= 0) matched["shoulder_face_id"] = shoulderFaceId;
             out.push_back(RecognizedFeature{
                 kSkillId, recovered, conf, matched
             });

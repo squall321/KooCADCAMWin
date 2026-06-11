@@ -8,6 +8,7 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
@@ -137,10 +138,14 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const TopoDS_Shape upperCutter = pr::cylinder(upperAx, in.upper_dia_mm / 2.0, upperHeight);
     const TopoDS_Shape lowerCutter = pr::cylinder(lowerAx, in.lower_dia_mm / 2.0, lowerHeight);
 
-    // cutMany packs both into a single Boolean — faster and topology-cleaner
-    // than two sequential cuts.
-    const TopoDS_Shape newShape = pr::cutMany(wp.shape(),
-        std::vector<TopoDS_Shape>{ upperCutter, lowerCutter });
+    // SEQUENTIAL cuts, deliberately NOT one compound Boolean: the two
+    // cylinders overlap at the shelf junction by design (lowerOverlap), and
+    // overlapping cutters packed into a single OCCT 8.0 Boolean are exactly
+    // the documented silent no-op/WIPE trap — replaying a recovered
+    // bore_with_shelf on the bearing housing wiped the whole solid to
+    // 5.7k mm^3 through this path (2026-06-11).
+    TopoDS_Shape newShape = pr::cut(wp.shape(), upperCutter);
+    newShape = pr::cut(newShape, lowerCutter);
 
     json params = {
         { "entry_face_kind", "resolved_id" },
@@ -375,6 +380,26 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 
             // Sanity: must look like a non-trivial step bore.
             if (upperDepth < 1e-3 || lowerDepth < 1e-3) continue;
+
+            // PHYSICAL gate (B1.5 follow-up #3): a bore's axis runs through
+            // VOID.  If the workpiece still has MATERIAL on the axis just
+            // below the entry, this coaxial pair is not a bore at all but
+            // the two WALLS of an annular groove around a solid core — the
+            // bearing housing's o-ring groove (walls Ø76/Ø84) masqueraded
+            // as a stepped bore this way, and replaying the phantom wiped
+            // the part (see the sequential-cut note in apply()).
+            {
+                gp_Vec axStep(entryPt, shelfPt);
+                if (axStep.Magnitude() < 1e-9) continue;
+                axStep.Normalize();
+                const gp_Pnt probe(
+                    entryPt.X() + axStep.X() * (0.5 * upperDepth),
+                    entryPt.Y() + axStep.Y() * (0.5 * upperDepth),
+                    entryPt.Z() + axStep.Z() * (0.5 * upperDepth));
+                BRepClass3d_SolidClassifier cls(wp.shape());
+                cls.Perform(probe, 1e-6);
+                if (cls.State() == TopAbs_IN) continue;   // solid core → groove
+            }
 
             // Verify an annular planar face exists between a and b: find a
             // planar face whose boundary includes one edge of a's lower

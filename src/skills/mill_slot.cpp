@@ -9,6 +9,7 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <Standard_Failure.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
@@ -235,6 +236,28 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Cylinder cyl = surf.Cylinder();
         const gp_Dir adir = cyl.Axis().Direction();
         if (std::abs(std::abs(adir.Z()) - 1.0) > 1e-2) continue;
+
+        // CONCAVITY gate (B1.5 follow-up): a slot's end half-cylinder is
+        // CONCAVE (outward normal points back toward the end axis); a
+        // rounded TAB or outer corner is the convex mirror image and must
+        // not seed a phantom slot.  Same principle as drill_hole's
+        // machinability gate and mill_rect_pocket's corner gate.
+        try {
+            const gp_Pnt cc = wp.faceCenter(fIdx);
+            const gp_Dir nn = wp.faceNormal(fIdx);
+            const gp_Pnt aa = cyl.Axis().Location();
+            const gp_Vec rel(aa, cc);
+            const double along = rel.X() * adir.X() + rel.Y() * adir.Y()
+                               + rel.Z() * adir.Z();
+            gp_Vec radial = rel - gp_Vec(adir) * along;
+            if (radial.Magnitude() < 1e-9) continue;
+            radial.Normalize();
+            const double ndot = nn.X() * radial.X() + nn.Y() * radial.Y()
+                              + nn.Z() * radial.Z();
+            if (ndot > -0.2) continue;   // convex/tangential → not a slot end
+        } catch (const Standard_Failure&) {
+            continue;
+        }
 
         int bottomFaceIdx = -1;
         double zHi = -1e30, zLo = 1e30;

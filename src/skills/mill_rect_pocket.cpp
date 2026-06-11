@@ -8,6 +8,8 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <gp_Vec.hxx>
+#include <Standard_Failure.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
@@ -170,6 +172,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         double cy;
         double zTop;     // highest circular boundary edge z of THIS face
         double zBot;     // lowest circular boundary edge z of THIS face
+        double uSpan;    // angular extent of this face (rad)
     };
     std::vector<SubFaceEntry> sub;
 
@@ -181,6 +184,32 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Dir adir = cyl.Axis().Direction();
         // Vertical corner fillet: axis nearly parallel to global Z.
         if (std::abs(std::abs(adir.Z()) - 1.0) > 1e-2) continue;
+
+        // CONCAVITY gate (B1.5 follow-up; same principle as drill_hole's
+        // machinability gate): a pocket's corner fillet is CONCAVE — the
+        // material lies outside the quarter-cylinder, so the outward face
+        // normal points back toward the corner axis.  A part's rounded
+        // OUTER corner is the convex mirror image; without this gate the
+        // recognizer pattern-matched the bearing housing's exterior corner
+        // fillets as one giant phantom pocket (re-executing it removed
+        // 273k mm³ that was never machined on the original).
+        try {
+            const gp_Pnt c = wp.faceCenter(fIdx);
+            const gp_Dir n = wp.faceNormal(fIdx);
+            const gp_Pnt a = cyl.Axis().Location();
+            const gp_Vec rel(a, c);
+            const double along = rel.X() * adir.X() + rel.Y() * adir.Y()
+                               + rel.Z() * adir.Z();
+            gp_Vec radial = rel - gp_Vec(adir) * along;
+            if (radial.Magnitude() < 1e-9) continue;
+            radial.Normalize();
+            // Concave wall: outward normal opposes the outward radial.
+            const double dot = n.X() * radial.X() + n.Y() * radial.Y()
+                             + n.Z() * radial.Z();
+            if (dot > -0.2) continue;   // convex/tangential → not a pocket corner
+        } catch (const Standard_Failure&) {
+            continue;
+        }
 
         double zHi = -1e30, zLo = 1e30;
         bool hasCircularEdge = false;
@@ -194,10 +223,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             zLo = std::min(zLo, mid.Z());
         }
         if (!hasCircularEdge) continue;
+        // Angle this cylindrical sub-face subtends (U is the angular
+        // parameter on a cylinder) — accumulated per cluster below.
+        const double uSpan = surf.LastUParameter() - surf.FirstUParameter();
         sub.push_back({
             fIdx, cyl.Radius(),
             cyl.Axis().Location().X(), cyl.Axis().Location().Y(),
-            zHi, zLo
+            zHi, zLo, uSpan
         });
     }
 
@@ -209,6 +241,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         double cx = 0.0, cy = 0.0;
         double radius = 0.0;
         double zHi = -1e30, zLo = 1e30;
+        double spanSum = 0.0;   // total angle the cluster's faces subtend
         std::vector<int> cylIds;
     };
     std::vector<Cluster> clusters;
@@ -226,13 +259,31 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             c.cx = e.cx; c.cy = e.cy;
             c.radius = e.radius;
             c.zHi = e.zTop; c.zLo = e.zBot;
+            c.spanSum = e.uSpan;
             c.cylIds.push_back(e.cylFaceIdx);
             clusters.push_back(std::move(c));
         } else {
             hit->zHi = std::max(hit->zHi, e.zTop);
             hit->zLo = std::min(hit->zLo, e.zBot);
+            hit->spanSum += e.uSpan;
             hit->cylIds.push_back(e.cylFaceIdx);
         }
+    }
+
+    // ANGULAR-SPAN gate (B1.5 follow-up #2): a pocket's corner fillet is a
+    // QUARTER cylinder (~pi/2 total, however STEP splits it); a full drilled
+    // hole subtends 2*pi.  Without this gate, four bolt holes at the corners
+    // of a rectangle cluster like four corner fillets and synthesize one
+    // giant phantom pocket — on the bearing housing the four SHCS seats
+    // became an 80x80x43 "pocket" that over-removed 275k mm^3 on replay.
+    {
+        constexpr double kMaxCornerSpan = 2.4;   // rad: quarter+jitter ok, half/full hole rejected
+        std::vector<Cluster> cornersOnly;
+        cornersOnly.reserve(clusters.size());
+        for (auto& c : clusters) {
+            if (c.spanSum <= kMaxCornerSpan) cornersOnly.push_back(std::move(c));
+        }
+        clusters = std::move(cornersOnly);
     }
 
     // Group corner clusters by (zLo, zHi) — corners that share the same Z
