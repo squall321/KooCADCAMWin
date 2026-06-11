@@ -44,7 +44,7 @@
    compound = { atomic_prerequisites, geometric_constraints, confidence_formula(min) } YAML/JSON 룰 + 경량 인터프리터. 5종 검증 후 상위 20-30 compound 이식. **777개 손코딩 휴리스틱의 유지보수 천장을 데이터로 전환.**
 4. **B1.4 compound dedupe 보강** (G-RECOG-4 수정판, S, ~15줄)
    dedupe()에 `is_compound` 후보용 (skill_id + subfeature_count) 2차 키 추가.
-5. **B1.5 [신규·실측 확정] dedupe 특이성(specificity) 결함** (M) — 코퍼스 첫 실측(2026-06-11)이 정량화: recall_pre=1.000 인 9개 precise 스킬(counterbore/countersink/bore_*/mill_*pocket/mill_slot/bolt_hole/drill_through_hole)이 **dedupe 이후 0** — drill_hole(0.95)이 공유 실린더 면을 선점하면 dedupe 가 raw confidence 만으로 더 구체적인 후보를 버린다 (AS1 counterbore 2→0 과 동일 메커니즘). 수정 방향: face-ID 겹침 시 **더 많은 기하를 설명하는 후보 우선**(matched face-set 크기 → 동률이면 confidence). 수정 후 corpus_basic 의 `--gate`(post-dedupe)를 켠다.
+5. **B1.5 ✅ 완료 (2026-06-11)** — strict-superset 교체 규칙 구현, post-dedupe recall 6/15→12/15=1.000, corpus `--gate 0.99` 활성화. 추가 수확: 특이성 규칙이 노출한 팬텀 4종을 물리 게이트로 봉쇄(rect_pocket 오목성+각도스팬, slot 오목성, bws void-axis+순차 cut[compound-wipe 실발화 수정], counterbore entry-air+숄더 claim) — bearing 재실행이 6-스킬 리치 플랜으로 PASS. 잔여: bolt_hole entry claim(게이트 면제 중), countersink 역방향 케이스. (원안: M) — 코퍼스 첫 실측(2026-06-11)이 정량화: recall_pre=1.000 인 9개 precise 스킬(counterbore/countersink/bore_*/mill_*pocket/mill_slot/bolt_hole/drill_through_hole)이 **dedupe 이후 0** — drill_hole(0.95)이 공유 실린더 면을 선점하면 dedupe 가 raw confidence 만으로 더 구체적인 후보를 버린다 (AS1 counterbore 2→0 과 동일 메커니즘). 수정 방향: face-ID 겹침 시 **더 많은 기하를 설명하는 후보 우선**(matched face-set 크기 → 동률이면 confidence). 수정 후 corpus_basic 의 `--gate`(post-dedupe)를 켠다.
 
 수용 기준: 자기-라벨 코퍼스(B7)에서 compound recall 측정 가능 + bare-stock false-positive 0 유지 + 798 테스트 green.
 
