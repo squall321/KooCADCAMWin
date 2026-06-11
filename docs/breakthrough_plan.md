@@ -82,8 +82,8 @@
 1. **B5.1 [선행] DFMReport 통일** (S) — engine::DFMReport에 add() 부여 (skill::DFMReport와 정합).
 2. **B5.2 GeometryProbe 모듈** (G-PROBE-1 수정판, M) — Phase 1: 현 평면 dihedral을 probe API로 추출(동작 불변), Phase 2: BRepLProp_SLProps 엣지-UV 노멀로 곡면 knife-edge 검출(검증된 OCCT API).
 3. **B5.3 홀-외벽 클리어런스 프로브** (G-PROBE-2 수정판, **S로 강등**) — 레이캐스팅 불필요(검증자 정정): BRepExtrema로 홀 실린더↔외곽면 최소거리.
-4. **B5.4 DFMRuleRegistry(JSON)** (G-PROBE-3 수정판, M) — rule = {id, productScope, severity, threshold, probeType}. runDFM 로직을 데이터로 이관, 코드 중복 → 설정 중복.
-5. **B5.5 PhoneFrontModel::runDFM = 3줄 래퍼** (G-PROBE-4, **viable**) — registry.evaluate(shape,"phone"). 380줄 복붙 차단.
+4. **B5.4 �half 1단계 완료 (2026-06-11)** — 룰 엔진을 product-agnostic `dfm::runProductDFM(shape, spec, DFMProfile)` 로 추출(src/engine/dfm), 제품 차이는 프로파일 **데이터**(minWall 0.35/0.40, phone-scoped 룰 스위치). 풀 JSON 외부화는 룰셋 안정화 후 2단계.
+5. **B5.5 ✅ 완료 (2026-06-11)** — PhoneFrontModel::runDFM = 1줄 래퍼, 기본 폰이 첫 실측에서 자기 게이트 PASS + 테스트 잠금. "its own copy" TODO 소멸.
 6. **B5.6 곡면 포켓 곡률 룰 DFM-019** (G-PROBE-6 수정판, S, opt-in spec 플래그).
    ※ 777 스킬 validate() 임계값 전면 레지스트리화(G-PROBE-5)는 risk 대비 가치 낮음 — DFM-002류 공유 상수만 1차 이관.
 
@@ -91,8 +91,8 @@
 
 ### B6. 스키마 주도 제품/GUI — 위젯을 데이터로
 1. **B6.1 JSON Schema 파일** (G-SCHEMA-3, **viable**, S) — data/schemas/watch.json, phone.json (Draft 2020-12). 로드 검증 + 범위의 단일 진실원.
-2. **B6.2 FieldSchema 팩토리 + 그룹별 마이그레이션** (G-SCHEMA-4 수정판, M) — base+corner_radius를 한 커밋으로 PoC, **시그널 발화 회귀 테스트 선행**(현 offscreen 테스트는 정적 — 검증자 지적), 이후 bezel→display→crown/buttons 순.
-3. **B6.3 워치 step 7-10 편집 = 팩토리 산출물** — speaker_grille/secondary_fillets(폼 그룹), rear_sensors/lugs(제네릭 테이블). 손코딩 금지.
+2. **B6.2 ✅ 1단계 완료 (2026-06-11)** — FieldSchema 팩토리(src/gui/FieldSchema) + bezel 그룹 PoC 마이그레이션 + 시그널 debounce 회귀 테스트(연속 3편집→정확히 1발화). 잔여: display/crown/buttons 그룹 이관.
+3. **B6.3 🟨 절반 완료** — speaker_grille(step 7)·secondary_fillets(step 10) 편집 패널 가동(crown 식 enable-erase 의미론). 잔여: rear_sensors/lugs 용 제네릭 테이블 위젯(step 8-9).
 4. **B6.4 ProductRegistry** (G-SCHEMA-2 수정판, M) — Meyer 싱글톤 + 제품/스텝 메타데이터. AppMenus 바이패스 제거, 폰 패널이 데이터로 떨어짐.
    ※ 풀 디스크립터 시스템 일괄 전환(G-SCHEMA-1 원안 XL)은 빅뱅 금지 — 위 증분 경로가 공식.
 
