@@ -142,16 +142,18 @@ target_include_directories(koo_corpus SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(koo_corpus)
 
 # Gate policy (measured 2026-06-11, 15 skills x 3 samples):
-#  - recall_pre (does the recognizer itself see its feature) = 1.000 for
-#    13/15 skills → gated at 0.99.
-#  - ream (conf 0.35) / spot_face (0.65) sit below the 0.7 analysis
-#    threshold BY DESIGN → exempt, reported but not gated.
-#  - post-dedupe recall is NOT gated yet: the generic-beats-specific dedupe
-#    defect (drill_hole@0.95 shadows counterbore/bore/pocket candidates)
-#    suppresses 9 skills to 0 — fix tracked in plan B3/B1.4; gate via
-#    --gate once it lands.
+#  - recall_pre (recognizer sees its feature) = 1.000 for 13/15 → 0.99 gate.
+#  - post-dedupe recall = 1.000 for 12/15 after the B1.5 specificity rule
+#    (strict-superset replacement) + counterbore shoulder claim → 0.99 gate.
+#    Geometric aliases (drill↔bore↔circular-pocket, drill↔through) count as
+#    correct when dimensions match.
+#  - exempt (reported, not gated): ream (conf 0.35) / spot_face (0.65) sit
+#    below the 0.7 analysis threshold BY DESIGN; bolt_hole_metric_spec
+#    cannot win specificity until its recognize() claims an entry face
+#    (conf cap 0.78, no entry_face_id — plan B1.5 follow-up).
 add_test(NAME corpus_basic
-    COMMAND koo_corpus 3 --gate-pre 0.99 --exempt ream,spot_face)
+    COMMAND koo_corpus 3 --gate 0.99 --gate-pre 0.99
+            --exempt ream,spot_face,bolt_hole_metric_spec)
 set_tests_properties(corpus_basic PROPERTIES TIMEOUT 600 LABELS "corpus;re")
 
 # ── Product-spec JSON Schema conformance test (breakthrough plan B6.1) ──

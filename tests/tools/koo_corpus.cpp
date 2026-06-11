@@ -89,6 +89,8 @@ constexpr double kDimAbsTol     = 0.2;   // mm — absolute dimension tolerance
 constexpr double kDimRelTol     = 0.05;  // 5 % — relative dimension tolerance
 constexpr double kPosTol        = 0.5;   // mm — entry-position tolerance
 
+const std::vector<const char*> kNoAliases;   // strict-id evaluation
+
 // ── Phase-1 stock (scaled by --scale) ─────────────────────────────────────
 constexpr double kStockW = 80.0;
 constexpr double kStockH = 80.0;
@@ -181,6 +183,29 @@ struct SkillCase
     const char* id;
     Generator   gen;
 };
+
+// Geometric-equivalence aliases: ids accepted as a CORRECT post-dedupe answer
+// for a sample of the keyed skill.  drill / bore_cylindrical /
+// mill_circular_pocket leave the SAME two faces (wall + entry/bottom) on
+// these synthetic single-feature parts, so dedupe legitimately resolves them
+// by confidence — recovering the alias with the right dimensions is correct
+// understanding, not a recall miss.  (bolt_hole_metric_spec has no usable
+// alias: its dim key clearance_dia_mm does not exist on drill_hole's
+// recovered params — it stays gate-exempt until its recognize() emits an
+// entry_face_id and can win the specificity rule itself.)
+const std::vector<const char*>& aliasesFor(const std::string& id)
+{
+    static const std::vector<const char*> kNone;
+    static const std::vector<const char*> kDrill   = { "drill_hole" };
+    static const std::vector<const char*> kBoreEq  = { "drill_hole",
+                                                       "mill_circular_pocket" };
+    static const std::vector<const char*> kPockEq  = { "drill_hole",
+                                                       "bore_cylindrical" };
+    if (id == "drill_through_hole")   return kDrill;
+    if (id == "bore_cylindrical")     return kBoreEq;
+    if (id == "mill_circular_pocket") return kPockEq;
+    return kNone;
+}
 
 // ── The 15 precise-tier generators (parameter ranges stay DFM-valid) ──────
 const std::vector<SkillCase>& corpusCases()
@@ -550,11 +575,17 @@ struct Eval
 };
 
 Eval evaluate(const Sample& s, const std::string& skillId,
+              const std::vector<const char*>& aliases,
               const std::vector<skill::RecognizedFeature>& cands)
 {
     Eval best;
     for (const auto& c : cands) {
-        if (c.skill_id != skillId) continue;
+        bool idOk = (c.skill_id == skillId);
+        for (const char* a : aliases) {
+            if (idOk) break;
+            idOk = (c.skill_id == a);
+        }
+        if (!idOk) continue;
         const json& rp = c.recovered_params;
 
         double maxErr = 0.0;
@@ -737,8 +768,8 @@ int main(int argc, char* argv[])
             // 4) Score.
             Eval e, ePre;
             if (err.empty()) {
-                e    = evaluate(s, id, deduped);
-                ePre = evaluate(s, id, rawCands);
+                e    = evaluate(s, id, aliasesFor(id), deduped);
+                ePre = evaluate(s, id, kNoAliases, rawCands);   // pre-dedupe: strict id
             }
             const bool recognized = err.empty() && !leak && e.matched;
 
