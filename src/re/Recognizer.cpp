@@ -576,6 +576,18 @@ bool intersects(const std::unordered_set<int>& a, const std::unordered_set<int>&
     return false;
 }
 
+// True iff `sub` is a STRICT subset of `super` (everything in sub is in
+// super, and super explains at least one additional face).
+bool isStrictSubset(const std::unordered_set<int>& sub,
+                    const std::unordered_set<int>& super)
+{
+    if (sub.size() >= super.size()) return false;
+    for (int v : sub) {
+        if (!super.count(v)) return false;
+    }
+    return true;
+}
+
 // STEP-round-trip-STABLE geometric fingerprint.  Face IDs renumber on every
 // Workpiece(shape) build, so two recognizers describing the SAME physical hole
 // (e.g. a through-hole seen from both ends, or a cylinder split into multiple
@@ -634,14 +646,41 @@ dedupe(const std::vector<skill::RecognizedFeature>& candidates)
 
         // 2) Face-ID overlap — drop a competing claim (e.g. drill vs. bore) on
         //    geometry an already-kept candidate owns.
+        //
+        //    SPECIFICITY EXCEPTION (plan B1.5, measured 2026-06-11): raw
+        //    confidence order lets drill_hole (0.95) claim a shared cylinder
+        //    first and shadow the MORE COMPLETE explanation — the corpus
+        //    measured post-dedupe recall 0 for counterbore / countersink /
+        //    bore_with_shelf / mill_rect_pocket / mill_slot despite
+        //    recall_pre 1.0 (same mechanism dropped AS1's counterbores).
+        //    Rule: a challenger at or above the RE threshold whose face set
+        //    STRICTLY CONTAINS every overlapping incumbent's set replaces
+        //    those incumbents (the counterbore explains the drill's pilot
+        //    AND the seat AND the entry).  Equal sets (drill vs bore vs
+        //    circular pocket on the same two faces — genuine geometric
+        //    aliases) still resolve by confidence, preserving the
+        //    aspect-ratio ownership heuristics.
         std::unordered_set<int> fids;
         collectFaceIds(c.matched_geometry, fids);
         if (!fids.empty()) {
-            bool overlap = false;
-            for (const auto& kf : keptFaceSets) {
-                if (intersects(fids, kf)) { overlap = true; break; }
+            std::vector<std::size_t> subsumed;
+            bool blocked = false;
+            for (std::size_t i = 0; i < keptFaceSets.size(); ++i) {
+                if (!intersects(fids, keptFaceSets[i])) continue;
+                if (c.confidence >= 0.7 &&
+                    isStrictSubset(keptFaceSets[i], fids)) {
+                    subsumed.push_back(i);
+                } else {
+                    blocked = true;
+                    break;
+                }
             }
-            if (overlap) continue;
+            if (blocked) continue;
+            for (auto it = subsumed.rbegin(); it != subsumed.rend(); ++it) {
+                kept.erase(kept.begin() + static_cast<std::ptrdiff_t>(*it));
+                keptFaceSets.erase(keptFaceSets.begin()
+                                   + static_cast<std::ptrdiff_t>(*it));
+            }
         }
 
         kept.push_back(c);
