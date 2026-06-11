@@ -98,6 +98,7 @@ add_subdirectory(src/dfm)
 add_subdirectory(src/process)
 add_subdirectory(src/adapt)
 add_subdirectory(src/re)
+add_subdirectory(src/edit)
 add_subdirectory(src/cam)
 add_subdirectory(src/parts)
 

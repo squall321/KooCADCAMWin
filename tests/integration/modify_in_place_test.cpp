@@ -1,27 +1,31 @@
 // @lat: [[engine/reverse-route#modify-in-place]]
 //
-// Locks in the "recover a hole from a foreign STEP, change its diameter ON THE
-// ORIGINAL geometry, verify by re-recognition" capability that the koo_modify
-// tool performs — as a deterministic regression test (no real-file dependency).
+// Locks the "recover a hole from a foreign STEP, edit it ON THE ORIGINAL
+// geometry, verify by re-recognition" capability — as deterministic
+// regression tests (no real-file dependency).
 //
-//   synth cuboid + Ø10 hole  ->  STEP round-trip (strip metadata)
-//   ->  recognize (measured Ø10)  ->  ENLARGE in place (coaxial cut on the
-//       imported shape, preserving the rest)  ->  STEP round-trip
-//   ->  recognize  ->  assert the hole is now Ø14 at the same position.
+// All edits run through edit::editHole (plan B4.1): defeature (remove the
+// hole's faces + heal the solid, restoring material) then recut.  That makes
+// ENLARGE, SHRINK and MOVE the same material-removal operation — the old
+// fuse-based shrink/move path (annular ring + far_center heuristic, the
+// source of the reverted 1046 mm fill-tube failure) is gone.
+//
+//   synth cuboid + hole  ->  STEP round-trip (strip metadata)
+//   ->  recognize (measured, geometric path)  ->  editHole  ->  STEP
+//   round-trip  ->  recognize  ->  assert the edited hole.
 
 #include <gtest/gtest.h>
 
+#include "edit/FeatureEditor.hpp"
 #include "io/StepIO.hpp"
 #include "re/Recognizer.hpp"
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
 #include "skills/drill_hole.hpp"
 
-#include "engine/primitives/Tools.hpp"
-#include "engine/primitives/Cuts.hpp"
-
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
-#include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
@@ -31,7 +35,6 @@
 #include <string>
 
 using namespace koocadcam;
-namespace pr = koocadcam::engine::prim;
 
 namespace {
 
@@ -52,72 +55,174 @@ skill::Workpiece stepRoundTrip(const TopoDS_Shape& shape, int& featuresAfter)
     return wp;
 }
 
-// The single recovered drill_hole nearest (tx,ty); dia<0 if none.
-struct Hole { double x, y, dia; gp_Dir axis; };
-Hole recoverHoleNear(const skill::Workpiece& wp, double tx, double ty)
+// Recovered params of the drill_hole nearest (tx,ty); empty json if none
+// within 5 mm.
+nlohmann::json recoverHoleParamsNear(const skill::Workpiece& wp,
+                                     double tx, double ty)
 {
-    Hole best{ 0, 0, -1, gp_Dir(0,0,-1) };
+    nlohmann::json best;
     double bestD = 5.0;
-    for (const auto& c : re::analyze(wp)) {
+    for (const auto& c : re::dedupe(re::analyze(wp))) {
         if (c.skill_id != "drill_hole" || c.confidence < 0.7) continue;
         const auto& p = c.recovered_params;
         const double x = p.value("position_x_mm", 0.0);
         const double y = p.value("position_y_mm", 0.0);
         const double d = std::hypot(x - tx, y - ty);
-        if (d <= bestD) {
-            bestD = d;
-            gp_Dir ax(0,0,-1);
-            if (p.contains("axis_dir") && p["axis_dir"].is_array() && p["axis_dir"].size() == 3)
-                ax = gp_Dir(p["axis_dir"][0].get<double>(),
-                            p["axis_dir"][1].get<double>(),
-                            p["axis_dir"][2].get<double>());
-            best = { x, y, p.value("diameter_mm", 0.0), ax };
-        }
+        if (d <= bestD) { bestD = d; best = p; }
     }
     return best;
 }
 
+double volumeOf(const TopoDS_Shape& s)
+{
+    GProp_GProps g;
+    BRepGProp::VolumeProperties(s, g);
+    return g.Mass();
+}
+
+// Synthesize a 60x60x20 cuboid with one drilled hole and round-trip it so
+// only geometric recovery is possible.
+skill::Workpiece foreignPartWithHole(double cx, double cy, double dia,
+                                     double depth, bool through)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    skill::drill_hole::Input in;
+    in.entry_face    = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = cx;
+    in.position_y_mm = cy;
+    in.axis_dir      = gp_Dir(0, 0, -1);
+    in.diameter_mm   = dia;
+    in.depth_mm      = through ? 0.0 : depth;
+    in.through_hole  = through;
+    const TopoDS_Shape s0 =
+        skill::drill_hole::apply(*stock, in).workpiece->shape();
+    int feat = -1;
+    skill::Workpiece wp = stepRoundTrip(s0, feat);
+    EXPECT_EQ(feat, 0) << "STEP must strip metadata (geometric recovery only)";
+    return wp;
+}
+
 }  // namespace
 
-// ─── Recover a foreign hole, enlarge it in place, re-verify the new size ──
+// ─── 1. ENLARGE: Ø10 → Ø14 at the same position ───────────────────────────
 TEST(ModifyInPlace, EnlargeRecoveredHoleAndReverify)
 {
-    constexpr double kOldDia = 10.0, kNewDia = 14.0;
-    constexpr double kCx = 30.0, kCy = 30.0, kThk = 20.0;
+    skill::Workpiece foreign = foreignPartWithHole(30.0, 30.0, 10.0, 0.0, true);
+    const nlohmann::json rec = recoverHoleParamsNear(foreign, 30.0, 30.0);
+    ASSERT_FALSE(rec.empty()) << "original hole not recovered";
+    EXPECT_NEAR(rec.value("diameter_mm", 0.0), 10.0, 0.06);
 
-    // Synthesize a cuboid with a Ø10 through-hole.
-    auto stock = skill::createCuboidStock(60.0, 60.0, kThk);
-    skill::drill_hole::Input in;
-    in.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
-    in.position_x_mm = kCx; in.position_y_mm = kCy;
-    in.axis_dir = gp_Dir(0, 0, -1);
-    in.diameter_mm = kOldDia; in.depth_mm = 0.0; in.through_hole = true;
-    const TopoDS_Shape s0 = skill::drill_hole::apply(*stock, in).workpiece->shape();
+    auto oldHole = edit::holeSpecFromRecovered(rec);
+    ASSERT_TRUE(oldHole.has_value());
+    edit::HoleSpec newHole = *oldHole;
+    newHole.diameter_mm    = 14.0;
 
-    // STEP round-trip → recover the Ø10 hole (measured, geometric path).
-    int feat = -1;
-    skill::Workpiece foreign = stepRoundTrip(s0, feat);
-    ASSERT_EQ(feat, 0) << "STEP must strip metadata (geometric recovery only)";
-    const Hole h0 = recoverHoleNear(foreign, kCx, kCy);
-    ASSERT_GT(h0.dia, 0.0) << "original hole not recovered";
-    EXPECT_NEAR(h0.dia, kOldDia, 0.06);
-
-    // ENLARGE in place: cut a larger co-axial cylinder on the IMPORTED shape,
-    // exactly as koo_modify does — the rest of the part is preserved.
-    const double diag = std::sqrt(60.0*60.0 + 60.0*60.0 + kThk*kThk);
-    const gp_Pnt start(h0.x - h0.axis.X()*0.1*diag,
-                       h0.y - h0.axis.Y()*0.1*diag,
-                       kThk - h0.axis.Z()*0.1*diag);
+    std::string err;
     const TopoDS_Shape s1 =
-        pr::cut(foreign.shape(), pr::cylinder(gp_Ax2(start, h0.axis), kNewDia/2.0, diag*1.2));
+        edit::editHole(foreign.shape(), *oldHole, newHole, err);
+    ASSERT_FALSE(s1.IsNull()) << err;
 
-    // STEP round-trip → the hole is now Ø14 at the same position.
     int feat2 = -1;
     skill::Workpiece foreign2 = stepRoundTrip(s1, feat2);
     ASSERT_EQ(feat2, 0);
-    const Hole h1 = recoverHoleNear(foreign2, kCx, kCy);
-    ASSERT_GT(h1.dia, 0.0) << "enlarged hole not recovered";
-    EXPECT_NEAR(h1.dia, kNewDia, 0.06) << "hole must measure Ø14 after in-place enlarge";
-    EXPECT_NEAR(h1.x, kCx, 0.15);
-    EXPECT_NEAR(h1.y, kCy, 0.15);
+    const nlohmann::json r2 = recoverHoleParamsNear(foreign2, 30.0, 30.0);
+    ASSERT_FALSE(r2.empty()) << "enlarged hole not recovered";
+    EXPECT_NEAR(r2.value("diameter_mm", 0.0), 14.0, 0.06);
+    EXPECT_NEAR(r2.value("position_x_mm", 0.0), 30.0, 0.15);
+    EXPECT_NEAR(r2.value("position_y_mm", 0.0), 30.0, 0.15);
+}
+
+// ─── 2. SHRINK: Ø10 → Ø6 — the case the fuse path could never lock ────────
+TEST(ModifyInPlace, ShrinkRecoveredHoleAndReverify)
+{
+    skill::Workpiece foreign = foreignPartWithHole(30.0, 30.0, 10.0, 0.0, true);
+    const nlohmann::json rec = recoverHoleParamsNear(foreign, 30.0, 30.0);
+    ASSERT_FALSE(rec.empty());
+
+    auto oldHole = edit::holeSpecFromRecovered(rec);
+    ASSERT_TRUE(oldHole.has_value());
+    edit::HoleSpec newHole = *oldHole;
+    newHole.diameter_mm    = 6.0;
+
+    std::string err;
+    const TopoDS_Shape s1 =
+        edit::editHole(foreign.shape(), *oldHole, newHole, err);
+    ASSERT_FALSE(s1.IsNull()) << err;
+
+    // Shrinking restores material: π(5²−3²)·20 ≈ 1005 mm³.
+    const double expect = M_PI * (25.0 - 9.0) * 20.0;
+    const double dV = volumeOf(s1) - volumeOf(foreign.shape());
+    EXPECT_NEAR(dV, expect, expect * 0.05)
+        << "shrink must ADD back the annulus volume";
+
+    int feat2 = -1;
+    skill::Workpiece foreign2 = stepRoundTrip(s1, feat2);
+    ASSERT_EQ(feat2, 0);
+    const nlohmann::json r2 = recoverHoleParamsNear(foreign2, 30.0, 30.0);
+    ASSERT_FALSE(r2.empty()) << "shrunk hole not recovered";
+    EXPECT_NEAR(r2.value("diameter_mm", 0.0), 6.0, 0.06);
+}
+
+// ─── 3. MOVE: Ø10 at (30,30) → (42,22) — previously reverted as infeasible ─
+TEST(ModifyInPlace, MoveRecoveredHoleAndReverify)
+{
+    skill::Workpiece foreign = foreignPartWithHole(30.0, 30.0, 10.0, 0.0, true);
+    const nlohmann::json rec = recoverHoleParamsNear(foreign, 30.0, 30.0);
+    ASSERT_FALSE(rec.empty());
+
+    auto oldHole = edit::holeSpecFromRecovered(rec);
+    ASSERT_TRUE(oldHole.has_value());
+    edit::HoleSpec newHole = *oldHole;
+    newHole.entry = gp_Pnt(42.0, 22.0, oldHole->entry.Z());
+
+    std::string err;
+    const TopoDS_Shape s1 =
+        edit::editHole(foreign.shape(), *oldHole, newHole, err);
+    ASSERT_FALSE(s1.IsNull()) << err;
+
+    // Same hole, different place → volume unchanged within Boolean noise.
+    EXPECT_NEAR(volumeOf(s1), volumeOf(foreign.shape()),
+                volumeOf(foreign.shape()) * 0.005);
+
+    int feat2 = -1;
+    skill::Workpiece foreign2 = stepRoundTrip(s1, feat2);
+    ASSERT_EQ(feat2, 0);
+
+    const nlohmann::json atNew = recoverHoleParamsNear(foreign2, 42.0, 22.0);
+    ASSERT_FALSE(atNew.empty()) << "moved hole not recovered at new position";
+    EXPECT_NEAR(atNew.value("diameter_mm", 0.0), 10.0, 0.06);
+    EXPECT_NEAR(atNew.value("position_x_mm", 0.0), 42.0, 0.15);
+    EXPECT_NEAR(atNew.value("position_y_mm", 0.0), 22.0, 0.15);
+
+    const nlohmann::json atOld = recoverHoleParamsNear(foreign2, 30.0, 30.0);
+    EXPECT_TRUE(atOld.empty())
+        << "the old position must be HEALED — no hole may remain there";
+}
+
+// ─── 4. BLIND-hole shrink: defeature must also remove the bottom face ─────
+TEST(ModifyInPlace, ShrinkBlindHoleAndReverify)
+{
+    skill::Workpiece foreign =
+        foreignPartWithHole(30.0, 30.0, 10.0, 12.0, /*through=*/false);
+    const nlohmann::json rec = recoverHoleParamsNear(foreign, 30.0, 30.0);
+    ASSERT_FALSE(rec.empty());
+    EXPECT_NEAR(rec.value("depth_mm", 0.0), 12.0, 0.2);
+
+    auto oldHole = edit::holeSpecFromRecovered(rec);
+    ASSERT_TRUE(oldHole.has_value());
+    edit::HoleSpec newHole = *oldHole;
+    newHole.diameter_mm    = 6.0;
+
+    std::string err;
+    const TopoDS_Shape s1 =
+        edit::editHole(foreign.shape(), *oldHole, newHole, err);
+    ASSERT_FALSE(s1.IsNull()) << err;
+
+    int feat2 = -1;
+    skill::Workpiece foreign2 = stepRoundTrip(s1, feat2);
+    ASSERT_EQ(feat2, 0);
+    const nlohmann::json r2 = recoverHoleParamsNear(foreign2, 30.0, 30.0);
+    ASSERT_FALSE(r2.empty()) << "shrunk blind hole not recovered";
+    EXPECT_NEAR(r2.value("diameter_mm", 0.0), 6.0, 0.06);
+    EXPECT_NEAR(r2.value("depth_mm", 0.0), 12.0, 0.3);
 }

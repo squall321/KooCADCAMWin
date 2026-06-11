@@ -58,7 +58,7 @@ koo_apply_compiler_flags(koo_analyze)
 #   koo_modify <in.step> <out.step> <tx> <ty> <tz> <new_dia_mm> [tol]
 add_executable(koo_modify tools/koo_modify.cpp)
 target_link_libraries(koo_modify PRIVATE
-    koo_io koo_skills koo_re koo_engine koo_process)
+    koo_io koo_skills koo_re koo_edit koo_engine koo_process)
 target_include_directories(koo_modify SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(koo_modify)
 
@@ -1333,7 +1333,7 @@ add_executable(integration_modify_in_place
     integration/modify_in_place_test.cpp)
 target_link_libraries(integration_modify_in_place PRIVATE
     GTest::gtest GTest::gtest_main
-    koo_skills koo_process koo_re koo_io koo_engine)
+    koo_skills koo_process koo_re koo_edit koo_io koo_engine)
 target_include_directories(integration_modify_in_place SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 koo_apply_compiler_flags(integration_modify_in_place)
 add_test(NAME integration_modify_in_place COMMAND integration_modify_in_place)
