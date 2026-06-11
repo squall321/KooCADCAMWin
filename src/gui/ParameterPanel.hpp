@@ -7,6 +7,8 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+#include "gui/FieldSchema.hpp"
+
 #include <memory>
 
 class QCheckBox;
@@ -45,6 +47,8 @@ private slots:
     void onRebuildClicked();
     void onDebounceTimeout();
     void onCrownEnabledToggled(bool checked);
+    void onGrilleEnabledToggled(bool checked);
+    void onFilletsEnabledToggled(bool checked);
     void onAddButtonRow();
     void onRemoveLastButtonRow();
 
@@ -71,10 +75,8 @@ private:
     QDoubleSpinBox*  m_rTop{nullptr};
     QDoubleSpinBox*  m_rSide{nullptr};
 
-    // Bezel
-    QDoubleSpinBox*  m_bezelWidth{nullptr};
-    QDoubleSpinBox*  m_bezelDepth{nullptr};
-    QDoubleSpinBox*  m_bezelTaper{nullptr};
+    // Bezel (B6.2 PoC: factory-built — see bezelSchema() in the .cpp)
+    ControlMap       m_bezelControls;
 
     // Display pocket
     QDoubleSpinBox*  m_displayDiameter{nullptr};
@@ -90,6 +92,16 @@ private:
     QDoubleSpinBox*  m_crownDiameter{nullptr};
     QDoubleSpinBox*  m_crownShaft{nullptr};
 
+    // Speaker grille (step 7, factory-built; checkbox mirrors crown pattern)
+    QCheckBox*       m_grilleEnabled{nullptr};
+    QWidget*         m_grilleGroup{nullptr};
+    ControlMap       m_grilleControls;
+
+    // Secondary fillets (step 10, factory-built)
+    QCheckBox*       m_filletsEnabled{nullptr};
+    QWidget*         m_filletsGroup{nullptr};
+    ControlMap       m_filletsControls;
+
     // Side buttons
     QTableWidget*    m_sideButtonsTable{nullptr};
     QPushButton*     m_addButtonBtn{nullptr};
@@ -99,9 +111,10 @@ private:
     QTimer*          m_debounce{nullptr};
 
     // Last spec handed to setSpec(), retained so currentSpec() can preserve
-    // keys the panel has no widgets for (speaker_grille / rear_sensors /
-    // lugs / secondary_fillets, plus any future keys).  Without this, a
-    // load → edit-one-field → save/rebuild silently strips those steps.
+    // keys the panel has no widgets for (rear_sensors / lugs, plus any
+    // future keys).  Without this, a load → edit-one-field → save/rebuild
+    // silently strips those steps.  speaker_grille / secondary_fillets are
+    // now panel-owned (B6.3) and are always overwritten or erased on top.
     // unique_ptr keeps the heavy json type out of this header (json_fwd only).
     std::unique_ptr<nlohmann::json> m_baseSpec;
 };

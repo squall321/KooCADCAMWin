@@ -13,6 +13,11 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QEventLoop>
+#include <QSpinBox>
+#include <QTimer>
 #include <QtGlobal>
 
 #include "gui/ParameterPanel.hpp"
@@ -93,6 +98,100 @@ TEST(ParameterPanelPreservation, DisablingCrownErasesItFromBaseSpec)
         << "crown must not reappear once the loaded spec omits it";
     // ...but the other hidden steps are still preserved.
     EXPECT_TRUE(panel.currentSpec().contains("lugs"));
+}
+
+// ── B6.2/B6.3 schema-driven editing tests ────────────────────────────────────
+// Factory-built spin boxes carry objectName "<groupKey>.<fieldKey>" and the
+// enable checkboxes "<groupKey>.enabled", so tests reach them via findChild()
+// without any test-only panel API.
+
+// 5. Step 7 (speaker_grille) is now EDITABLE: changing a grille widget shows
+// up in currentSpec(), untouched grille fields keep their loaded values, and
+// the still-hidden steps (rear_sensors / lugs) survive unchanged.
+TEST(ParameterPanelEditing, SpeakerGrilleEditableRoundTrip)
+{
+    gui::ParameterPanel panel;
+    const nlohmann::json full = engine::WatchFrontModel::defaultSpec();
+    panel.setSpec(full);
+
+    auto* angle = panel.findChild<QDoubleSpinBox*>("speaker_grille.angle_deg");
+    ASSERT_NE(angle, nullptr) << "factory did not name the grille angle spin";
+    angle->setValue(90.0);
+
+    auto* rows = panel.findChild<QSpinBox*>("speaker_grille.rows");
+    ASSERT_NE(rows, nullptr) << "isInt field must be a QSpinBox";
+    rows->setValue(3);
+
+    const nlohmann::json out = panel.currentSpec();
+    ASSERT_TRUE(out.contains("speaker_grille"));
+    EXPECT_NEAR(out["speaker_grille"].value("angle_deg", 0.0), 90.0, 1e-9);
+    EXPECT_EQ(out["speaker_grille"]["rows"].get<int>(), 3);
+    // Untouched grille fields keep the values loaded from the spec.
+    EXPECT_EQ(out["speaker_grille"]["cols"], full["speaker_grille"]["cols"]);
+    EXPECT_EQ(out["speaker_grille"]["hole_dia_mm"],
+              full["speaker_grille"]["hole_dia_mm"]);
+    // Other hidden steps are still preserved verbatim.
+    EXPECT_EQ(out["lugs"],         full["lugs"]);
+    EXPECT_EQ(out["rear_sensors"], full["rear_sensors"]);
+}
+
+// 6. Step 10 (secondary_fillets) enable checkbox: uncheck → key erased from
+// currentSpec() even though it arrived via the base spec; recheck → key
+// restored with the widget value.
+TEST(ParameterPanelEditing, SecondaryFilletsToggle)
+{
+    gui::ParameterPanel panel;
+    const nlohmann::json full = engine::WatchFrontModel::defaultSpec();
+    ASSERT_TRUE(full.contains("secondary_fillets")) << "fixture precondition";
+    panel.setSpec(full);
+    EXPECT_TRUE(panel.currentSpec().contains("secondary_fillets"));
+
+    auto* enable = panel.findChild<QCheckBox*>("secondary_fillets.enabled");
+    ASSERT_NE(enable, nullptr);
+
+    enable->setChecked(false);
+    EXPECT_FALSE(panel.currentSpec().contains("secondary_fillets"))
+        << "unchecking must erase the key (crown-cavity semantics)";
+
+    enable->setChecked(true);
+    const nlohmann::json out = panel.currentSpec();
+    ASSERT_TRUE(out.contains("secondary_fillets"))
+        << "rechecking must restore the key";
+    EXPECT_NEAR(out["secondary_fillets"].value("r_mm", -1.0),
+                full["secondary_fillets"].value("r_mm", -2.0), 1e-9);
+}
+
+// 7. Signal regression (B6 verifier ask): editing a grille spin box fires the
+// debounced specChanged exactly ONCE within the 200 ms window — rapid edits
+// coalesce, and nothing fires synchronously.  parameter_panel_test does not
+// link Qt6::Test (tests/CMakeLists.txt is frozen), so instead of QSignalSpy
+// we count emissions with a plain connect and pump the event loop with
+// QEventLoop + QTimer::singleShot.
+TEST(ParameterPanelEditing, SpecChangedDebouncedOnceAfterGrilleEdit)
+{
+    gui::ParameterPanel panel;
+    panel.setSpec(engine::WatchFrontModel::defaultSpec());
+
+    int emissions = 0;
+    QObject::connect(&panel, &gui::ParameterPanel::specChanged,
+                     &panel, [&emissions] { ++emissions; });
+
+    auto* angle = panel.findChild<QDoubleSpinBox*>("speaker_grille.angle_deg");
+    ASSERT_NE(angle, nullptr);
+
+    // Three rapid edits — the debounce must coalesce them.
+    angle->setValue(10.0);
+    angle->setValue(20.0);
+    angle->setValue(30.0);
+    EXPECT_EQ(emissions, 0) << "specChanged must not fire synchronously";
+
+    // Pump the event loop well past the 200 ms debounce window.
+    QEventLoop loop;
+    QTimer::singleShot(500, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    EXPECT_EQ(emissions, 1)
+        << "debounced specChanged must fire exactly once after grille edits";
 }
 
 int main(int argc, char** argv)

@@ -3,6 +3,7 @@ add_library(koo_gui STATIC
     MainWindow.cpp
     OcctViewWidget.cpp
     AppMenus.cpp
+    FieldSchema.cpp
     ParameterPanel.cpp
     ProcessPlanEditor.cpp
     occt/OcctGlTools.cpp     # MIT — Kirill Gavrilov 2023, see licenses/OcctGlTools_MIT.txt

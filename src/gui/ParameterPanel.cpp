@@ -21,6 +21,60 @@
 
 namespace {
 
+using koocadcam::gui::FieldDescriptor;
+using koocadcam::gui::GroupSchema;
+
+// ── Group schemas (B6.2/B6.3) ────────────────────────────────────────────────
+// Ranges mirror data/schemas/watch.schema.json; defaults mirror
+// WatchFrontModel::defaultSpec().
+
+// B6.2 PoC migration: the bezel group, previously three hand-coded spin boxes.
+const GroupSchema& bezelSchema()
+{
+    static const GroupSchema s{
+        "bezel", "── Bezel ──",
+        {
+            // key          label                 min  max   step decimals default
+            { "width_mm",  "Bezel width (mm)",    1.0,  8.0, 0.1, 2, 3.0 },
+            { "depth_mm",  "Bezel depth (mm)",    0.3,  3.0, 0.1, 2, 1.0 },
+            { "taper_deg", "Bezel taper (°)", 0.0, 10.0, 0.5, 2, 0.0 },
+        }
+    };
+    return s;
+}
+
+// Step 7 — speaker grille (optional step; enable checkbox mirrors crown).
+// row/col spacing minimum 1.05 comes from the schema (DFM-014 pitch floor).
+const GroupSchema& grilleSchema()
+{
+    static const GroupSchema s{
+        "speaker_grille", nullptr,  // section label is hand-placed (crown style)
+        {
+            { "angle_deg",      "Grille angle (°, 0=3 o'clock)", 0.0, 360.0, 1.0, 2, 180.0 },
+            { "height_pos_mm",  "Grille height-pos (mm)",  0.0,  20.0, 0.1,  2, 5.0 },
+            { "rows",           "Rows",                    1.0,  10.0, 1.0,  0, 2.0, true },
+            { "cols",           "Cols",                    1.0,  20.0, 1.0,  0, 6.0, true },
+            { "row_spacing_mm", "Row spacing (mm)",        1.05,  5.0, 0.05, 2, 1.5 },
+            { "col_spacing_mm", "Col spacing (mm)",        1.05,  5.0, 0.05, 2, 1.5 },
+            { "hole_dia_mm",    "Hole diameter (mm)",      0.8,   3.0, 0.05, 2, 0.8 },
+            { "depth_mm",       "Hole depth (mm)",         0.3,   5.0, 0.1,  2, 1.0 },
+        }
+    };
+    return s;
+}
+
+// Step 10 — secondary (cosmetic) fillets.
+const GroupSchema& filletsSchema()
+{
+    static const GroupSchema s{
+        "secondary_fillets", nullptr,  // section label is hand-placed
+        {
+            { "r_mm", "Fillet radius (mm)", 0.05, 1.0, 0.05, 2, 0.2 },
+        }
+    };
+    return s;
+}
+
 nlohmann::json initialSpec()
 {
     return {
@@ -112,11 +166,6 @@ void ParameterPanel::buildUi()
     m_rTop  = makeSpin(0.2, 5.0, 0.1, 1.0);
     m_rSide = makeSpin(0.2, 3.0, 0.1, 0.6);
 
-    // ── Bezel ────────────────────────────────────────────────────────────────
-    m_bezelWidth = makeSpin(1.0, 8.0, 0.1, 3.0);
-    m_bezelDepth = makeSpin(0.3, 3.0, 0.1, 1.0);
-    m_bezelTaper = makeSpin(0.0, 10.0, 0.5, 0.0);
-
     // ── Form layout ──────────────────────────────────────────────────────────
     QWidget* formContainer = new QWidget(this);
     m_form = new QFormLayout(formContainer);
@@ -129,11 +178,11 @@ void ParameterPanel::buildUi()
     m_form->addRow(tr("Thickness (mm)"),   m_thickness);
     m_form->addRow(tr("R-top (mm)"),       m_rTop);
     m_form->addRow(tr("R-side (mm)"),      m_rSide);
-    m_form->addRow(tr("Bezel width (mm)"), m_bezelWidth);
-    m_form->addRow(tr("Bezel depth (mm)"), m_bezelDepth);
-    m_form->addRow(tr("Bezel taper (°)"), m_bezelTaper);
 
     vlay->addWidget(formContainer);
+
+    // ── Bezel (factory-built, B6.2 PoC) ──────────────────────────────────────
+    vlay->addWidget(buildGroupWidgets(this, bezelSchema(), m_bezelControls));
 
     // ── Display pocket ───────────────────────────────────────────────────────
     {
@@ -262,6 +311,42 @@ void ParameterPanel::buildUi()
         }
     }
 
+    // ── Speaker grille (step 7, factory-built) ───────────────────────────────
+    {
+        QLabel* sectionLabel = new QLabel(tr("── Speaker Grille ──"), this);
+        QFont sf = sectionLabel->font();
+        sf.setBold(true);
+        sectionLabel->setFont(sf);
+        vlay->addWidget(sectionLabel);
+
+        m_grilleEnabled = new QCheckBox(tr("Enable speaker grille"), this);
+        m_grilleEnabled->setObjectName(QStringLiteral("speaker_grille.enabled"));
+        m_grilleEnabled->setChecked(false);
+        vlay->addWidget(m_grilleEnabled);
+
+        m_grilleGroup = buildGroupWidgets(this, grilleSchema(), m_grilleControls);
+        vlay->addWidget(m_grilleGroup);
+        m_grilleGroup->setVisible(false);
+    }
+
+    // ── Secondary fillets (step 10, factory-built) ───────────────────────────
+    {
+        QLabel* sectionLabel = new QLabel(tr("── Secondary Fillets ──"), this);
+        QFont sf = sectionLabel->font();
+        sf.setBold(true);
+        sectionLabel->setFont(sf);
+        vlay->addWidget(sectionLabel);
+
+        m_filletsEnabled = new QCheckBox(tr("Enable secondary fillets"), this);
+        m_filletsEnabled->setObjectName(QStringLiteral("secondary_fillets.enabled"));
+        m_filletsEnabled->setChecked(false);
+        vlay->addWidget(m_filletsEnabled);
+
+        m_filletsGroup = buildGroupWidgets(this, filletsSchema(), m_filletsControls);
+        vlay->addWidget(m_filletsGroup);
+        m_filletsGroup->setVisible(false);
+    }
+
     // Rebuild button
     m_rebuildButton = new QPushButton(tr("Rebuild Now"), this);
     vlay->addWidget(m_rebuildButton);
@@ -282,9 +367,15 @@ void ParameterPanel::buildUi()
     connectSpin(m_thickness);
     connectSpin(m_rTop);
     connectSpin(m_rSide);
-    connectSpin(m_bezelWidth);
-    connectSpin(m_bezelDepth);
-    connectSpin(m_bezelTaper);
+
+    // Factory-built groups: bezel / speaker grille / secondary fillets
+    connectGroup(m_bezelControls,   this, [this] { onAnyValueChanged(); });
+    connectGroup(m_grilleControls,  this, [this] { onAnyValueChanged(); });
+    connectGroup(m_filletsControls, this, [this] { onAnyValueChanged(); });
+    connect(m_grilleEnabled, &QCheckBox::toggled,
+            this, &ParameterPanel::onGrilleEnabledToggled);
+    connect(m_filletsEnabled, &QCheckBox::toggled,
+            this, &ParameterPanel::onFilletsEnabledToggled);
 
     // Display pocket spins
     connectSpin(m_displayDiameter);
@@ -357,6 +448,18 @@ void ParameterPanel::onCrownEnabledToggled(bool checked)
     scheduleEmit();
 }
 
+void ParameterPanel::onGrilleEnabledToggled(bool checked)
+{
+    m_grilleGroup->setVisible(checked);
+    scheduleEmit();
+}
+
+void ParameterPanel::onFilletsEnabledToggled(bool checked)
+{
+    m_filletsGroup->setVisible(checked);
+    scheduleEmit();
+}
+
 void ParameterPanel::onAddButtonRow()
 {
     nlohmann::json newRow = {
@@ -419,9 +522,8 @@ nlohmann::json ParameterPanel::currentSpec() const
     base["thickness_mm"] = m_thickness->value();
 
     // Start from the retained base spec so steps the panel does not edit
-    // (speaker_grille / rear_sensors / lugs / secondary_fillets, and any
-    // unknown future keys) are preserved, then overwrite every panel-owned
-    // key below.
+    // (rear_sensors / lugs, and any unknown future keys) are preserved,
+    // then overwrite every panel-owned key below.
     nlohmann::json spec = m_baseSpec ? *m_baseSpec : nlohmann::json::object();
     spec["schema_version"] = "1.0.0";
     if (!spec.contains("product_name"))
@@ -430,9 +532,7 @@ nlohmann::json ParameterPanel::currentSpec() const
     spec["base"]          = base;
     spec["corner_radius"] = {{"r_top_mm",  m_rTop->value()},
                              {"r_side_mm", m_rSide->value()}};
-    spec["bezel"]         = {{"width_mm",  m_bezelWidth->value()},
-                             {"depth_mm",  m_bezelDepth->value()},
-                             {"taper_deg", m_bezelTaper->value()}};
+    readGroup(spec, bezelSchema(), m_bezelControls);
 
     // Display pocket
     spec["display_pocket"] = {
@@ -471,6 +571,20 @@ nlohmann::json ParameterPanel::currentSpec() const
     }
     spec["side_buttons"] = buttons;
 
+    // Speaker grille (step 7): panel-owned since B6.3 — overwrite when
+    // enabled; ERASE when unchecked so toggling it off also drops a grille
+    // that arrived via the base spec (crown-cavity semantics).
+    if (m_grilleEnabled->isChecked())
+        readGroup(spec, grilleSchema(), m_grilleControls);
+    else
+        spec.erase("speaker_grille");
+
+    // Secondary fillets (step 10): same enable/erase semantics.
+    if (m_filletsEnabled->isChecked())
+        readGroup(spec, filletsSchema(), m_filletsControls);
+    else
+        spec.erase("secondary_fillets");
+
     return spec;
 }
 
@@ -479,9 +593,8 @@ nlohmann::json ParameterPanel::currentSpec() const
 void ParameterPanel::setSpec(const nlohmann::json& spec)
 {
     // Retain the full incoming spec so currentSpec() can preserve the keys
-    // this panel has no widgets for (speaker_grille / rear_sensors / lugs /
-    // secondary_fillets).  Otherwise load → edit-one-field → save silently
-    // drops those steps.
+    // this panel has no widgets for (rear_sensors / lugs).  Otherwise
+    // load → edit-one-field → save silently drops those steps.
     m_baseSpec = std::make_unique<nlohmann::json>(spec);
 
     // Block all signals while we update widgets.
@@ -492,9 +605,6 @@ void ParameterPanel::setSpec(const nlohmann::json& spec)
     const QSignalBlocker bThick(m_thickness);
     const QSignalBlocker bRTop(m_rTop);
     const QSignalBlocker bRSide(m_rSide);
-    const QSignalBlocker bBW(m_bezelWidth);
-    const QSignalBlocker bBD(m_bezelDepth);
-    const QSignalBlocker bBT(m_bezelTaper);
     const QSignalBlocker bDispDiam(m_displayDiameter);
     const QSignalBlocker bDispDepth(m_displayDepth);
     const QSignalBlocker bGlassOff(m_glassOffset);
@@ -504,7 +614,11 @@ void ParameterPanel::setSpec(const nlohmann::json& spec)
     const QSignalBlocker bCrownD(m_crownDepth);
     const QSignalBlocker bCrownDia(m_crownDiameter);
     const QSignalBlocker bCrownShaft(m_crownShaft);
+    const QSignalBlocker bGrilleEn(m_grilleEnabled);
+    const QSignalBlocker bFilletsEn(m_filletsEnabled);
     const QSignalBlocker bTable(m_sideButtonsTable);
+    // Factory-built spin boxes (bezel / grille / fillets) are blocked
+    // per-widget inside FieldControl::setValue (writeGroup).
 
     // form_factor
     if (spec.contains("form_factor")) {
@@ -536,16 +650,8 @@ void ParameterPanel::setSpec(const nlohmann::json& spec)
             m_rSide->setValue(cr["r_side_mm"].get<double>());
     }
 
-    // bezel
-    if (spec.contains("bezel")) {
-        const auto& bz = spec["bezel"];
-        if (bz.contains("width_mm"))
-            m_bezelWidth->setValue(bz["width_mm"].get<double>());
-        if (bz.contains("depth_mm"))
-            m_bezelDepth->setValue(bz["depth_mm"].get<double>());
-        if (bz.contains("taper_deg"))
-            m_bezelTaper->setValue(bz["taper_deg"].get<double>());
-    }
+    // bezel (factory path — only keys present in the spec are applied)
+    writeGroup(spec, bezelSchema(), m_bezelControls);
 
     // display_pocket
     if (spec.contains("display_pocket")) {
@@ -583,6 +689,27 @@ void ParameterPanel::setSpec(const nlohmann::json& spec)
     if (spec.contains("side_buttons") && spec["side_buttons"].is_array()) {
         for (const auto& btnObj : spec["side_buttons"])
             appendButtonRow(btnObj);
+    }
+
+    // speaker_grille (step 7): key present → load values + check; absent →
+    // uncheck (mirrors crown_cavity).
+    if (spec.contains("speaker_grille")) {
+        m_grilleEnabled->setChecked(true);
+        writeGroup(spec, grilleSchema(), m_grilleControls);
+        m_grilleGroup->setVisible(true);
+    } else {
+        m_grilleEnabled->setChecked(false);
+        m_grilleGroup->setVisible(false);
+    }
+
+    // secondary_fillets (step 10): same presence semantics.
+    if (spec.contains("secondary_fillets")) {
+        m_filletsEnabled->setChecked(true);
+        writeGroup(spec, filletsSchema(), m_filletsControls);
+        m_filletsGroup->setVisible(true);
+    } else {
+        m_filletsEnabled->setChecked(false);
+        m_filletsGroup->setVisible(false);
     }
 
     updateFieldVisibility();
