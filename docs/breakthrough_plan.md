@@ -82,7 +82,7 @@
 1. **B5.1 [선행] DFMReport 통일** (S) — engine::DFMReport에 add() 부여 (skill::DFMReport와 정합).
 2. **B5.2 GeometryProbe 모듈** (G-PROBE-1 수정판, M) — Phase 1: 현 평면 dihedral을 probe API로 추출(동작 불변), Phase 2: BRepLProp_SLProps 엣지-UV 노멀로 곡면 knife-edge 검출(검증된 OCCT API).
 3. **B5.3 홀-외벽 클리어런스 프로브** (G-PROBE-2 수정판, **S로 강등**) — 레이캐스팅 불필요(검증자 정정): BRepExtrema로 홀 실린더↔외곽면 최소거리.
-4. **B5.4 �half 1단계 완료 (2026-06-11)** — 룰 엔진을 product-agnostic `dfm::runProductDFM(shape, spec, DFMProfile)` 로 추출(src/engine/dfm), 제품 차이는 프로파일 **데이터**(minWall 0.35/0.40, phone-scoped 룰 스위치). 풀 JSON 외부화는 룰셋 안정화 후 2단계.
+4. **B5.4 🟨 1단계 완료 (2026-06-11)** — 룰 엔진을 product-agnostic `dfm::runProductDFM(shape, spec, DFMProfile)` 로 추출(src/engine/dfm), 제품 차이는 프로파일 **데이터**(minWall 0.35/0.40, phone-scoped 룰 스위치). 풀 JSON 외부화는 룰셋 안정화 후 2단계.
 5. **B5.5 ✅ 완료 (2026-06-11)** — PhoneFrontModel::runDFM = 1줄 래퍼, 기본 폰이 첫 실측에서 자기 게이트 PASS + 테스트 잠금. "its own copy" TODO 소멸.
 6. **B5.6 곡면 포켓 곡률 룰 DFM-019** (G-PROBE-6 수정판, S, opt-in spec 플래그).
    ※ 777 스킬 validate() 임계값 전면 레지스트리화(G-PROBE-5)는 risk 대비 가치 낮음 — DFM-002류 공유 상수만 1차 이관.
