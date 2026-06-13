@@ -107,14 +107,25 @@ private:
     QPushButton*     m_addButtonBtn{nullptr};
     QPushButton*     m_removeButtonBtn{nullptr};
 
+    // Rear sensors (step 8) — generic array-of-struct table (B6.3)
+    QTableWidget*    m_rearSensorsTable{nullptr};
+    QPushButton*     m_rearSensorsAddBtn{nullptr};
+    QPushButton*     m_rearSensorsRemoveBtn{nullptr};
+
+    // Lugs (step 9) — generic array-of-struct table (B6.3)
+    QTableWidget*    m_lugsTable{nullptr};
+    QPushButton*     m_lugsAddBtn{nullptr};
+    QPushButton*     m_lugsRemoveBtn{nullptr};
+
     QPushButton*     m_rebuildButton{nullptr};
     QTimer*          m_debounce{nullptr};
 
     // Last spec handed to setSpec(), retained so currentSpec() can preserve
-    // keys the panel has no widgets for (rear_sensors / lugs, plus any
-    // future keys).  Without this, a load → edit-one-field → save/rebuild
-    // silently strips those steps.  speaker_grille / secondary_fillets are
-    // now panel-owned (B6.3) and are always overwritten or erased on top.
+    // keys the panel has no widgets for (any unknown future keys).  Without
+    // this, a load → edit-one-field → save/rebuild silently strips those
+    // steps.  speaker_grille / secondary_fillets (B6.3) and rear_sensors /
+    // lugs (B6.3 array tables) are now panel-owned and are always overwritten
+    // or erased on top — they are no longer pass-through.
     // unique_ptr keeps the heavy json type out of this header (json_fwd only).
     std::unique_ptr<nlohmann::json> m_baseSpec;
 };

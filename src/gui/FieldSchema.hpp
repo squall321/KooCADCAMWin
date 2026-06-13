@@ -16,7 +16,9 @@
 
 class QDoubleSpinBox;
 class QObject;
+class QPushButton;
 class QSpinBox;
+class QTableWidget;
 class QWidget;
 
 namespace koocadcam::gui {
@@ -74,5 +76,56 @@ void writeGroup(const nlohmann::json& spec, const GroupSchema& schema,
 // `receiver` is the connection context object (lifetime guard).
 void connectGroup(const ControlMap& controls, QObject* receiver,
                   const std::function<void()>& slot);
+
+// ── Array-of-struct table (B6.3) ─────────────────────────────────────────────
+// rear_sensors / lugs are JSON arrays of homogeneous objects.  A generic
+// QTableWidget renders one column per ColumnDescriptor and one row per array
+// element; Add/Remove buttons grow/shrink the array.  Cell text is a plain
+// number (no per-cell spin box) edited inline — ranges/decimals drive cell
+// formatting and clamping in readArrayTable().
+
+struct ColumnDescriptor {
+    const char* key;          // JSON key inside each row object
+    const char* header;       // column header text (UTF-8)
+    double      min;
+    double      max;
+    double      step;         // reserved for future inline editors; unused today
+    int         decimals;     // cell formatting precision
+    double      defaultValue; // value for a freshly added row
+    bool        optional = false; // true → blank/zero cell omits the key entirely
+};
+
+struct ArrayTableSchema {
+    const char*                   arrayKey; // spec JSON key ("rear_sensors", "lugs")
+    const char*                   title;    // section label (UTF-8); nullptr = none
+    std::vector<ColumnDescriptor> cols;
+};
+
+// Build the section label (optional) + a QTableWidget + an Add/Remove button
+// row, and return the container widget.  The table, add button and remove
+// button get objectNames "<arrayKey>.table", "<arrayKey>.add",
+// "<arrayKey>.remove" so tests can findChild() them.  Out-params receive the
+// created widgets (the panel owns the connections + row population).
+QWidget* buildArrayTable(QWidget* parent, const ArrayTableSchema& schema,
+                         QTableWidget*& outTable,
+                         QPushButton*&  outAdd,
+                         QPushButton*&  outRemove);
+
+// Append one row to the table, filling each column from `row` (falling back to
+// the column default when the key is missing).  Signal-blocked so it does not
+// fire cellChanged.  Pass an empty object to append a default row.
+void appendArrayRow(QTableWidget* table, const ArrayTableSchema& schema,
+                    const nlohmann::json& row);
+
+// Table → JSON array: one object per row.  Optional columns whose cell is
+// blank or zero are omitted from that row's object; non-optional columns are
+// always written (parsed as a double, clamped to [min, max]).
+[[nodiscard]] nlohmann::json readArrayTable(const QTableWidget* table,
+                                            const ArrayTableSchema& schema);
+
+// JSON array → table: clear the table and append one row per array element
+// (signal-blocked).  A non-array / absent value leaves the table empty.
+void writeArrayTable(QTableWidget* table, const ArrayTableSchema& schema,
+                     const nlohmann::json& array);
 
 }  // namespace koocadcam::gui

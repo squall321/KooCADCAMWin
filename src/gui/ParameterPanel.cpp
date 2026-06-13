@@ -21,6 +21,8 @@
 
 namespace {
 
+using koocadcam::gui::ArrayTableSchema;
+using koocadcam::gui::ColumnDescriptor;
 using koocadcam::gui::FieldDescriptor;
 using koocadcam::gui::GroupSchema;
 
@@ -70,6 +72,43 @@ const GroupSchema& filletsSchema()
         "secondary_fillets", nullptr,  // section label is hand-placed
         {
             { "r_mm", "Fillet radius (mm)", 0.05, 1.0, 0.05, 2, 0.2 },
+        }
+    };
+    return s;
+}
+
+// Step 8 — rear sensors (array of circular rear-face recesses).  Column ranges
+// mirror data/schemas/watch.schema.json rear_sensors.items.
+const ArrayTableSchema& rearSensorsSchema()
+{
+    static const ArrayTableSchema s{
+        "rear_sensors", "── Rear Sensors ──",
+        {
+            // key            header        min     max    step decimals default optional
+            { "offset_x_mm", "offset X (mm)", -27.5, 27.5, 0.1, 2, 0.0 },
+            { "offset_y_mm", "offset Y (mm)", -27.5, 27.5, 0.1, 2, 0.0 },
+            { "dia_mm",      "dia (mm)",        0.8, 20.0, 0.1, 2, 5.0 },
+            { "depth_mm",    "depth (mm)",      0.1, 10.0, 0.1, 2, 0.5 },
+        }
+    };
+    return s;
+}
+
+// Step 9 — lugs (array of strap-lug protrusions).  angle/length/width/thickness
+// mins mirror the schema; the schema leaves length/width/thickness/pin upper
+// bounds open, so the UI applies practical caps.  pin_hole_dia_mm is optional
+// (blank/zero cell → key omitted → engine builds the lug with no pin hole).
+const ArrayTableSchema& lugsSchema()
+{
+    static const ArrayTableSchema s{
+        "lugs", "── Lugs ──",
+        {
+            // key                header           min   max    step decimals default optional
+            { "angle_deg",        "angle (°)",      0.0, 360.0, 1.0, 2, 90.0 },
+            { "length_mm",        "length (mm)",    1.0,  20.0, 0.1, 2, 6.0 },
+            { "width_mm",         "width (mm)",     1.0,  40.0, 0.1, 2, 18.0 },
+            { "thickness_mm",     "thick (mm)",     0.5,  10.0, 0.1, 2, 3.0 },
+            { "pin_hole_dia_mm",  "pin dia (mm)",   0.6,   5.0, 0.1, 2, 1.8, true },
         }
     };
     return s;
@@ -329,6 +368,16 @@ void ParameterPanel::buildUi()
         m_grilleGroup->setVisible(false);
     }
 
+    // ── Rear sensors (step 8) + Lugs (step 9), generic array tables ──────────
+    vlay->addWidget(buildArrayTable(this, rearSensorsSchema(),
+                                    m_rearSensorsTable,
+                                    m_rearSensorsAddBtn,
+                                    m_rearSensorsRemoveBtn));
+    vlay->addWidget(buildArrayTable(this, lugsSchema(),
+                                    m_lugsTable,
+                                    m_lugsAddBtn,
+                                    m_lugsRemoveBtn));
+
     // ── Secondary fillets (step 10, factory-built) ───────────────────────────
     {
         QLabel* sectionLabel = new QLabel(tr("── Secondary Fillets ──"), this);
@@ -398,6 +447,31 @@ void ParameterPanel::buildUi()
             this, &ParameterPanel::onAddButtonRow);
     connect(m_removeButtonBtn, &QPushButton::clicked,
             this, &ParameterPanel::onRemoveLastButtonRow);
+
+    // Rear sensors / lugs array-table connections.  Cell edits and Add/Remove
+    // all funnel through the same debounced onAnyValueChanged (side_buttons
+    // pattern).  Add seeds a default row from the schema; Remove drops the
+    // last row.  Both are signal-blocked internally except the trailing emit.
+    auto wireArrayTable = [this](QTableWidget* table, const ArrayTableSchema& schema,
+                                 QPushButton* add, QPushButton* remove) {
+        connect(table, &QTableWidget::cellChanged,
+                this, [this](int, int) { onAnyValueChanged(); });
+        connect(add, &QPushButton::clicked, this, [this, table, &schema] {
+            appendArrayRow(table, schema, nlohmann::json::object());
+            scheduleEmit();
+        });
+        connect(remove, &QPushButton::clicked, this, [this, table] {
+            const int rows = table->rowCount();
+            if (rows > 0) {
+                table->removeRow(rows - 1);
+                scheduleEmit();
+            }
+        });
+    };
+    wireArrayTable(m_rearSensorsTable, rearSensorsSchema(),
+                   m_rearSensorsAddBtn, m_rearSensorsRemoveBtn);
+    wireArrayTable(m_lugsTable, lugsSchema(),
+                   m_lugsAddBtn, m_lugsRemoveBtn);
 
     connect(m_rebuildButton, &QPushButton::clicked,
             this, &ParameterPanel::onRebuildClicked);
@@ -521,9 +595,9 @@ nlohmann::json ParameterPanel::currentSpec() const
     }
     base["thickness_mm"] = m_thickness->value();
 
-    // Start from the retained base spec so steps the panel does not edit
-    // (rear_sensors / lugs, and any unknown future keys) are preserved,
-    // then overwrite every panel-owned key below.
+    // Start from the retained base spec so any unknown future keys the panel
+    // has no widgets for are preserved, then overwrite every panel-owned key
+    // below (rear_sensors / lugs are now panel-owned array tables).
     nlohmann::json spec = m_baseSpec ? *m_baseSpec : nlohmann::json::object();
     spec["schema_version"] = "1.0.0";
     if (!spec.contains("product_name"))
@@ -579,6 +653,13 @@ nlohmann::json ParameterPanel::currentSpec() const
     else
         spec.erase("speaker_grille");
 
+    // Rear sensors (step 8) + Lugs (step 9): panel-owned since B6.3 via the
+    // generic array tables.  Always overwrite with the table contents — 0 rows
+    // writes an empty array, exactly like side_buttons (the engine treats an
+    // empty array as "skip step").  No longer base-spec pass-through.
+    spec["rear_sensors"] = readArrayTable(m_rearSensorsTable, rearSensorsSchema());
+    spec["lugs"]         = readArrayTable(m_lugsTable, lugsSchema());
+
     // Secondary fillets (step 10): same enable/erase semantics.
     if (m_filletsEnabled->isChecked())
         readGroup(spec, filletsSchema(), m_filletsControls);
@@ -592,9 +673,9 @@ nlohmann::json ParameterPanel::currentSpec() const
 
 void ParameterPanel::setSpec(const nlohmann::json& spec)
 {
-    // Retain the full incoming spec so currentSpec() can preserve the keys
-    // this panel has no widgets for (rear_sensors / lugs).  Otherwise
-    // load → edit-one-field → save silently drops those steps.
+    // Retain the full incoming spec so currentSpec() can preserve any keys
+    // this panel has no widgets for (unknown future steps).  Otherwise
+    // load → edit-one-field → save silently drops them.
     m_baseSpec = std::make_unique<nlohmann::json>(spec);
 
     // Block all signals while we update widgets.
@@ -690,6 +771,14 @@ void ParameterPanel::setSpec(const nlohmann::json& spec)
         for (const auto& btnObj : spec["side_buttons"])
             appendButtonRow(btnObj);
     }
+
+    // rear_sensors (step 8) / lugs (step 9): key present → fill the table;
+    // absent / non-array → empty table (writeArrayTable clears either way).
+    writeArrayTable(m_rearSensorsTable, rearSensorsSchema(),
+                    spec.contains("rear_sensors") ? spec["rear_sensors"]
+                                                  : nlohmann::json());
+    writeArrayTable(m_lugsTable, lugsSchema(),
+                    spec.contains("lugs") ? spec["lugs"] : nlohmann::json());
 
     // speaker_grille (step 7): key present → load values + check; absent →
     // uncheck (mirrors crown_cavity).

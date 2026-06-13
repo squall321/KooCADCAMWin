@@ -16,7 +16,10 @@
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QEventLoop>
+#include <QPushButton>
 #include <QSpinBox>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QTimer>
 #include <QtGlobal>
 
@@ -192,6 +195,86 @@ TEST(ParameterPanelEditing, SpecChangedDebouncedOnceAfterGrilleEdit)
 
     EXPECT_EQ(emissions, 1)
         << "debounced specChanged must fire exactly once after grille edits";
+}
+
+// ── B6.3 array-table editing tests (rear_sensors / lugs) ─────────────────────
+// The generic array tables carry objectName "<arrayKey>.table"/".add"/".remove"
+// so tests reach them via findChild() without any test-only panel API.  Cells
+// are plain numeric text edited in place; setItem(...) mimics a user edit.
+
+// 8. Step 9 (lugs) is now EDITABLE: the table loads one row per default lug,
+// editing a cell shows up in currentSpec(), and an unrelated step
+// (speaker_grille) survives the round trip unchanged.
+TEST(ParameterPanelEditing, LugsTableEditableRoundTrip)
+{
+    gui::ParameterPanel panel;
+    const nlohmann::json full = engine::WatchFrontModel::defaultSpec();
+    ASSERT_TRUE(full.contains("lugs") && full["lugs"].is_array());
+    panel.setSpec(full);
+
+    auto* table = panel.findChild<QTableWidget*>("lugs.table");
+    ASSERT_NE(table, nullptr) << "factory did not name the lugs table";
+    ASSERT_EQ(table->rowCount(), static_cast<int>(full["lugs"].size()))
+        << "row count must match the loaded lugs array size";
+
+    // lugs columns: angle_deg(0) length_mm(1) width_mm(2) thickness_mm(3) pin(4)
+    table->setItem(0, 1, new QTableWidgetItem(QStringLiteral("7.50")));
+
+    const nlohmann::json out = panel.currentSpec();
+    ASSERT_TRUE(out.contains("lugs") && out["lugs"].is_array());
+    ASSERT_GE(out["lugs"].size(), 1u);
+    EXPECT_NEAR(out["lugs"][0].value("length_mm", 0.0), 7.5, 1e-9);
+    // Other steps preserved verbatim.
+    EXPECT_EQ(out["speaker_grille"], full["speaker_grille"]);
+    EXPECT_EQ(out["rear_sensors"],   full["rear_sensors"]);
+}
+
+// 9. Step 8 (rear_sensors) Add/Remove buttons grow/shrink the array.
+TEST(ParameterPanelEditing, RearSensorsAddRemoveRow)
+{
+    gui::ParameterPanel panel;
+    const nlohmann::json full = engine::WatchFrontModel::defaultSpec();
+    panel.setSpec(full);
+
+    const std::size_t base = panel.currentSpec()["rear_sensors"].size();
+    ASSERT_GT(base, 0u) << "fixture precondition: default has rear sensors";
+
+    auto* add    = panel.findChild<QPushButton*>("rear_sensors.add");
+    auto* remove = panel.findChild<QPushButton*>("rear_sensors.remove");
+    ASSERT_NE(add, nullptr);
+    ASSERT_NE(remove, nullptr);
+
+    add->click();
+    EXPECT_EQ(panel.currentSpec()["rear_sensors"].size(), base + 1);
+
+    remove->click();
+    EXPECT_EQ(panel.currentSpec()["rear_sensors"].size(), base);
+}
+
+// 10. lugs.pin_hole_dia_mm is optional: blanking (or zeroing) the cell drops
+// the key from that lug's object entirely (engine → lug with no pin hole).
+TEST(ParameterPanelEditing, LugsOptionalPinHoleOmitted)
+{
+    gui::ParameterPanel panel;
+    const nlohmann::json full = engine::WatchFrontModel::defaultSpec();
+    panel.setSpec(full);
+
+    auto* table = panel.findChild<QTableWidget*>("lugs.table");
+    ASSERT_NE(table, nullptr);
+    ASSERT_GE(table->rowCount(), 1);
+
+    // Default lugs DO carry a pin hole — verify the precondition, then clear it.
+    EXPECT_TRUE(panel.currentSpec()["lugs"][0].contains("pin_hole_dia_mm"));
+
+    // pin_hole_dia_mm is column 4; blank it (a user clearing the cell).
+    table->setItem(0, 4, new QTableWidgetItem(QString()));
+
+    const nlohmann::json out = panel.currentSpec();
+    EXPECT_FALSE(out["lugs"][0].contains("pin_hole_dia_mm"))
+        << "a blank optional cell must omit the key";
+    // The required columns are still present.
+    EXPECT_TRUE(out["lugs"][0].contains("angle_deg"));
+    EXPECT_TRUE(out["lugs"][0].contains("thickness_mm"));
 }
 
 int main(int argc, char** argv)

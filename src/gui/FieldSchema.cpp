@@ -4,15 +4,22 @@
 
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QString>
+#include <QStringList>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 namespace koocadcam::gui {
@@ -150,6 +157,128 @@ void connectGroup(const ControlMap& controls, QObject* receiver,
                              receiver, [slot](int) { slot(); });
         }
     }
+}
+
+// ── Array-of-struct table (B6.3) ─────────────────────────────────────────────
+
+QWidget* buildArrayTable(QWidget* parent, const ArrayTableSchema& schema,
+                         QTableWidget*& outTable,
+                         QPushButton*&  outAdd,
+                         QPushButton*&  outRemove)
+{
+    QWidget* container = new QWidget(parent);
+    QVBoxLayout* vlay = new QVBoxLayout(container);
+    vlay->setContentsMargins(0, 0, 0, 0);
+    vlay->setSpacing(4);
+
+    if (schema.title) {
+        QLabel* sectionLabel =
+            new QLabel(QString::fromUtf8(schema.title), container);
+        QFont sf = sectionLabel->font();
+        sf.setBold(true);
+        sectionLabel->setFont(sf);
+        vlay->addWidget(sectionLabel);
+    }
+
+    QStringList headers;
+    headers.reserve(static_cast<int>(schema.cols.size()));
+    for (const ColumnDescriptor& cd : schema.cols)
+        headers << QString::fromUtf8(cd.header);
+
+    QTableWidget* table =
+        new QTableWidget(0, static_cast<int>(schema.cols.size()), container);
+    table->setHorizontalHeaderLabels(headers);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->setMinimumHeight(80);  // ~3 rows visible (matches side_buttons)
+    table->setObjectName(QString::fromUtf8(schema.arrayKey) + QLatin1String(".table"));
+    vlay->addWidget(table);
+
+    QWidget* btnRow = new QWidget(container);
+    QHBoxLayout* btnLay = new QHBoxLayout(btnRow);
+    btnLay->setContentsMargins(0, 0, 0, 0);
+    QPushButton* addBtn = new QPushButton(QStringLiteral("Add row"), btnRow);
+    QPushButton* removeBtn = new QPushButton(QStringLiteral("Remove last"), btnRow);
+    addBtn->setObjectName(QString::fromUtf8(schema.arrayKey) + QLatin1String(".add"));
+    removeBtn->setObjectName(QString::fromUtf8(schema.arrayKey) + QLatin1String(".remove"));
+    btnLay->addWidget(addBtn);
+    btnLay->addWidget(removeBtn);
+    vlay->addWidget(btnRow);
+
+    outTable  = table;
+    outAdd    = addBtn;
+    outRemove = removeBtn;
+    return container;
+}
+
+void appendArrayRow(QTableWidget* table, const ArrayTableSchema& schema,
+                    const nlohmann::json& row)
+{
+    // Block cellChanged so populating cells doesn't trigger the debounce.
+    const QSignalBlocker blocker(table);
+
+    const int r = table->rowCount();
+    table->insertRow(r);
+
+    for (int c = 0; c < static_cast<int>(schema.cols.size()); ++c) {
+        const ColumnDescriptor& cd = schema.cols[c];
+        const bool present =
+            row.is_object() && row.contains(cd.key) && row[cd.key].is_number();
+
+        QString text;
+        if (present) {
+            text = QString::number(row[cd.key].get<double>(), 'f', cd.decimals);
+        } else if (cd.optional) {
+            // Missing optional value → blank cell (the "no key" state).
+            text = QString();
+        } else {
+            text = QString::number(cd.defaultValue, 'f', cd.decimals);
+        }
+        table->setItem(r, c, new QTableWidgetItem(text));
+    }
+}
+
+nlohmann::json readArrayTable(const QTableWidget* table,
+                              const ArrayTableSchema& schema)
+{
+    nlohmann::json arr = nlohmann::json::array();
+    for (int r = 0; r < table->rowCount(); ++r) {
+        nlohmann::json obj = nlohmann::json::object();
+        for (int c = 0; c < static_cast<int>(schema.cols.size()); ++c) {
+            const ColumnDescriptor& cd = schema.cols[c];
+            const QTableWidgetItem* it = table->item(r, c);
+            const QString raw = it ? it->text().trimmed() : QString();
+
+            if (cd.optional) {
+                // Blank cell → omit the key entirely.
+                if (raw.isEmpty())
+                    continue;
+                bool ok = false;
+                const double v = raw.toDouble(&ok);
+                // A zero (or unparsable) optional cell also means "no key".
+                if (!ok || v == 0.0)
+                    continue;
+                obj[cd.key] = std::clamp(v, cd.min, cd.max);
+            } else {
+                const double v = raw.isEmpty() ? cd.defaultValue : raw.toDouble();
+                obj[cd.key] = std::clamp(v, cd.min, cd.max);
+            }
+        }
+        arr.push_back(std::move(obj));
+    }
+    return arr;
+}
+
+void writeArrayTable(QTableWidget* table, const ArrayTableSchema& schema,
+                     const nlohmann::json& array)
+{
+    {
+        const QSignalBlocker blocker(table);
+        table->setRowCount(0);
+    }
+    if (!array.is_array())
+        return;
+    for (const auto& row : array)
+        appendArrayRow(table, schema, row);
 }
 
 }  // namespace koocadcam::gui
