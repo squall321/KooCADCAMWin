@@ -4,8 +4,10 @@
 
 #include <spdlog/spdlog.h>
 
+#include <gp_Dir.hxx>
 #include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 #include <gp_XYZ.hxx>
 
 #include <algorithm>
@@ -200,10 +202,96 @@ const Part* anchorPart(const PartsLayout& layout, const StepPoint& pt, double ma
 // Axes the step omits (e.g. a top-face drill's z) are seeded from the centre so
 // a 2-D feature transforms within its plane and the absent axis is never
 // written back.
+// ── Dimension scaling (B9.1) ───────────────────────────────────────────────
+//
+// Positions transform affinely (above); a feature's DIMENSIONS must scale with
+// the part too, or a grown part keeps Ø3 holes that no longer match the larger
+// bolt circle / clearance.  The part's resize is anisotropic — (sx, sy, sz) in
+// the part's LOCAL frame — so a dimension scales by the part stretch ALONG its
+// own direction:
+//
+//   • length_mm / width_mm / height_mm — extents along local X / Y / Z → sx/sy/sz.
+//   • depth_mm and *_depth_mm           — measured along the feature AXIS → the
+//     stretch of a unit vector along that axis,  |S ⊙ â|.
+//   • diameter / radius / *_dia_mm / *_r_mm / corner_r_mm — RADIAL, in the plane
+//     ⊥ the axis → the mean in-plane stretch (a cylinder must stay a cylinder,
+//     so we use one isotropic factor rather than turning the circle into an
+//     ellipse).
+//
+// â is the feature's axis_dir (default local −Z, the drilling convention),
+// expressed in the part's local frame so the diagonal S applies directly.  All
+// of this reduces to the obvious answers for the common Z-axis feature
+// (axial = sz, radial = (sx+sy)/2) and is exact for any axis + anisotropic S.
+namespace {
+
+double stretchAlong(const gp_Vec& unit, double sx, double sy, double sz)
+{
+    const gp_Vec s(unit.X() * sx, unit.Y() * sy, unit.Z() * sz);
+    return s.Magnitude();   // |S ⊙ û| for a unit û
+}
+
+void scaleFeatureDimensions(json& params, const gp_Trsf& rOldInv,
+                            double sx, double sy, double sz)
+{
+    if (!params.is_object()) return;
+    if (std::abs(sx - 1.0) < 1e-9 && std::abs(sy - 1.0) < 1e-9 &&
+        std::abs(sz - 1.0) < 1e-9) {
+        return;   // pure move/rotate — no dimension change
+    }
+
+    // Feature axis in the part's LOCAL frame (default −Z drilling axis).
+    gp_Vec axisLocal(0.0, 0.0, -1.0);
+    if (params.contains("axis_dir") && params["axis_dir"].is_array() &&
+        params["axis_dir"].size() == 3 && params["axis_dir"][0].is_number()) {
+        const gp_Vec world(params["axis_dir"][0].get<double>(),
+                           params["axis_dir"][1].get<double>(),
+                           params["axis_dir"][2].get<double>());
+        if (world.Magnitude() > 1e-9) axisLocal = world;
+    }
+    if (axisLocal.Magnitude() < 1e-9) axisLocal = gp_Vec(0.0, 0.0, -1.0);
+    axisLocal.Normalize();
+    axisLocal.Transform(rOldInv);                  // world axis → local frame (rotation only)
+    if (axisLocal.Magnitude() < 1e-9) axisLocal = gp_Vec(0.0, 0.0, -1.0);
+    axisLocal.Normalize();
+
+    const double axialScale = stretchAlong(axisLocal, sx, sy, sz);
+
+    // Two unit vectors spanning the plane ⊥ axis → mean in-plane stretch.
+    gp_Vec ref = (std::abs(axisLocal.Z()) < 0.9) ? gp_Vec(0, 0, 1)
+                                                 : gp_Vec(1, 0, 0);
+    gp_Vec u = axisLocal.Crossed(ref);
+    if (u.Magnitude() < 1e-9) u = gp_Vec(1, 0, 0); else u.Normalize();
+    gp_Vec v = axisLocal.Crossed(u);
+    if (v.Magnitude() < 1e-9) v = gp_Vec(0, 1, 0); else v.Normalize();
+    const double radialScale =
+        0.5 * (stretchAlong(u, sx, sy, sz) + stretchAlong(v, sx, sy, sz));
+
+    auto endsWith = [](const std::string& s, const std::string& suf) {
+        return s.size() >= suf.size() &&
+               s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+
+    for (auto it = params.begin(); it != params.end(); ++it) {
+        if (!it.value().is_number()) continue;
+        const std::string k = it.key();
+        double factor = 0.0;
+        if (k == "length_mm")       factor = sx;
+        else if (k == "width_mm")   factor = sy;
+        else if (k == "height_mm")  factor = sz;
+        else if (k == "depth_mm" || endsWith(k, "_depth_mm")) factor = axialScale;
+        else if (k == "diameter_mm" || k == "radius_mm" || k == "r_mm" ||
+                 endsWith(k, "_dia_mm") || endsWith(k, "_r_mm") ||
+                 endsWith(k, "_diameter_mm") || endsWith(k, "_radius_mm"))
+            factor = radialScale;
+        if (factor != 0.0) it.value() = it.value().get<double>() * factor;
+    }
+}
+
+}  // namespace
+
 void applyPartDeltaToParams(json& params, const Part& oldP, const Part& newP)
 {
     const StepPoint pt = pointFromParams(params);
-    if (!pt.any()) return;
 
     const gp_XYZ oldC(oldP.centerX(), oldP.centerY(), oldP.centerZ());
     const gp_XYZ newC(newP.centerX(), newP.centerY(), newP.centerZ());
@@ -217,6 +305,11 @@ void applyPartDeltaToParams(json& params, const Part& oldP, const Part& newP)
     const double sx = ratio(newP.sizeX(), oldP.sizeX());
     const double sy = ratio(newP.sizeY(), oldP.sizeY());
     const double sz = ratio(newP.sizeZ(), oldP.sizeZ());
+
+    // Dimensions scale with the part regardless of whether it carries a point.
+    scaleFeatureDimensions(params, rOldInv, sx, sy, sz);
+
+    if (!pt.any()) return;   // position-less step: dims done, nothing to move
 
     gp_XYZ rel(pt.hasX ? pt.x : oldP.centerX(),
                pt.hasY ? pt.y : oldP.centerY(),

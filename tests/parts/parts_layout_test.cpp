@@ -324,4 +324,89 @@ TEST(PartsLayout, ReframeScalesDependentStepsOnResize)
     // Offset (10,8) from centre scales by (2.0, 1.5) -> (20, 12).
     EXPECT_NEAR(out.steps()[0].params["position_x_mm"].get<double>(), 20.0, 1e-6);
     EXPECT_NEAR(out.steps()[0].params["position_y_mm"].get<double>(), 12.0, 1e-6);
+    // B9.1: the Ø3 drill is a RADIAL dimension on the (default) Z axis, so it
+    // scales by the mean in-plane stretch (2.0 + 1.5)/2 = 1.75 -> Ø5.25.
+    EXPECT_NEAR(out.steps()[0].params["diameter_mm"].get<double>(), 5.25, 1e-6);
+}
+
+// ─── 11. B9.1: depth scales along the feature axis; radial dims in-plane ──
+//
+// A blind Z-axis hole in a plate scaled 2× X, 1.5× Y, 3× Z: the diameter is
+// radial (mean in-plane = 1.75×), the depth is axial (along Z = 3×).
+TEST(PartsLayout, ReframeScalesDiameterAndDepthByAxis)
+{
+    ProcessPlan plan;
+    {   StepInvocation s; s.skill_id = "drill_hole";
+        s.params = { { "position_x_mm", 0.0 }, { "position_y_mm", 0.0 },
+                     { "axis_dir", { 0.0, 0.0, -1.0 } },
+                     { "diameter_mm", 4.0 }, { "depth_mm", 5.0 } };
+        plan.append(s); }
+
+    PartsLayout before;
+    before.addPart(makeAabbPart("plate", 0.0, 0.0, 0.0, 40.0, 40.0, 10.0));
+    PartsLayout after;
+    after.addPart(makeAabbPart("plate", 0.0, 0.0, 0.0, 80.0, 60.0, 30.0));
+
+    const ProcessPlan out = reframePlanForMoves(plan, before, after, 1.0);
+    ASSERT_EQ(out.size(), 1);
+    EXPECT_NEAR(out.steps()[0].params["diameter_mm"].get<double>(), 7.0, 1e-6); // 4 × 1.75
+    EXPECT_NEAR(out.steps()[0].params["depth_mm"].get<double>(),   15.0, 1e-6); // 5 × 3.0
+}
+
+// ─── 12. B9.2: combined ROTATE + SCALE + TRANSLATE acceptance ──────────────
+//
+// The full affine: a plate moves +(100,0,0), rotates +90° about Z, and grows
+// 2× X / 1.5× Y.  Position must track all three; the radial diameter scales by
+// the in-plane mean (1.75×) and is rotation-invariant.  This is the regression
+// that guards against applying the transforms in the wrong order.
+TEST(PartsLayout, ReframeCombinedAffineRotateScaleTranslate)
+{
+    ProcessPlan plan;
+    {   StepInvocation s; s.skill_id = "drill_hole";
+        s.params = { { "position_x_mm", 10.0 }, { "position_y_mm", 8.0 },
+                     { "axis_dir", { 0.0, 0.0, -1.0 } },
+                     { "diameter_mm", 4.0 } };
+        plan.append(s); }
+
+    PartsLayout before;
+    before.addPart(makeAabbPart("plate", 0.0, 0.0, 0.0, 40.0, 40.0, 4.0));
+
+    PartsLayout after;
+    {   Part p = makeAabbPart("plate", 100.0, 0.0, 0.0, 80.0, 60.0, 4.0);
+        gp_Trsf t;
+        t.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), M_PI / 2.0);
+        p.placement = t;
+        after.addPart(p); }
+
+    const ProcessPlan out = reframePlanForMoves(plan, before, after, 1.0);
+    ASSERT_EQ(out.size(), 1);
+
+    // Local offset (10,8): scale → (20,12), rotate +90° → (−12,20), then
+    // translate by the new centre (100,0,0) → (88, 20).
+    EXPECT_NEAR(out.steps()[0].params["position_x_mm"].get<double>(), 88.0, 1e-6);
+    EXPECT_NEAR(out.steps()[0].params["position_y_mm"].get<double>(), 20.0, 1e-6);
+    EXPECT_NEAR(out.steps()[0].params["diameter_mm"].get<double>(),    7.0, 1e-6);
+}
+
+// ─── 13. B9.1: a milled pocket's length/width track the part's local axes ──
+TEST(PartsLayout, ReframeScalesPocketLengthWidthByAxis)
+{
+    ProcessPlan plan;
+    {   StepInvocation s; s.skill_id = "mill_rect_pocket";
+        s.params = { { "center_x_mm", 0.0 }, { "center_y_mm", 0.0 },
+                     { "axis_dir", { 0.0, 0.0, -1.0 } },
+                     { "length_mm", 16.0 }, { "width_mm", 8.0 },
+                     { "depth_mm", 3.0 } };
+        plan.append(s); }
+
+    PartsLayout before;
+    before.addPart(makeAabbPart("plate", 0.0, 0.0, 0.0, 40.0, 40.0, 10.0));
+    PartsLayout after;
+    after.addPart(makeAabbPart("plate", 0.0, 0.0, 0.0, 80.0, 60.0, 10.0)); // 2× X, 1.5× Y
+
+    const ProcessPlan out = reframePlanForMoves(plan, before, after, 1.0);
+    ASSERT_EQ(out.size(), 1);
+    EXPECT_NEAR(out.steps()[0].params["length_mm"].get<double>(), 32.0, 1e-6); // ×2 (local X)
+    EXPECT_NEAR(out.steps()[0].params["width_mm"].get<double>(),  12.0, 1e-6); // ×1.5 (local Y)
+    EXPECT_NEAR(out.steps()[0].params["depth_mm"].get<double>(),   3.0, 1e-6); // axial Z unchanged
 }
