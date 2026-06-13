@@ -70,7 +70,7 @@
 ### B4. Defeaturing 편집 레이어 — material-add 취약성의 구조적 우회
 **핵심 enabler 검증됨**: `BRepAlgoAPI_Defeaturing`(헤더 실존, 자동 토폴로지 힐링, 멀티솔리드 보존).
 1. **B4.1 ✅ 완료+초과 달성 (2026-06-12)** — koo_edit(FeatureEditor): defeature(기하 기반 면 수집 — face-ID 비의존이라 검증자의 stale-ID 함정 자체를 우회) + recut 으로 **enlarge/shrink/MOVE 가 단일 재료-제거 연산**. 직접 기하 recut 채택으로 skill::apply 재적용이 불필요해져 B4.2 의 entry_face 폴백 전략 없이 단일-실린더 패밀리 3종 편집이 모두 가동. koo_modify --move 추가, fuse 경로 삭제. 4 케이스 테스트 잠금(shrink 볼륨 복원 실측, move 후 구멍 치유 확인 포함).
-2. **B4.2 compound 편집** (M-L) — counterbore/bore_with_shelf 류: 다중 면 제거 세트(파일럿+시트+숄더) 정의가 잔여 과제. skill::apply 재적용 경로가 필요해지면 그때 entry_face_fallback 전략(G-EDIT-LAYER-V2) 적용.
+2. **B4.2 ✅ 완료 (2026-06-14)** — defeatureCoaxialRegion(동축 영역 전체 면 제거+힐) + cutCounterbore(seat→pilot 순차 cut) → editCounterbore 로 counterbore 리사이즈/이동. 직접 기하 recut 채택으로 skill 재적용·entry_face 폴백 불필요. modify_in_place +1(seat Ø12→16, 4 dim 보존). bore_with_shelf 등 추가 stepped-bore 류는 동일 패턴 확장 가능.
 3. **B4.3 GUI/CLI 공용화** — FeatureSelector(재사용: koo_modify 근접 탐색) + SkillReapplier. 모든 인식 가능 스킬이 결국 편집 가능해지는 일반 구조.
    ※ 단순 "shrink를 defeature로 교체"(G-SHRINK-ASSEMBLY-FIX)는 entry_face 미복원 문제로 **refuted** — B4.2 폴백 전략이 선행 조건.
 
