@@ -114,8 +114,8 @@
    ※ CMakePresets v6→v5 다운그레이드 **refuted** (v5도 CMake 3.24+ 필요 — 버전 매핑 오류). 로컬 CMake 업그레이드 안내가 정답. 단일 타겟 빌드 금지 **refuted** (근본 원인 오진 — 게이트 스크립트가 정답).
 
 ### B9. Datum/Adapt — 리사이즈의 완전한 일반화
-1. **B9.1 치수 스케일링** (G-PARAM-1 수정판, M) — applyPartDeltaToParams 2차 패스: diameter/radius → (sx+sy)/2, depth → sz, length/width → 해당 축. 386개 스킬이 해당 필드 보유(실측). 네이밍 컨벤션 문서화.
-2. **B9.2 결합 affine 수용 테스트** (G-ACCEPT-1 수정판, M, B9.1 선행) — 회전 30°+스케일 1.5×+이동 동시, 6개 코어 스킬, 위치 ±0.1mm/치수 ±0.05mm.
+1. **B9.1 ✅ 완료 (2026-06-13)** — applyPartDeltaToParams 에 축-인식 치수 스케일링: 피처 axis_dir(기본 −Z) 기준 axial(depth=|S⊙â|), radial(diameter/radius/dia/r = 평면 평균 스트레치, 원→타원 방지 등방근사), planar(length=sx/width=sy/height=sz 로컬 주축). Z축 피처는 axial=sz·radial=(sx+sy)/2 로 환원. sx=sy=sz=1 이면 no-op(회전·이동 불변). [원래: 치수 스케일링** (G-PARAM-1 수정판, M) — applyPartDeltaToParams 2차 패스: diameter/radius → (sx+sy)/2, depth → sz, length/width → 해당 축. 386개 스킬이 해당 필드 보유(실측). 네이밍 컨벤션 문서화.]
+2. **B9.2 ✅ 완료** — 결합 affine 수용 테스트(rotate+scale+translate 동시) + 축별 depth/length/width 단언 추가 (parts_layout 13 TEST). [원래: 결합 affine 수용 테스트** (G-ACCEPT-1 수정판, M, B9.1 선행) — 회전 30°+스케일 1.5×+이동 동시, 6개 코어 스킬, 위치 ±0.1mm/치수 ±0.05mm.]
 3. **B9.3 소유권 신뢰도** (G-AMBIG-1 수정판, M) — anchorPart가 단일 Part* 대신 confidence 랭킹 후보 리스트(1.0 유일 내포 / 0.85 동률 / 0.6 경계) 반환, JSON v2 직렬화 + v1 폴백. LLM/사용자 해소 경로의 토대.
    ※ feature-frame 기하 시그니처 매칭(G-ANCHOR-1)은 현 단계 **refuted** — AABB+신뢰도로 충분, 랜드마크 인프라 부재.
 
