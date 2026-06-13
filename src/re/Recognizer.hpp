@@ -45,8 +45,14 @@ const std::vector<RecognizeFn>& recognizerRegistry();
 
 // Run every registered skill's recognize() on the workpiece, collect every
 // candidate from every skill, return them sorted by confidence (descending).
+//
+// `applyCap` (default true) demotes loose geometric fallbacks from non-precise
+// domain-compound recognizers to 0.5 on foreign CAD — the production behavior.
+// Pass false to read the RAW confidence the recognizers actually emit, which
+// the corpus uses to measure un-cap safety (does a compound spuriously fire at
+// raw ≥ 0.7 on a part that does NOT contain it?  → it is NOT safe to promote).
 std::vector<skill::RecognizedFeature>
-analyze(const skill::Workpiece& wp);
+analyze(const skill::Workpiece& wp, bool applyCap = true);
 
 // Filter candidates below `min_confidence` (default 0.7).
 std::vector<skill::RecognizedFeature>

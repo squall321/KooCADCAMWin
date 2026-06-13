@@ -1257,6 +1257,16 @@ koo_apply_compiler_flags(recognizer_test)
 add_test(NAME recognizer COMMAND recognizer_test)
 set_tests_properties(recognizer PROPERTIES TIMEOUT 60 LABELS "re")
 
+# ── Un-cap safety scan (breakthrough plan B1.x measurement) ───────
+add_executable(fpscan_test re/fpscan_test.cpp)
+target_link_libraries(fpscan_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_re koo_io koo_skills koo_engine)
+target_include_directories(fpscan_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(fpscan_test)
+add_test(NAME fpscan COMMAND fpscan_test)
+set_tests_properties(fpscan PROPERTIES TIMEOUT 120 LABELS "re;corpus")
+
 # ── Phone parametric build test (M2-phase-1) ──────────────────
 add_executable(phone_test phone/phone_test.cpp)
 target_link_libraries(phone_test PRIVATE

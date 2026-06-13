@@ -473,7 +473,8 @@ const std::unordered_set<std::string>& preciseRecognizers()
     return kPrecise;
 }
 
-std::vector<skill::RecognizedFeature> analyze(const skill::Workpiece& wp)
+std::vector<skill::RecognizedFeature> analyze(const skill::Workpiece& wp,
+                                              bool applyCap)
 {
     std::vector<skill::RecognizedFeature> all;
     for (const auto& fn : recognizerRegistry()) {
@@ -490,13 +491,16 @@ std::vector<skill::RecognizedFeature> analyze(const skill::Workpiece& wp)
     // Demote loose geometric fallbacks from non-precise (domain-compound)
     // recognizers.  Metadata replay ("source":"metadata_replay") and the
     // precise tier are exempt, so synthetic round-trips are unaffected.
+    // applyCap=false exposes the RAW confidence (corpus un-cap-safety scan).
     const auto& precise = preciseRecognizers();
-    for (auto& c : all) {
-        const bool replay =
-            c.matched_geometry.is_object() &&
-            c.matched_geometry.value("source", std::string()) == "metadata_replay";
-        if (!replay && !precise.count(c.skill_id))
-            c.confidence = std::min(c.confidence, 0.5);
+    if (applyCap) {
+        for (auto& c : all) {
+            const bool replay =
+                c.matched_geometry.is_object() &&
+                c.matched_geometry.value("source", std::string()) == "metadata_replay";
+            if (!replay && !precise.count(c.skill_id))
+                c.confidence = std::min(c.confidence, 0.5);
+        }
     }
 
     std::stable_sort(all.begin(), all.end(),
