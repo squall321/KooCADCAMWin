@@ -48,6 +48,8 @@
 
 수용 기준: 자기-라벨 코퍼스(B7)에서 compound recall 측정 가능 + bare-stock false-positive 0 유지 + 798 테스트 green.
 
+**B1.x 측정 결과 (2026-06-14, fpscan_test):** re::analyze(applyCap=false) raw 모드 + 6-파트 foreign 패널. 발견: raw≥0.7 spurious 발화 12개 domain-compound 중 **8개는 이미 dedupe(B1.5 특이성)가 subsume → un-cap 안전**(iso_h7/press_fit/tube_swage/dowel_pin 등 promiscuous bore-spec 포함), **단 4개만 dedupe 생존 → B1.2 타깃 그라운딩 필요**(gauge_block_step 3/6, gas_strut_hinge/hollow_cavity/pin_and_diamond 각 1/6). 캡 load-bearing 단언 + 측정 표가 fpscan_test 에 상시 가동. **B1.2 범위가 ~750 → 4개로 좁혀짐.**
+
 ### B2. 스킬 계약 기계화 — 드리프트의 구조적 차단
 1. **B2.1 `finalizeOutput()` 헬퍼** (src/skills/OutputUnifier.hpp, S) — 전파+서명+SkillOutput 생성을 한 함수로. (대안으로 검증자가 제시한 "Executor-side 일원화"는 직접 apply 체인을 깨뜨리므로 채택 안 함 — recognizer_test가 바로 그 경로)
 2. **B2.2 기계화 codemod** (M, 실측 10-14h) — 332 미전파 + 269 loop + 170 setFeatures를 finalizeOutput으로 통일. 100개 배치마다 full ctest. /WX 클린 빌드 필수.
