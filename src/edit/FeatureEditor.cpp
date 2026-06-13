@@ -191,4 +191,148 @@ TopoDS_Shape editHole(const TopoDS_Shape& shape, const HoleSpec& oldHole,
     }
 }
 
+// ── Compound coaxial feature editing (B4.2) ────────────────────────────────
+
+std::optional<CounterboreSpec>
+counterboreSpecFromRecovered(const nlohmann::json& p)
+{
+    if (!p.is_object()) return std::nullopt;
+    for (const char* k : { "pilot_dia_mm", "pilot_depth_mm",
+                           "seat_dia_mm", "seat_depth_mm",
+                           "position_x_mm", "position_y_mm" }) {
+        if (!p.contains(k) || !p[k].is_number()) return std::nullopt;
+    }
+    CounterboreSpec cb;
+    cb.pilot_dia_mm   = p["pilot_dia_mm"].get<double>();
+    cb.pilot_depth_mm = p["pilot_depth_mm"].get<double>();
+    cb.seat_dia_mm    = p["seat_dia_mm"].get<double>();
+    cb.seat_depth_mm  = p["seat_depth_mm"].get<double>();
+    cb.entry = gp_Pnt(p["position_x_mm"].get<double>(),
+                      p["position_y_mm"].get<double>(),
+                      p.value("position_z_mm", 0.0));
+    if (p.contains("axis_dir") && p["axis_dir"].is_array() &&
+        p["axis_dir"].size() == 3) {
+        const double ax = p["axis_dir"][0].get<double>();
+        const double ay = p["axis_dir"][1].get<double>();
+        const double az = p["axis_dir"][2].get<double>();
+        if (std::sqrt(ax * ax + ay * ay + az * az) > 1e-9)
+            cb.axis = gp_Dir(ax, ay, az);
+    }
+    if (cb.pilot_dia_mm <= 0.0 || cb.seat_dia_mm <= cb.pilot_dia_mm)
+        return std::nullopt;
+    return cb;
+}
+
+TopoDS_Shape defeatureCoaxialRegion(const TopoDS_Shape& shape,
+                                    const gp_Pnt& entry, const gp_Dir& axis,
+                                    double maxRadius, double axialDepth,
+                                    std::string& err)
+{
+    if (maxRadius <= 0.0) { err = "maxRadius must be > 0"; return {}; }
+    const gp_Lin axisLine(entry, axis);
+    const double radTol = std::max(0.05, 0.01 * maxRadius);
+
+    // Axial coordinate of a point measured from the entry along the axis.
+    auto axialOf = [&](const gp_Pnt& q) {
+        return (q.X() - entry.X()) * axis.X() + (q.Y() - entry.Y()) * axis.Y() +
+               (q.Z() - entry.Z()) * axis.Z();
+    };
+
+    NCollection_List<TopoDS_Shape> toRemove;
+    for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+        const TopoDS_Face& f = TopoDS::Face(ex.Current());
+        try {
+            BRepAdaptor_Surface surf(f);
+            if (surf.GetType() == GeomAbs_Cylinder) {
+                const gp_Cylinder cyl = surf.Cylinder();
+                if (cyl.Radius() > maxRadius + radTol) continue;   // outside region
+                const gp_Dir cd = cyl.Axis().Direction();
+                const double dot = std::abs(cd.X() * axis.X() +
+                                            cd.Y() * axis.Y() +
+                                            cd.Z() * axis.Z());
+                if (dot < 0.999) continue;                          // not coaxial
+                if (axisLine.Distance(cyl.Axis().Location()) > radTol + 0.05)
+                    continue;
+                toRemove.Append(f);                                 // pilot or seat wall
+            } else if (surf.GetType() == GeomAbs_Plane) {
+                // Step annulus / blind bottom: centroid on the axis, inside
+                // the radial + axial extent of the feature.
+                GProp_GProps props;
+                BRepGProp::SurfaceProperties(f, props);
+                const gp_Pnt c = props.CentreOfMass();
+                const double a = axialOf(c);
+                if (a < 0.3 || a > axialDepth + 0.2) continue;      // not within depth
+                if (axisLine.Distance(c) > maxRadius + radTol) continue;
+                // Reject the part's outer top face (huge, normal ⊥ axis plane
+                // but centroid far off-axis already filtered; also guard area).
+                toRemove.Append(f);
+            }
+        } catch (const Standard_Failure&) {
+            continue;
+        }
+    }
+    if (toRemove.IsEmpty()) {
+        err = "no faces matched the coaxial region — nothing to defeature";
+        return {};
+    }
+
+    const double vBefore = volumeOf(shape);
+    BRepAlgoAPI_Defeaturing df;
+    df.SetShape(shape);
+    df.AddFacesToRemove(toRemove);
+    try {
+        df.Build();
+    } catch (const Standard_Failure&) {
+        err = "coaxial defeaturing raised an OCCT exception";
+        return {};
+    }
+    if (df.HasErrors() || df.Shape().IsNull()) {
+        err = "coaxial defeaturing failed (faces could not be removed/healed)";
+        return {};
+    }
+    const TopoDS_Shape healed = df.Shape();
+    if (volumeOf(healed) < vBefore - 1e-6) {
+        err = "coaxial defeaturing reduced volume — wrong face set, refusing";
+        return {};
+    }
+    BRepCheck_Analyzer check(healed);
+    if (!check.IsValid()) {
+        err = "healed solid failed BRepCheck validation";
+        return {};
+    }
+    return healed;
+}
+
+TopoDS_Shape cutCounterbore(const TopoDS_Shape& shape, const CounterboreSpec& cb)
+{
+    const double diag = bboxDiag(shape);
+    const gp_Pnt start(cb.entry.X() - cb.axis.X() * 0.1 * diag,
+                       cb.entry.Y() - cb.axis.Y() * 0.1 * diag,
+                       cb.entry.Z() - cb.axis.Z() * 0.1 * diag);
+    const double pad = 0.1 * diag;
+    const gp_Ax2 ax(start, cb.axis);
+    // SEAT first, then PILOT — sequential cuts (overlapping coaxial cutters in
+    // one compound Boolean are the OCCT 8.0 wipe trap; see bore_with_shelf).
+    TopoDS_Shape out =
+        pr::cut(shape, pr::cylinder(ax, cb.seat_dia_mm / 2.0, pad + cb.seat_depth_mm));
+    out = pr::cut(out, pr::cylinder(ax, cb.pilot_dia_mm / 2.0, pad + cb.pilot_depth_mm));
+    return out;
+}
+
+TopoDS_Shape editCounterbore(const TopoDS_Shape& shape,
+                             const CounterboreSpec& oldCb,
+                             const CounterboreSpec& newCb, std::string& err)
+{
+    const TopoDS_Shape healed = defeatureCoaxialRegion(
+        shape, oldCb.entry, oldCb.axis,
+        oldCb.seat_dia_mm / 2.0, oldCb.pilot_depth_mm, err);
+    if (healed.IsNull()) return {};
+    try {
+        return cutCounterbore(healed, newCb);
+    } catch (const Standard_Failure&) {
+        err = "counterbore recut raised an OCCT exception";
+        return {};
+    }
+}
+
 }  // namespace koocadcam::edit

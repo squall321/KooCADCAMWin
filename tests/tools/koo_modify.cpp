@@ -103,8 +103,9 @@ int main(int argc, char* argv[])
     }
     if (!bestC) {
         std::cerr << "no recognized single-cylinder hole within " << tol
-                  << "mm of target (counterbore-family editing lands with "
-                     "plan B4.2)\n";
+                  << "mm of target (compound features like counterbore are "
+                     "editable via edit::editCounterbore — not yet wired to "
+                     "this CLI's single-diameter argument)\n";
         return 1;
     }
 

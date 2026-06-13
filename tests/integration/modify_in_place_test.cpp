@@ -21,6 +21,7 @@
 #include "re/Recognizer.hpp"
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
+#include "skills/counterbore.hpp"
 #include "skills/drill_hole.hpp"
 
 #include <BRepGProp.hxx>
@@ -225,4 +226,63 @@ TEST(ModifyInPlace, ShrinkBlindHoleAndReverify)
     ASSERT_FALSE(r2.empty()) << "shrunk blind hole not recovered";
     EXPECT_NEAR(r2.value("diameter_mm", 0.0), 6.0, 0.06);
     EXPECT_NEAR(r2.value("depth_mm", 0.0), 12.0, 0.3);
+}
+
+// ─── 5. COMPOUND edit (B4.2): enlarge a counterbore by axial-region defeature
+namespace {
+nlohmann::json recoverCounterboreNear(const skill::Workpiece& wp,
+                                      double tx, double ty)
+{
+    nlohmann::json best;
+    double bestD = 5.0;
+    for (const auto& c : re::dedupe(re::analyze(wp))) {
+        if (c.skill_id != "counterbore" || c.confidence < 0.7) continue;
+        const auto& p = c.recovered_params;
+        const double d = std::hypot(p.value("position_x_mm", 0.0) - tx,
+                                    p.value("position_y_mm", 0.0) - ty);
+        if (d <= bestD) { bestD = d; best = p; }
+    }
+    return best;
+}
+}  // namespace
+
+TEST(ModifyInPlace, EnlargeCounterboreAndReverify)
+{
+    // Synthesize a counterbore (pilot Ø6 ×12, seat Ø12 ×4) in a 60×60×20 block.
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    skill::counterbore::Input in;
+    in.entry_face    = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 30.0; in.position_y_mm = 30.0;
+    in.axis_dir      = gp_Dir(0, 0, -1);
+    in.pilot_dia_mm  = 6.0;  in.pilot_depth_mm = 12.0;
+    in.seat_dia_mm   = 12.0; in.seat_depth_mm  = 4.0;
+    const TopoDS_Shape s0 =
+        skill::counterbore::apply(*stock, in).workpiece->shape();
+
+    int feat = -1;
+    skill::Workpiece foreign = stepRoundTrip(s0, feat);
+    ASSERT_EQ(feat, 0);
+    const nlohmann::json rec = recoverCounterboreNear(foreign, 30.0, 30.0);
+    ASSERT_FALSE(rec.empty()) << "original counterbore not recovered";
+
+    auto oldCb = edit::counterboreSpecFromRecovered(rec);
+    ASSERT_TRUE(oldCb.has_value());
+    // Enlarge seat Ø12 → Ø16 (pilot unchanged).
+    edit::CounterboreSpec newCb = *oldCb;
+    newCb.seat_dia_mm = 16.0;
+
+    std::string err;
+    const TopoDS_Shape s1 =
+        edit::editCounterbore(foreign.shape(), *oldCb, newCb, err);
+    ASSERT_FALSE(s1.IsNull()) << err;
+
+    int feat2 = -1;
+    skill::Workpiece foreign2 = stepRoundTrip(s1, feat2);
+    ASSERT_EQ(feat2, 0);
+    const nlohmann::json r2 = recoverCounterboreNear(foreign2, 30.0, 30.0);
+    ASSERT_FALSE(r2.empty()) << "enlarged counterbore not recovered";
+    EXPECT_NEAR(r2.value("seat_dia_mm", 0.0),   16.0, 0.1);
+    EXPECT_NEAR(r2.value("pilot_dia_mm", 0.0),   6.0, 0.1);
+    EXPECT_NEAR(r2.value("seat_depth_mm", 0.0),  4.0, 0.2);
+    EXPECT_NEAR(r2.value("pilot_depth_mm", 0.0), 12.0, 0.2);
 }

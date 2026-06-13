@@ -67,4 +67,42 @@ TopoDS_Shape cutHole(const TopoDS_Shape& shape, const HoleSpec& hole);
 TopoDS_Shape editHole(const TopoDS_Shape& shape, const HoleSpec& oldHole,
                       const HoleSpec& newHole, std::string& err);
 
+// ── Compound coaxial feature: counterbore / stepped bore (plan B4.2) ───────
+//
+// A counterbore is a wide shallow SEAT over a narrow deep PILOT, sharing one
+// axis.  The single-cylinder defeature can't undo it (two radii + a shoulder
+// annulus + a blind bottom), so editing it needs a region defeature.
+struct CounterboreSpec
+{
+    gp_Pnt entry;
+    gp_Dir axis{ 0, 0, -1 };
+    double pilot_dia_mm   = 0.0;
+    double pilot_depth_mm = 0.0;
+    double seat_dia_mm    = 0.0;
+    double seat_depth_mm  = 0.0;
+};
+
+std::optional<CounterboreSpec>
+counterboreSpecFromRecovered(const nlohmann::json& recovered);
+
+// Remove EVERY face inside the coaxial region (entry → axialDepth, radius ≤
+// maxRadius): both cylinder walls, the step annulus and the blind bottom.
+// Heals the solid (material restored).  Null + err on failure.
+TopoDS_Shape defeatureCoaxialRegion(const TopoDS_Shape& shape,
+                                    const gp_Pnt& entry, const gp_Dir& axis,
+                                    double maxRadius, double axialDepth,
+                                    std::string& err);
+
+// Cut a counterbore: SEAT cylinder then PILOT cylinder, sequentially (never
+// one compound Boolean — overlapping coaxial cutters are the OCCT 8.0 wipe
+// trap, learned in bore_with_shelf).
+TopoDS_Shape cutCounterbore(const TopoDS_Shape& shape,
+                            const CounterboreSpec& cb);
+
+// Defeature `oldCb`'s region, then cut `newCb` — resize and/or move a
+// counterbore as one material-removal edit.  Null + err on failure.
+TopoDS_Shape editCounterbore(const TopoDS_Shape& shape,
+                             const CounterboreSpec& oldCb,
+                             const CounterboreSpec& newCb, std::string& err);
+
 }  // namespace koocadcam::edit
