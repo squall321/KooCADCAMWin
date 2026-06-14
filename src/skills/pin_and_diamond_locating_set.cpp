@@ -325,6 +325,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         if (!wp.isFaceCylinder(i)) continue;
         BRepAdaptor_Surface surf(wp.face(i));
         const gp_Cylinder cyl = surf.Cylinder();
+        // GROUNDING gate (B1.2, fpscan 2026-06-14): locating pins/receptacles
+        // are full-round bores; a pocket's quarter-round CORNER FILLET (~pi/2)
+        // is not.  Counting them made this recognizer read mill_rect_pocket's
+        // 4 same-radius corner fillets as a pin-and-diamond locating set.
+        // Require the cylinder to subtend ≥ ~2.5 rad.
+        if (surf.LastUParameter() - surf.FirstUParameter() < 2.5) continue;
         cyls.push_back({ cyl.Axis().Location(),
                          cyl.Radius(),
                          cyl.Axis().Direction() });

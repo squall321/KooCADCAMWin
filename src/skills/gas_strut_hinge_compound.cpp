@@ -276,6 +276,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Cylinder c = surf.Cylinder();
         const gp_Dir d = c.Axis().Direction();
         if (std::abs(std::abs(d.Z()) - 1.0) > 1e-2) continue;
+        // GROUNDING gate (B1.2, fpscan 2026-06-14): a hinge knuckle is a
+        // substantial cylinder (≥ half-round); a pocket's quarter-round
+        // CORNER FILLET (~pi/2) is not a pivot.  Counting them made this
+        // recognizer read mill_rect_pocket's 4 corner fillets as a strut
+        // hinge.  Require the cylinder to subtend ≥ ~2.5 rad.
+        if (surf.LastUParameter() - surf.FirstUParameter() < 2.5) continue;
         cyls.push_back({ c.Radius(), c.Axis().Location() });
     }
 
