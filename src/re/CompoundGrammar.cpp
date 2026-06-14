@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <set>
 #include <unordered_set>
 #include <utility>
@@ -45,6 +46,19 @@ bool axisParallel(double ax, double ay, double az,
                   double bx, double by, double bz)
 {
     return std::abs(ax * bx + ay * by + az * bz) > 0.999;
+}
+
+// Two holes are COAXIAL when their axes are parallel AND the two axis lines are
+// (near-)the-same line — the perpendicular distance between them is < tol.
+// (Coaxial = same axis line; parallel-but-offset = a bolt-circle member.)
+bool coaxialLines(double ax, double ay, double az, double aX, double aY, double aZ,
+                  double bx, double by, double bz, double bX, double bY, double bZ)
+{
+    if (!axisParallel(ax, ay, az, bx, by, bz)) return false;
+    const double wx = bX - aX, wy = bY - aY, wz = bZ - aZ;
+    const double dot = wx * ax + wy * ay + wz * az;     // component along axis a
+    const double px = wx - dot * ax, py = wy - dot * ay, pz = wz - dot * az;
+    return std::sqrt(px * px + py * py + pz * pz) < 0.3;
 }
 
 // Algebraic (Kåsa) circle fit of XY points: minimise sum (x²+y²+Dx+Ey+F)².
@@ -337,15 +351,74 @@ void matchHolePatterns(const std::vector<Hole>& holes,
     }
 }
 
-// Assemble recognizer drill atoms into physical holes: merge atoms that share a
-// location (within tol), a parallel axis and a diameter; sum each distinct
-// face's wrap so a hole split across STEP faces still reads as a full hole.
-std::vector<Hole> assembleHoles(const std::vector<skill::RecognizedFeature>& candidates)
+// PATTERN: coaxial step-bore — >=3 revolution-complete cylinders on a common
+// axis line at DISTINCT diameters (a stepped/counterbored bore, the multi-step
+// generalisation of bore_with_shelf).  Grounded in the precise bore/drill atoms
+// that already recover each cylindrical section; specific because three
+// concentric full bores of different size do not occur by accident.
+void matchCoaxialStepBores(const std::vector<Hole>& sections,
+                           std::vector<skill::RecognizedFeature>& out)
+{
+    std::vector<bool> used(sections.size(), false);
+    for (std::size_t i = 0; i < sections.size(); ++i) {
+        if (used[i]) continue;
+        std::vector<std::size_t> grp;
+        for (std::size_t j = 0; j < sections.size(); ++j) {
+            if (used[j]) continue;
+            if (!coaxialLines(sections[i].ax, sections[i].ay, sections[i].az,
+                              sections[i].x,  sections[i].y,  sections[i].z,
+                              sections[j].ax, sections[j].ay, sections[j].az,
+                              sections[j].x,  sections[j].y,  sections[j].z)) continue;
+            grp.push_back(j);
+        }
+        // Distinct diameters along this axis (sections of equal dia already
+        // merged in assembly; this guards residual near-duplicates).
+        std::vector<double> dias;
+        for (std::size_t j : grp) {
+            bool dup = false;
+            for (double d : dias) if (std::abs(d - sections[j].dia) <= 0.1) { dup = true; break; }
+            if (!dup) dias.push_back(sections[j].dia);
+        }
+        if (dias.size() < 3) continue;                  // <3 steps → bore_with_shelf territory
+
+        for (std::size_t j : grp) used[j] = true;
+        std::sort(dias.begin(), dias.end(), std::greater<double>());
+        json diaArr = json::array();
+        for (double d : dias) diaArr.push_back(d);
+        skill::RecognizedFeature rf;
+        rf.skill_id         = "coaxial_step_bore";
+        rf.recovered_params = {
+            { "step_count",    static_cast<int>(dias.size()) },
+            { "diameters_mm",  diaArr },
+            { "max_dia_mm",    dias.front() },
+            { "min_dia_mm",    dias.back() },
+            { "position_x_mm", sections[i].x },
+            { "position_y_mm", sections[i].y },
+            { "axis_dir",      { sections[i].ax, sections[i].ay, sections[i].az } },
+        };
+        rf.confidence       = 0.9;
+        rf.matched_geometry = {
+            { "is_compound", true }, { "source", "grammar:coaxial_step_bore" },
+            { "grounded_atom_count", static_cast<int>(grp.size()) },
+        };
+        out.push_back(std::move(rf));
+    }
+}
+
+// Assemble recognizer cylinder atoms into physical sections: merge atoms that
+// share a location (within tol), a parallel axis and a diameter; sum each
+// distinct face's wrap so a section split across STEP faces still reads as a
+// full revolution.  `includeBores` adds bore_cylindrical atoms (wide bores that
+// drill_hole may not own), used by the coaxial step-bore grammar.
+std::vector<Hole> assembleHoles(const std::vector<skill::RecognizedFeature>& candidates,
+                                bool includeBores = false)
 {
     std::vector<Hole> holes;
     for (const auto& c : candidates) {
-        if (c.skill_id != "drill_hole" && c.skill_id != "drill_through_hole")
-            continue;
+        const bool isDrill = c.skill_id == "drill_hole" ||
+                             c.skill_id == "drill_through_hole";
+        const bool isBore  = includeBores && c.skill_id == "bore_cylindrical";
+        if (!isDrill && !isBore) continue;
         if (c.confidence < 0.7) continue;
         const json& p = c.recovered_params;
         const double dia = num(p, "diameter_mm");
@@ -400,6 +473,14 @@ recognizeCompounds(const std::vector<skill::RecognizedFeature>& candidates)
 
     std::vector<skill::RecognizedFeature> out;
     matchHolePatterns(holes, out);
+
+    // Coaxial step-bore works over the same revolution-complete sections, but
+    // INCLUDING wide bore_cylindrical atoms and keeping distinct diameters on a
+    // shared axis line (orthogonal to the equal-diameter hole patterns above).
+    std::vector<Hole> sections;
+    for (auto& h : assembleHoles(candidates, /*includeBores=*/true))
+        if (h.wrap >= kHoleWrapMin) sections.push_back(std::move(h));
+    matchCoaxialStepBores(sections, out);
     return out;
 }
 

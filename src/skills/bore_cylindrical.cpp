@@ -389,8 +389,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "depth_mm",        depth },
             { "tolerance_class", "H7" },   // default precision class
         };
+        // Angular wrap of this cylindrical face (radians) — lets downstream
+        // grammar (coaxial step-bore) demand a revolution-complete section and
+        // reject partial concave arcs, mirroring drill_hole's cyl_wrap_rad.
+        const double wrapRad = surf.LastUParameter() - surf.FirstUParameter();
         json matched = {
             { "cylindrical_face_id", fIdx },
+            { "cyl_wrap_rad", wrapRad },
             { "top_center", { entry->center.X(),  entry->center.Y(),  entry->center.Z()  } },
             { "bot_center", { bottom->center.X(), bottom->center.Y(), bottom->center.Z() } },
             { "depth_dia_ratio", ratio },

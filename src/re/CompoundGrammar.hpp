@@ -14,10 +14,13 @@
 //
 // This module evaluates those grammar rules over the precise atoms that
 // re::analyze already recovered.  Each rule is one function; the registry
-// grows as patterns are added.  Patterns so far (both grounded in >=3 equal,
-// parallel-axis, REVOLUTION-COMPLETE drilled holes):
-//   bolt_circle_pattern — centres lie on a common circle;
-//   linear_hole_array   — centres are collinear and evenly pitched.
+// grows as patterns are added.  Patterns so far:
+//   bolt_circle_pattern   — >=3 equal holes whose centres lie on a circle;
+//   linear_hole_array     — >=3 equal holes, collinear and evenly pitched;
+//   rectangular_hole_grid — >=6 equal holes on a filled cols×rows lattice;
+//   coaxial_step_bore     — >=3 concentric full bores at distinct diameters.
+// (Hole patterns are grounded in equal-diameter, parallel-axis,
+// REVOLUTION-COMPLETE drilled holes; the step-bore in concentric full bores.)
 
 #include "skills/Skill.hpp"
 

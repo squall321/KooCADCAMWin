@@ -22,6 +22,7 @@
 #include "skills/Skill.hpp"
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
+#include "skills/bore_cylindrical.hpp"
 #include "skills/drill_hole.hpp"
 
 #include <TopoDS_Shape.hxx>
@@ -209,6 +210,99 @@ TEST(CompoundGrammar, IgnoresIncompleteGrid)
     holes.pop_back();                       // 8 holes, not a filled 3x3
     const auto out = re::recognizeCompounds(holes);
     EXPECT_EQ(findCompound(out, "rectangular_hole_grid"), nullptr);
+}
+
+// ── Coaxial step-bore ──────────────────────────────────────────────────────
+// Build a cylindrical "section" atom (drill_hole-shaped) at a shared axis line.
+skill::RecognizedFeature sectionAt(double x, double y, double dia, int faceId,
+                                   const std::string& skill = "drill_hole")
+{
+    skill::RecognizedFeature rf;
+    rf.skill_id = skill;
+    rf.recovered_params = {
+        { "position_x_mm", x }, { "position_y_mm", y }, { "position_z_mm", 40.0 },
+        { "axis_dir", { 0.0, 0.0, -1.0 } },
+        { "diameter_mm", dia }, { "depth_mm", 10.0 },
+    };
+    rf.confidence = 0.9;
+    rf.matched_geometry = {
+        { "cylindrical_face_id", faceId }, { "cyl_wrap_rad", 2.0 * M_PI },
+    };
+    return rf;
+}
+
+// Three concentric full bores of distinct diameter → a coaxial step-bore.
+TEST(CompoundGrammar, RecognisesCoaxialStepBore)
+{
+    std::vector<skill::RecognizedFeature> stack = {
+        sectionAt(30, 30, 16, 0, "bore_cylindrical"),
+        sectionAt(30, 30, 10, 1, "bore_cylindrical"),
+        sectionAt(30, 30, 5, 2, "drill_hole"),
+    };
+    const auto out = re::recognizeCompounds(stack);
+    const auto* sb = findCompound(out, "coaxial_step_bore");
+    ASSERT_NE(sb, nullptr) << "grammar failed to recognise a 3-step bore";
+    EXPECT_EQ(sb->recovered_params.value("step_count", 0), 3);
+    EXPECT_NEAR(sb->recovered_params.value("max_dia_mm", 0.0), 16.0, 1e-6);
+    EXPECT_NEAR(sb->recovered_params.value("min_dia_mm", 0.0), 5.0, 1e-6);
+}
+
+// A 2-step bore (a plain counterbore) is bore_with_shelf territory, NOT a
+// multi-step bore — the grammar stays silent below 3 distinct diameters.
+TEST(CompoundGrammar, IgnoresTwoStepBore)
+{
+    std::vector<skill::RecognizedFeature> two = {
+        sectionAt(30, 30, 12, 0, "bore_cylindrical"),
+        sectionAt(30, 30, 6, 1, "drill_hole"),
+    };
+    EXPECT_EQ(findCompound(re::recognizeCompounds(two), "coaxial_step_bore"), nullptr);
+}
+
+// Three equal bores side-by-side (a bolt-circle / row, NOT concentric) are not
+// a step bore — the coaxial gate requires a shared axis line.
+TEST(CompoundGrammar, IgnoresParallelEqualBoresAsStepBore)
+{
+    std::vector<skill::RecognizedFeature> row = {
+        sectionAt(10, 30, 8, 0), sectionAt(30, 30, 8, 1), sectionAt(50, 30, 8, 2),
+    };
+    EXPECT_EQ(findCompound(re::recognizeCompounds(row), "coaxial_step_bore"), nullptr);
+}
+
+// End-to-end: a drilled-and-bored 3-step bore survives a STEP round-trip.
+TEST(CompoundGrammar, EndToEndStepBoreThroughAnalyze)
+{
+    namespace fs = std::filesystem;
+    auto wp = skill::createCuboidStock(60.0, 60.0, 40.0);
+    {   skill::drill_hole::Input in;            // smallest, through
+        in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        in.position_x_mm = 30; in.position_y_mm = 30;
+        in.axis_dir = gp_Dir(0, 0, -1); in.diameter_mm = 6; in.through_hole = true;
+        wp = skill::drill_hole::apply(*wp, in).workpiece; }
+    {   skill::bore_cylindrical::Input in;      // medium
+        in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        in.position_x_mm = 30; in.position_y_mm = 30;
+        in.axis_dir = gp_Dir(0, 0, -1); in.diameter_mm = 12; in.depth_mm = 22;
+        wp = skill::bore_cylindrical::apply(*wp, in).workpiece; }
+    {   skill::bore_cylindrical::Input in;      // widest seat
+        in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        in.position_x_mm = 30; in.position_y_mm = 30;
+        in.axis_dir = gp_Dir(0, 0, -1); in.diameter_mm = 20; in.depth_mm = 8;
+        wp = skill::bore_cylindrical::apply(*wp, in).workpiece; }
+
+    const fs::path p = fs::temp_directory_path() /
+                       ("koo_grammar_step_" + std::to_string(::rand()) + ".step");
+    std::string err;
+    io::StepIO::write(wp->shape(), p, err);
+    auto reim = io::StepIO::read(p, err);
+    std::error_code ec; fs::remove(p, ec);
+    skill::Workpiece foreign(*reim);
+
+    const auto cands = re::analyze(foreign, /*applyCap=*/true);
+    const auto* sb = findCompound(cands, "coaxial_step_bore");
+    ASSERT_NE(sb, nullptr) << "step bore not recovered after a STEP round-trip";
+    EXPECT_GE(sb->recovered_params.value("step_count", 0), 3);
+    EXPECT_NEAR(sb->recovered_params.value("max_dia_mm", 0.0), 20.0, 0.5);
+    EXPECT_GE(sb->confidence, 0.7);
 }
 
 // ── 2. Specificity: arrangements that are NOT bolt circles stay silent ─────
