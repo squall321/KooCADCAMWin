@@ -3,6 +3,7 @@
 #include "gauge_block_step.hpp"
 
 #include "Workpiece.hpp"
+#include "engine/primitives/Bbox.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -247,6 +248,22 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const gp_Pnt c = wp.faceCenter(i);
         // Skip the bottom of the block.
         if (std::abs(c.Z() - zMin) < 1e-3) continue;
+
+        // GROUNDING gate (B1.2, measured 2026-06-14): a gauge-block step is an
+        // EXTERNAL silhouette step — each step face reaches the part's XY
+        // boundary.  An INTERIOR +Z face (a counterbore shoulder, a pocket or
+        // bore floor) is surrounded by higher walls and does NOT reach the
+        // edge; counting it made gauge_block_step fire on any stepped hole
+        // (3/6 of the foreign panel — see fpscan_test).  Require the face's
+        // XY bbox to touch at least one side of the part envelope.
+        const auto fb = pr::optimalBbox(wp.face(i));
+        const double xTol = std::max(1e-2, 0.02 * (xMax - xMin));
+        const double yTol = std::max(1e-2, 0.02 * (yMax - yMin));
+        const bool touchesEdge =
+            fb.xMin <= xMin + xTol || fb.xMax >= xMax - xTol ||
+            fb.yMin <= yMin + yTol || fb.yMax >= yMax - yTol;
+        if (!touchesEdge) continue;   // interior floor → not a gauge-block step
+
         // Dedupe within tolerance 1e-2.
         bool seen = false;
         for (double z : zUp) if (std::abs(z - c.Z()) < 1e-2) { seen = true; break; }
