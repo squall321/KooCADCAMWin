@@ -492,6 +492,16 @@ std::vector<skill::RecognizedFeature> analyze(const skill::Workpiece& wp,
     // recognizers.  Metadata replay ("source":"metadata_replay") and the
     // precise tier are exempt, so synthetic round-trips are unaffected.
     // applyCap=false exposes the RAW confidence (corpus un-cap-safety scan).
+    // NOTE (B1.x, measured 2026-06-14): a grounding-by-subsumption un-cap was
+    // hypothesised here — keep a domain compound's raw confidence when its face
+    // set STRICTLY CONTAINS a recognized precise atom's faces.  fpscan_test
+    // REFUTED it: "wraps an atom" != "is the feature".  On a plain countersink
+    // it un-capped tapped_hole_metric_spec (0.70) and countersunk_bolt_seat
+    // (0.65); on a plain pocket, cam_actuated_slider / over_center_toggle_pocket
+    // — and the >=0.7 ones would then BEAT the correct atom via the dedupe
+    // specificity rule.  Safe un-capping needs B1.2 SPECIFIC atomic-prerequisite
+    // matching (the compound's exact sub-features), not generic superset.  The
+    // flat cap stays; fpscan proved it load-bearing.
     const auto& precise = preciseRecognizers();
     if (applyCap) {
         for (auto& c : all) {

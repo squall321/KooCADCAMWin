@@ -23,12 +23,16 @@
 #include "io/StepIO.hpp"
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
+#include "skills/bore_cylindrical.hpp"
+#include "skills/bore_with_shelf.hpp"
 #include "skills/chamfer_edge.hpp"
 #include "skills/counterbore.hpp"
+#include "skills/countersink.hpp"
 #include "skills/drill_hole.hpp"
 #include "skills/fillet_edge.hpp"
 #include "skills/mill_circular_pocket.hpp"
 #include "skills/mill_rect_pocket.hpp"
+#include "skills/mill_slot.hpp"
 
 #include <TopoDS_Shape.hxx>
 #include <gp_Dir.hxx>
@@ -111,6 +115,53 @@ std::vector<Part> buildPanel()
         ch.edge_selector = skill::fillet_edge::EdgesAtZBand{ 20.0, 1e-3 };
         ch.chamfer_size_mm = 1.0; ch.angle_deg = 45.0;
         panel.push_back({ "drill+chamfer", skill::chamfer_edge::apply(*drilled, ch).workpiece->shape() }); }
+
+    {   skill::countersink::Input in;
+        in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        in.position_x_mm = 30; in.position_y_mm = 30; in.axis_dir = gp_Dir(0, 0, -1);
+        in.pilot_dia_mm = 5; in.pilot_depth_mm = 10; in.cone_top_dia_mm = 10; in.cone_angle_deg = 90;
+        panel.push_back({ "countersink", skill::countersink::apply(*block(), in).workpiece->shape() }); }
+
+    {   skill::bore_cylindrical::Input in;
+        in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        in.position_x_mm = 30; in.position_y_mm = 30; in.axis_dir = gp_Dir(0, 0, -1);
+        in.diameter_mm = 16; in.depth_mm = 10;
+        panel.push_back({ "bore", skill::bore_cylindrical::apply(*block(), in).workpiece->shape() }); }
+
+    {   skill::bore_with_shelf::Input in;
+        in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        in.position_x_mm = 30; in.position_y_mm = 30; in.axis_dir = gp_Dir(0, 0, -1);
+        in.upper_dia_mm = 8; in.upper_depth_mm = 5; in.lower_dia_mm = 16; in.lower_depth_mm = 8;
+        panel.push_back({ "stepped_bore", skill::bore_with_shelf::apply(*block(), in).workpiece->shape() }); }
+
+    {   skill::mill_slot::Input in;
+        in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        in.start_x_mm = 20; in.start_y_mm = 30; in.end_x_mm = 40; in.end_y_mm = 30;
+        in.axis_dir = gp_Dir(0, 0, -1); in.width_mm = 6; in.depth_mm = 4;
+        panel.push_back({ "slot", skill::mill_slot::apply(*block(), in).workpiece->shape() }); }
+
+    // Multi-feature: a real recovered part has several features at once.
+    {   skill::counterbore::Input cb;
+        cb.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        cb.position_x_mm = 15; cb.position_y_mm = 15; cb.axis_dir = gp_Dir(0, 0, -1);
+        cb.pilot_dia_mm = 6; cb.pilot_depth_mm = 12; cb.seat_dia_mm = 12; cb.seat_depth_mm = 4;
+        auto w = skill::counterbore::apply(*block(), cb).workpiece;
+        skill::drill_hole::Input dh;
+        dh.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        dh.position_x_mm = 45; dh.position_y_mm = 45;
+        dh.axis_dir = gp_Dir(0, 0, -1); dh.diameter_mm = 5; dh.through_hole = true;
+        w = skill::drill_hole::apply(*w, dh).workpiece;
+        skill::mill_circular_pocket::Input mp;
+        mp.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        mp.position_x_mm = 45; mp.position_y_mm = 15; mp.axis_dir = gp_Dir(0, 0, -1);
+        mp.diameter_mm = 14; mp.depth_mm = 4;
+        w = skill::mill_circular_pocket::apply(*w, mp).workpiece;
+        panel.push_back({ "multi(cbore+drill+pocket)", w->shape() }); }
+
+    // Different bare-stock proportions (a thin plate, a tall bar) trip
+    // aspect-ratio / planar-step recognizers that the 60x60x20 block does not.
+    panel.push_back({ "thin_plate", skill::createCuboidStock(80.0, 80.0, 4.0)->shape() });
+    panel.push_back({ "tall_bar",  skill::createCuboidStock(20.0, 20.0, 80.0)->shape() });
 
     return panel;
 }
