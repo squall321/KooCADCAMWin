@@ -331,6 +331,21 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     for (double g : gaps) gSpread = std::max(gSpread, std::abs(g - gMean));
     if (gMean < 0.1) return out;          // cavity not inset → not a cavity
 
+    // Thin-wall gate (breakthrough plan B1.2 grounding, measured via fpscan):
+    // a true hollow cavity is a SHELL — its wall is thin relative to the cavity
+    // opening.  A milled pocket or a bore in solid stock has a wall comparable
+    // to or larger than the opening and is better described by mill_*_pocket /
+    // bore_* — yet the loose geometric fallback fires on every centered pocket
+    // (the dominant fpscan un-cap survivor) and on the bearing seat, where its
+    // over-specified wall_thickness even crashes replay (worked around by a
+    // manual drop in bearing_housing_test).  Require wall << opening so only a
+    // genuine shell is recovered geometrically.  Metadata replay (handled
+    // above) is unaffected, so our own thin-walled cavities still recover at
+    // full confidence regardless of this ratio.
+    const double cavMin = std::min(cavityBb.xMax - cavityBb.xMin,
+                                   cavityBb.yMax - cavityBb.yMin);
+    if (cavMin <= 0.0 || gMean > 0.35 * cavMin) return out;   // thick wall → pocket/bore
+
     // depth = entry-face Z − cavity-bottom Z (assuming +Z entry).
     double depth = 0.0;
     if (outerTopFace >= 0) {
