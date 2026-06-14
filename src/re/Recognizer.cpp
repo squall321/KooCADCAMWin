@@ -2,6 +2,7 @@
 
 #include "Recognizer.hpp"
 
+#include "CompoundGrammar.hpp"
 #include "process/StepInvocation.hpp"
 
 #include "skills/bore_cylindrical.hpp"
@@ -182,6 +183,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -511,6 +513,19 @@ std::vector<skill::RecognizedFeature> analyze(const skill::Workpiece& wp,
             if (!replay && !precise.count(c.skill_id))
                 c.confidence = std::min(c.confidence, 0.5);
         }
+    }
+
+    // B1.2 declarative compound grammar (orthodox un-cap path).  AFTER the cap:
+    // grammar compounds are grounded in the PRECISE atoms above (drill_hole etc,
+    // exempt from the cap, so still at full confidence) and emitted only when a
+    // SPECIFIC declared pattern matches — they are not loose geometric fallbacks,
+    // so they carry their grounded confidence instead of being demoted.  This is
+    // the safe alternative to the refuted generic-superset un-cap noted above.
+    {
+        auto compounds = recognizeCompounds(all);
+        all.insert(all.end(),
+                   std::make_move_iterator(compounds.begin()),
+                   std::make_move_iterator(compounds.end()));
     }
 
     std::stable_sort(all.begin(), all.end(),

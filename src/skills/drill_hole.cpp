@@ -375,8 +375,15 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "depth_mm",      through ? 0.0 : depth },
             { "through_hole",  through },
         };
+        // Angular wrap of THIS cylindrical face (radians).  A full drilled hole
+        // wraps 2π — possibly across several STEP-split faces that SUM to 2π;
+        // a concave corner fillet wraps only ~90°.  Downstream grammar (e.g.
+        // bolt-circle) sums distinct-face wrap per hole to tell a real hole from
+        // a pocket-corner fillet, whose centres can be incidentally concyclic.
+        const double wrapRad = surf.LastUParameter() - surf.FirstUParameter();
         json matched = {
             { "cylindrical_face_id", fIdx },
+            { "cyl_wrap_rad", wrapRad },
             { "entry_center", { entry->center.X(), entry->center.Y(), entry->center.Z() } },
             { "far_center",   { other->center.X(), other->center.Y(), other->center.Z() } },
         };

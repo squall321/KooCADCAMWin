@@ -5,6 +5,7 @@
 
 add_library(koo_re STATIC
     Recognizer.cpp
+    CompoundGrammar.cpp
 )
 
 target_include_directories(koo_re PUBLIC ${CMAKE_SOURCE_DIR}/src)

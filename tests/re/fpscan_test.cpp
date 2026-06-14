@@ -48,6 +48,17 @@ using namespace koocadcam;
 
 namespace {
 
+// A grammar-derived compound (e.g. bolt_circle_pattern) is NOT one of the ~750
+// loose domain recognizers the cap governs: re::analyze emits it AFTER the cap,
+// grounded in measured precise atoms, so it is deliberately uncapped.  The
+// cap-invariant and the un-cap table both ignore it (source begins "grammar:").
+bool isGrammarCompound(const skill::RecognizedFeature& c)
+{
+    return c.matched_geometry.is_object() &&
+           c.matched_geometry.value("source", std::string())
+               .rfind("grammar:", 0) == 0;
+}
+
 // The precise tier — recognizers the cap already exempts.  A candidate from
 // any OTHER skill_id is a domain-compound (capped) recognizer.
 const std::set<std::string>& preciseTier()
@@ -177,6 +188,7 @@ TEST(FpScan, CapDemotesAllDomainCompoundCandidates)
         const auto capped = re::analyze(wp, /*applyCap=*/true);
         for (const auto& c : capped) {
             if (preciseTier().count(c.skill_id)) continue;
+            if (isGrammarCompound(c)) continue;         // grounded grammar compound, uncapped by design
             const bool replay =
                 c.matched_geometry.is_object() &&
                 c.matched_geometry.value("source", std::string()) == "metadata_replay";
@@ -187,7 +199,8 @@ TEST(FpScan, CapDemotesAllDomainCompoundCandidates)
         }
         const auto raw = re::analyze(wp, /*applyCap=*/false);
         for (const auto& c : raw)
-            if (!preciseTier().count(c.skill_id) && c.confidence >= 0.7)
+            if (!preciseTier().count(c.skill_id) && !isGrammarCompound(c) &&
+                c.confidence >= 0.7)
                 anyRawSpurious = true;
     }
     // The cap exists BECAUSE domain compounds fire at raw ≥ 0.7 on parts that
@@ -218,10 +231,12 @@ TEST(FpScan, ReportUncapSafetyTable)
         const auto raw     = re::analyze(wp, /*applyCap=*/false);
         const auto deduped = re::dedupe(raw);   // un-capped → real specificity contest
         for (const auto& c : raw)
-            if (!preciseTier().count(c.skill_id) && c.confidence >= 0.7)
+            if (!preciseTier().count(c.skill_id) && !isGrammarCompound(c) &&
+                c.confidence >= 0.7)
                 rawFires[c.skill_id].insert(part.label);
         for (const auto& c : deduped)
-            if (!preciseTier().count(c.skill_id) && c.confidence >= 0.7)
+            if (!preciseTier().count(c.skill_id) && !isGrammarCompound(c) &&
+                c.confidence >= 0.7)
                 survives[c.skill_id].insert(part.label);
     }
 
