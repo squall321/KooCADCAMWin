@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace koocadcam::re {
@@ -132,12 +134,86 @@ bool fitLineXY(const std::vector<Hole>& pts, double& dirx, double& diry,
     return true;
 }
 
+// Fit a 2D lattice: every centre ≈ corner + i·u + j·v for integers i,j>=0,
+// forming a FILLED cols×rows rectangle (cols,rows >= 2, cols*rows == n >= 6).
+// Robust to a non-square pitch: u = nearest neighbour of a corner hole, v = the
+// nearest neighbour whose perpendicular offset from u is real (not collinear).
+// Returns the two pitches, the grid extents, and the max reconstruction
+// residual.  A 2x2 grid (4 concyclic points) is intentionally NOT handled here —
+// it is claimed upstream as a bolt circle.
+bool fitGridXY(const std::vector<Hole>& pts, double& pitchU, double& pitchV,
+               int& cols, int& rows, double& maxResidual)
+{
+    const std::size_t n = pts.size();
+    if (n < 6) return false;
+    // Corner seed: smallest x, then smallest y.
+    std::size_t c0 = 0;
+    for (std::size_t k = 1; k < n; ++k)
+        if (pts[k].x < pts[c0].x - 1e-9 ||
+            (std::abs(pts[k].x - pts[c0].x) <= 1e-9 && pts[k].y < pts[c0].y))
+            c0 = k;
+    const double Ox = pts[c0].x, Oy = pts[c0].y;
+    // u = nearest neighbour of the corner.
+    std::size_t un = n;  double ubest = 1e300;
+    for (std::size_t k = 0; k < n; ++k) {
+        if (k == c0) continue;
+        const double dd = std::hypot(pts[k].x - Ox, pts[k].y - Oy);
+        if (dd < ubest) { ubest = dd; un = k; }
+    }
+    if (un == n) return false;
+    const double ux = pts[un].x - Ox, uy = pts[un].y - Oy;
+    const double ulen = std::hypot(ux, uy);
+    if (ulen < 1e-9) return false;
+    // v = nearest neighbour whose perpendicular distance to the u-axis is real.
+    std::size_t vn = n;  double vbest = 1e300;
+    for (std::size_t k = 0; k < n; ++k) {
+        if (k == c0 || k == un) continue;
+        const double wx = pts[k].x - Ox, wy = pts[k].y - Oy;
+        const double perp = std::abs(ux * wy - uy * wx) / ulen;
+        if (perp < 0.3) continue;                       // collinear with u
+        const double dd = std::hypot(wx, wy);
+        if (dd < vbest) { vbest = dd; vn = k; }
+    }
+    if (vn == n) return false;
+    const double vx = pts[vn].x - Ox, vy = pts[vn].y - Oy;
+    const double cross = ux * vy - uy * vx;
+    if (std::abs(cross) < 1e-6) return false;           // degenerate basis
+    // Reconstruct integer (i,j) for every point via Cramer's rule.
+    int maxi = 0, maxj = 0;
+    maxResidual = 0.0;
+    std::set<std::pair<int, int>> cells;
+    for (std::size_t k = 0; k < n; ++k) {
+        const double px = pts[k].x - Ox, py = pts[k].y - Oy;
+        const long ii = std::lround((px * vy - py * vx) / cross);
+        const long jj = std::lround((ux * py - uy * px) / cross);
+        if (ii < 0 || jj < 0) return false;
+        const double rx = px - (ux * ii + vx * jj);
+        const double ry = py - (uy * ii + vy * jj);
+        maxResidual = std::max(maxResidual, std::hypot(rx, ry));
+        cells.insert({ static_cast<int>(ii), static_cast<int>(jj) });
+        maxi = std::max(maxi, static_cast<int>(ii));
+        maxj = std::max(maxj, static_cast<int>(jj));
+    }
+    if (maxResidual > 0.3) return false;
+    cols = maxi + 1;  rows = maxj + 1;
+    if (cols < 2 || rows < 2) return false;             // not 2-D
+    if (cells.size() != n) return false;                // a cell claimed twice
+    if (static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows) != n)
+        return false;                                   // not a FULL rectangle
+    pitchU = ulen;  pitchV = std::hypot(vx, vy);
+    return true;
+}
+
 // Emit a hole-pattern compound for one group of equal-diameter, parallel-axis,
-// REVOLUTION-COMPLETE drilled holes.  Two declared patterns, tried in order
+// REVOLUTION-COMPLETE drilled holes.  Three declared patterns, tried in order
 // (they are mutually exclusive by geometry — concyclic holes are not collinear
 // and vice-versa, and a circle fit is degenerate on a line):
-//   bolt_circle_pattern  — centres on a common circle (radius >= hole dia);
-//   linear_hole_array    — centres collinear AND evenly pitched.
+//   bolt_circle_pattern   — centres on a common circle (radius >= hole dia);
+//   linear_hole_array     — centres collinear AND evenly pitched;
+//   rectangular_hole_grid — centres on a filled cols×rows lattice (n >= 6).
+// Order matters only for the 4-hole degenerate case: 4 grid corners are
+// concyclic, so a 2×2 grid is (correctly) reported as a bolt circle; genuine
+// grids (>= 2×3) are not concyclic and fall through to the lattice fit.
 // Grounded in measured atoms and specific enough not to false-fire on a
 // rectangular pocket's concyclic corner fillets (rejected upstream by the
 // revolution-completeness gate) — verified on the fpscan panel.
@@ -189,41 +265,75 @@ void matchHolePatterns(const std::vector<Hole>& holes,
         }
 
         // ── linear hole array ──────────────────────────────────────────
-        double dx, dy, lcx, lcy, lresid;
-        std::vector<double> proj;
-        if (!fitLineXY(pts, dx, dy, lcx, lcy, lresid, proj)) continue;
-        if (lresid > 0.3) continue;                 // not collinear
-        std::sort(proj.begin(), proj.end());
-        double meanPitch = 0.0;
-        for (std::size_t k = 1; k < proj.size(); ++k) meanPitch += proj[k] - proj[k - 1];
-        meanPitch /= static_cast<double>(proj.size() - 1);
-        if (meanPitch < 0.5 * dia) continue;        // overlapping → not an array
-        const double pitchTol = std::max(0.1, 0.06 * meanPitch);
-        bool uniform = true;
-        for (std::size_t k = 1; k < proj.size() && uniform; ++k)
-            if (std::abs((proj[k] - proj[k - 1]) - meanPitch) > pitchTol) uniform = false;
-        if (!uniform) continue;                     // unevenly spaced → not an array
+        // (Self-contained: only emit + continue on a match; otherwise fall
+        // through to the grid attempt — never `continue` on a non-match here.)
+        {
+            double dx, dy, lcx, lcy, lresid;
+            std::vector<double> proj;
+            if (fitLineXY(pts, dx, dy, lcx, lcy, lresid, proj) && lresid <= 0.3) {
+                std::sort(proj.begin(), proj.end());
+                double meanPitch = 0.0;
+                for (std::size_t k = 1; k < proj.size(); ++k)
+                    meanPitch += proj[k] - proj[k - 1];
+                meanPitch /= static_cast<double>(proj.size() - 1);
+                bool ok = meanPitch >= 0.5 * dia;       // not overlapping
+                if (ok) {
+                    const double pitchTol = std::max(0.1, 0.06 * meanPitch);
+                    for (std::size_t k = 1; k < proj.size() && ok; ++k)
+                        if (std::abs((proj[k] - proj[k - 1]) - meanPitch) > pitchTol)
+                            ok = false;
+                }
+                if (ok) {
+                    for (std::size_t j : grp) used[j] = true;
+                    const double t0 = proj.front();
+                    skill::RecognizedFeature rf;
+                    rf.skill_id         = "linear_hole_array";
+                    rf.recovered_params = {
+                        { "hole_count",   n },
+                        { "hole_dia_mm",  dia },
+                        { "pitch_mm",     meanPitch },
+                        { "span_mm",      proj.back() - proj.front() },
+                        { "start_x_mm",   lcx + dx * t0 },
+                        { "start_y_mm",   lcy + dy * t0 },
+                        { "direction",    { dx, dy, 0.0 } },
+                        { "axis_dir",     axis },
+                    };
+                    rf.confidence       = std::min(0.95, 0.88 + (0.3 - lresid) * 0.1);
+                    rf.matched_geometry = {
+                        { "is_compound", true }, { "source", "grammar:linear_hole_array" },
+                        { "fit_residual_mm", lresid }, { "grounded_atom_count", n },
+                    };
+                    out.push_back(std::move(rf));
+                    continue;
+                }
+            }
+        }
 
-        for (std::size_t j : grp) used[j] = true;
-        const double t0 = proj.front();
-        skill::RecognizedFeature rf;
-        rf.skill_id         = "linear_hole_array";
-        rf.recovered_params = {
-            { "hole_count",   n },
-            { "hole_dia_mm",  dia },
-            { "pitch_mm",     meanPitch },
-            { "span_mm",      proj.back() - proj.front() },
-            { "start_x_mm",   lcx + dx * t0 },
-            { "start_y_mm",   lcy + dy * t0 },
-            { "direction",    { dx, dy, 0.0 } },
-            { "axis_dir",     axis },
-        };
-        rf.confidence       = std::min(0.95, 0.88 + (0.3 - lresid) * 0.1);
-        rf.matched_geometry = {
-            { "is_compound", true }, { "source", "grammar:linear_hole_array" },
-            { "fit_residual_mm", lresid }, { "grounded_atom_count", n },
-        };
-        out.push_back(std::move(rf));
+        // ── rectangular hole grid ──────────────────────────────────────
+        {
+            double pu, pv;  int cols, rows;  double gresid;
+            if (fitGridXY(pts, pu, pv, cols, rows, gresid)) {
+                for (std::size_t j : grp) used[j] = true;
+                skill::RecognizedFeature rf;
+                rf.skill_id         = "rectangular_hole_grid";
+                rf.recovered_params = {
+                    { "hole_count",  n },
+                    { "hole_dia_mm", dia },
+                    { "cols",        cols },
+                    { "rows",        rows },
+                    { "pitch_u_mm",  pu },
+                    { "pitch_v_mm",  pv },
+                    { "axis_dir",    axis },
+                };
+                rf.confidence       = std::min(0.95, 0.88 + (0.3 - gresid) * 0.1);
+                rf.matched_geometry = {
+                    { "is_compound", true }, { "source", "grammar:rectangular_hole_grid" },
+                    { "fit_residual_mm", gresid }, { "grounded_atom_count", n },
+                };
+                out.push_back(std::move(rf));
+                continue;
+            }
+        }
     }
 }
 

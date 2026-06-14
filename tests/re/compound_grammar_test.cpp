@@ -155,6 +155,62 @@ TEST(CompoundGrammar, BoltCircleIsNotLinearArray)
     EXPECT_EQ(findCompound(out, "linear_hole_array"), nullptr);
 }
 
+// cols×rows lattice of equal holes (e.g. a speaker-grille pin pattern).
+std::vector<skill::RecognizedFeature> gridOfHoles(int cols, int rows,
+                                                  double pu, double pv, double dia,
+                                                  double x0 = 10.0, double y0 = 10.0)
+{
+    std::vector<skill::RecognizedFeature> v;
+    int id = 0;
+    for (int i = 0; i < cols; ++i)
+        for (int j = 0; j < rows; ++j)
+            v.push_back(drillAt(x0 + i * pu, y0 + j * pv, dia, id++));
+    return v;
+}
+
+// A 2x3 grid is recognised as a rectangular hole grid (and not a circle/line).
+TEST(CompoundGrammar, RecognisesRectangularGrid)
+{
+    const auto out = re::recognizeCompounds(gridOfHoles(2, 3, 8.0, 6.0, 3.0));
+    const auto* g = findCompound(out, "rectangular_hole_grid");
+    ASSERT_NE(g, nullptr) << "grammar failed to recognise a 2x3 grid";
+    EXPECT_EQ(g->recovered_params.value("hole_count", 0), 6);
+    const int cols = g->recovered_params.value("cols", 0);
+    const int rows = g->recovered_params.value("rows", 0);
+    EXPECT_EQ(cols * rows, 6);
+    EXPECT_EQ(findCompound(out, "bolt_circle_pattern"), nullptr);
+    EXPECT_EQ(findCompound(out, "linear_hole_array"), nullptr);
+}
+
+// A 3x3 grid (square pitch) — the PCA-free corner-basis fit must still work.
+TEST(CompoundGrammar, RecognisesSquareGrid)
+{
+    const auto out = re::recognizeCompounds(gridOfHoles(3, 3, 5.0, 5.0, 2.0));
+    const auto* g = findCompound(out, "rectangular_hole_grid");
+    ASSERT_NE(g, nullptr);
+    EXPECT_EQ(g->recovered_params.value("hole_count", 0), 9);
+    EXPECT_NEAR(g->recovered_params.value("pitch_u_mm", 0.0), 5.0, 1e-3);
+    EXPECT_NEAR(g->recovered_params.value("pitch_v_mm", 0.0), 5.0, 1e-3);
+}
+
+// A 2x2 grid is 4 concyclic corners → reported as a bolt circle, not a grid.
+TEST(CompoundGrammar, TwoByTwoGridIsBoltCircle)
+{
+    const auto out = re::recognizeCompounds(gridOfHoles(2, 2, 10.0, 10.0, 3.0));
+    EXPECT_NE(findCompound(out, "bolt_circle_pattern"), nullptr);
+    EXPECT_EQ(findCompound(out, "rectangular_hole_grid"), nullptr);
+}
+
+// A NON-rectangular hole cloud (a grid with one hole missing) is not a clean
+// grid — the full-rectangle gate rejects partial lattices.
+TEST(CompoundGrammar, IgnoresIncompleteGrid)
+{
+    auto holes = gridOfHoles(3, 3, 5.0, 5.0, 2.0);
+    holes.pop_back();                       // 8 holes, not a filled 3x3
+    const auto out = re::recognizeCompounds(holes);
+    EXPECT_EQ(findCompound(out, "rectangular_hole_grid"), nullptr);
+}
+
 // ── 2. Specificity: arrangements that are NOT bolt circles stay silent ─────
 TEST(CompoundGrammar, IgnoresTwoHoles)
 {
@@ -241,6 +297,40 @@ TEST(CompoundGrammar, EndToEndBoltCircleThroughAnalyze)
     EXPECT_NEAR(bc->recovered_params.value("bolt_circle_dia_mm", 0.0), 2 * R, 0.5);
     // Grounded compound is exempt from the cap — it keeps its high confidence.
     EXPECT_GE(bc->confidence, 0.7);
+}
+
+// A drilled 2x3 grid survives a STEP round-trip and is recovered as a grid
+// (this is the speaker-grille pin pattern the watch builder produces).
+TEST(CompoundGrammar, EndToEndGridThroughAnalyze)
+{
+    namespace fs = std::filesystem;
+    auto wp = skill::createCuboidStock(60.0, 60.0, 20.0);
+    const double x0 = 20.0, y0 = 20.0, pu = 8.0, pv = 6.0;
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 3; ++j) {
+            skill::drill_hole::Input in;
+            in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+            in.position_x_mm = x0 + i * pu;
+            in.position_y_mm = y0 + j * pv;
+            in.axis_dir = gp_Dir(0, 0, -1);
+            in.diameter_mm = 3.0;
+            in.through_hole = true;
+            wp = skill::drill_hole::apply(*wp, in).workpiece;
+        }
+    const fs::path p = fs::temp_directory_path() /
+                       ("koo_grammar_grid_" + std::to_string(::rand()) + ".step");
+    std::string err;
+    io::StepIO::write(wp->shape(), p, err);
+    auto reim = io::StepIO::read(p, err);
+    std::error_code ec; fs::remove(p, ec);
+    skill::Workpiece foreign(*reim);
+
+    const auto cands = re::analyze(foreign, /*applyCap=*/true);
+    const auto* g = findCompound(cands, "rectangular_hole_grid");
+    ASSERT_NE(g, nullptr) << "grid not recovered after a STEP round-trip";
+    EXPECT_EQ(g->recovered_params.value("hole_count", 0), 6);
+    EXPECT_EQ(g->recovered_params.value("cols", 0) * g->recovered_params.value("rows", 0), 6);
+    EXPECT_GE(g->confidence, 0.7);
 }
 
 // ── 4. Safety: a single drilled hole produces no bolt circle ───────────────
