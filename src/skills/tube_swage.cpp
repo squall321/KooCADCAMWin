@@ -14,11 +14,13 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopAbs.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -212,6 +214,36 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 // (zMin or zMax).  Distinguishes from turn_external (which has shoulders
 // on BOTH sides) — swage's reduced section runs all the way to one end.
 
+namespace {
+
+// A swage reduces a tube's OUTER diameter, so the reduced section is an
+// EXTERNAL cylinder: the solid is INSIDE it and the face's outward normal
+// points AWAY from the axis (convex).  An internal bore / drilled hole is the
+// opposite — CONCAVE, normal toward the axis.  Without this test the recognizer
+// fired on every internal cylinder smaller than the stock that reached an end
+// (the dominant fpscan un-cap survivor: 9/13 raw fires).  Mirror of
+// bore_cylindrical::isBoreWall with the sign flipped.
+bool isExternalCylinder(const TopoDS_Face& f, const gp_Cylinder& cyl)
+{
+    BRepAdaptor_Surface s(f);
+    const double u = 0.5 * (s.FirstUParameter() + s.LastUParameter());
+    const double v = 0.5 * (s.FirstVParameter() + s.LastVParameter());
+    gp_Pnt P; gp_Vec du, dv;
+    s.D1(u, v, P, du, dv);
+    gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1e-9) return false;
+    n.Normalize();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+    const gp_Pnt aLoc = cyl.Axis().Location();
+    const gp_Vec aDir(cyl.Axis().Direction());
+    gp_Vec ap(aLoc, P);
+    const gp_Vec radial = ap - aDir * ap.Dot(aDir);   // outward from the axis
+    if (radial.Magnitude() < 1e-9) return false;
+    return n.Dot(radial) > 0.0;                        // outward normal ⇒ external/convex
+}
+
+}  // namespace
+
 std::vector<RecognizedFeature> recognize(const Workpiece& wp)
 {
     std::vector<RecognizedFeature> out;
@@ -232,6 +264,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         // Must be strictly smaller than the stock outer radius.
         if (radius >= outerR - 1e-3) continue;
         if (std::abs(radius - outerR) < 0.05) continue;
+
+        // Must be an EXTERNAL (convex) cylinder — a reduced tube OD, not an
+        // internal bore / drilled hole (which are concave and belong to
+        // drill_hole / bore_cylindrical).
+        if (!isExternalCylinder(cylFace, cyl)) continue;
 
         // Axis along +Z.
         const gp_Dir adir = cyl.Axis().Direction();

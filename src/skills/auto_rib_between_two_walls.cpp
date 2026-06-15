@@ -3,6 +3,7 @@
 #include "auto_rib_between_two_walls.hpp"
 
 #include "Workpiece.hpp"
+#include "engine/primitives/Bbox.hpp"
 #include "engine/primitives/Cuts.hpp"
 #include "engine/primitives/Tools.hpp"
 
@@ -287,6 +288,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         } catch (...) {}
     }
 
+    // Part bounding box — used to reject a thin SLAB (the part's own two outer
+    // faces) masquerading as a rib.
+    const pr::Bbox3d partBb = pr::optimalBbox(wp.shape());
+
     // Find pairs of parallel, anti-aligned planes separated by ≤ 5 mm — those
     // are the two long faces of a thin rib.
     for (size_t i = 0; i < planes.size(); ++i) {
@@ -297,6 +302,18 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             if (dot > -0.99) continue;  // need anti-parallel normals
             const double dist = planes[i].centre.Distance(planes[j].centre);
             if (dist > 5.0 || dist < 0.5) continue;
+
+            // A rib is THIN relative to the body: its two side faces are a few
+            // mm apart INSIDE a larger part.  Reject when that gap spans most of
+            // the part's extent along the normal — that is the part's own
+            // thickness (a thin plate / slab), not a rib between two walls.
+            // (Measured: this was the auto_rib fpscan un-cap survivor on an
+            // 80x80x4 plate.)
+            const gp_Dir& nrm = planes[i].normal;
+            const double extN = std::abs(nrm.X()) * (partBb.xMax - partBb.xMin)
+                              + std::abs(nrm.Y()) * (partBb.yMax - partBb.yMin)
+                              + std::abs(nrm.Z()) * (partBb.zMax - partBb.zMin);
+            if (extN > 1e-6 && dist > 0.5 * extN) continue;   // gap ≈ part thickness → slab
 
             const gp_Pnt mid(
                 (planes[i].centre.X() + planes[j].centre.X()) / 2.0,
