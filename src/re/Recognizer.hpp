@@ -65,6 +65,17 @@ analyzeFiltered(const skill::Workpiece& wp, double min_confidence = 0.7);
 std::vector<skill::RecognizedFeature>
 dedupe(const std::vector<skill::RecognizedFeature>& candidates);
 
+// Normalise a single recovered step so it RE-EXECUTES cleanly.  The recognizer
+// emits chamfer_edge / fillet_edge with their selector in a nested
+// `edge_selector` object, but the Executor's parser expects the top-level
+// `edges_at_z_mm` / `tolerance_mm` shorthand — without lifting them the replay
+// silently falls back to defaults (z=0).  Also clamps a chamfer_size_mm guess
+// into the manufacturable 0.1–2.0 mm band.  Non-edge skills pass through
+// unchanged.  inferProcessPlan() applies this to every step it emits, so the
+// plan it returns is already replay-ready; it is idempotent and safe to call
+// again.
+process::StepInvocation liftRecoveredStep(const process::StepInvocation& step);
+
 // Build a ProcessPlan from the recognized features.  Steps are appended in
 // the slice-1 order:
 //   Group A (stock removal):  hollow_cavity, mill_*_pocket, mill_slot, …

@@ -215,3 +215,45 @@ TEST(Recognizer, InferPlanSequence)
     if (firstA >= 0 && firstB >= 0) EXPECT_LT(firstA, firstB);
     if (firstB >= 0 && firstC >= 0) EXPECT_LT(firstB, firstC);
 }
+
+// ─── liftRecoveredStep: edge-op params become replay-ready ────────────────
+TEST(Recognizer, LiftRecoveredStepRaisesEdgeSelector)
+{
+    using namespace koocadcam;
+    process::StepInvocation step;
+    step.skill_id = "chamfer_edge";
+    step.params = {
+        { "edge_selector", { { "z_mm", 7.5 }, { "tolerance_mm", 0.01 } } },
+        { "chamfer_size_mm", 0.05 },   // below the 0.1 mm floor
+        { "angle_deg", 45.0 },
+    };
+    const auto s = re::liftRecoveredStep(step);
+    EXPECT_NEAR(s.params.value("edges_at_z_mm", -1.0), 7.5, 1e-9);
+    EXPECT_NEAR(s.params.value("tolerance_mm", -1.0), 0.01, 1e-9);
+    EXPECT_NEAR(s.params.value("chamfer_size_mm", 0.0), 0.1, 1e-9);   // clamped up
+
+    // Idempotent.
+    const auto s2 = re::liftRecoveredStep(s);
+    EXPECT_EQ(s2.params, s.params);
+}
+
+TEST(Recognizer, LiftRecoveredStepClampsWildChamfer)
+{
+    using namespace koocadcam;
+    process::StepInvocation step;
+    step.skill_id = "chamfer_edge";
+    step.params = { { "chamfer_size_mm", 3.0 } };   // wildly large guess
+    EXPECT_NEAR(re::liftRecoveredStep(step).params.value("chamfer_size_mm", 0.0),
+                0.5, 1e-9);
+}
+
+TEST(Recognizer, LiftRecoveredStepPassesThroughNonEdge)
+{
+    using namespace koocadcam;
+    process::StepInvocation step;
+    step.skill_id = "drill_hole";
+    step.params = { { "diameter_mm", 8.0 }, { "edge_selector", { { "z_mm", 1.0 } } } };
+    const auto s = re::liftRecoveredStep(step);
+    EXPECT_EQ(s.params, step.params);   // untouched
+    EXPECT_FALSE(s.params.contains("edges_at_z_mm"));
+}

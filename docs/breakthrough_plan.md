@@ -68,6 +68,8 @@
 
 **제품 빌더 — 폰 7스텝 완성 (2026-06-15d):** audit 가 지목한 최대 빌더 갭(폰 4/7 스텝)을 워치 패턴 미러링으로 완성. PhoneFrontModel 에 **Step5 addSideButtons**(평면 ±X 면 박스 컷, 워치 radial 과 달리 직접 box; left/right), **Step6 addPortHole**(USB-C, 하단 −Y 엣지 obround=box+양끝 cylinder fuseMany→cut), **Step7 addCameraDecoRings**(후면 카메라 주위 환형 그루브, tube=outerCyl−innerCyl→cutMany) 추가. buildAll 1→7 체인, defaultSpec 에 3섹션(DFM-safe 치수: deco 링간 land 2mm·환형 land 0.5mm≥minWall 0.40). **DFM-018** 빈 스텁→실 룰 구현(camera_deco_rings 환형 유효성: inner<outer + land≥minWall). phone_test 6→**12**(각 스텝 볼륨감소+BRepCheck valid+no-op passthrough+degenerate 링 경고+DFM-018 발화). 컨벤션 준수(centered XY, +Z front, bb.zMin rear, missing-key silent skip). **워치(11스텝)+폰(7스텝) 양 제품 빌더 완비.**
 
+**B3.5 — liftRecoveredStep 프로덕션 승격 (2026-06-15e):** RE 복원 chamfer_edge/fillet_edge 의 nested `edge_selector` 를 Executor 가 기대하는 top-level `edges_at_z_mm`/`tolerance_mm` 로 들어올리고 chamfer_size 를 0.1–2.0mm 밴드로 클램프하는 헬퍼가 **3개 통합테스트(bearing/watch_complete/watch_re_roundtrip)에 동일 복제**돼 있었음(audit 지적). `re::liftRecoveredStep` 로 승격 + `inferProcessPlan` 이 emit 하는 모든 스텝에 적용 → **복원 플랜이 기본적으로 replay-ready**(dedupe 이후 단계라 인식/특이성 영향 0, idempotent). 3개 테스트 로컬 복제 제거 → `re::liftRecoveredStep` 호출. recognizer_test 에 단위 3종(edge_selector lift + idempotent / wild chamfer 클램프 / non-edge passthrough) — 기존 exe 내 gtest 케이스라 ctest 엔트리 수 806 불변.
+
 ### B2. 스킬 계약 기계화 — 드리프트의 구조적 차단
 1. **B2.1 `finalizeOutput()` 헬퍼** (src/skills/OutputUnifier.hpp, S) — 전파+서명+SkillOutput 생성을 한 함수로. (대안으로 검증자가 제시한 "Executor-side 일원화"는 직접 apply 체인을 깨뜨리므로 채택 안 함 — recognizer_test가 바로 그 경로)
 2. **B2.2 기계화 codemod** (M, 실측 10-14h) — 332 미전파 + 269 loop + 170 setFeatures를 finalizeOutput으로 통일. 100개 배치마다 full ctest. /WX 클린 빌드 필수.

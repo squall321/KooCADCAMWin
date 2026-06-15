@@ -718,6 +718,37 @@ dedupe(const std::vector<skill::RecognizedFeature>& candidates)
     return kept;
 }
 
+// ── liftRecoveredStep() ──────────────────────────────────────────────────
+//
+// Promoted from the integration tests (bearing_housing / watch_re_roundtrip /
+// watch_complete each hand-rolled an identical copy).  Makes a recovered
+// chamfer_edge / fillet_edge step directly replayable.
+
+process::StepInvocation liftRecoveredStep(const process::StepInvocation& step)
+{
+    if (step.skill_id != "chamfer_edge" && step.skill_id != "fillet_edge")
+        return step;
+
+    process::StepInvocation s = step;
+    if (s.params.is_object()) {
+        // Lift the nested edge_selector up to the Executor's shorthand keys.
+        if (s.params.contains("edge_selector") && s.params["edge_selector"].is_object()) {
+            const auto& es = s.params["edge_selector"];
+            if (es.contains("z_mm"))         s.params["edges_at_z_mm"] = es["z_mm"];
+            if (es.contains("tolerance_mm")) s.params["tolerance_mm"]  = es["tolerance_mm"];
+        }
+        // Clamp a chamfer-size guess into the manufacturable band.
+        if (s.skill_id == "chamfer_edge" &&
+            s.params.contains("chamfer_size_mm") &&
+            s.params["chamfer_size_mm"].is_number()) {
+            const double sz = s.params["chamfer_size_mm"].get<double>();
+            if (sz < 0.1) s.params["chamfer_size_mm"] = 0.1;
+            if (sz > 2.0) s.params["chamfer_size_mm"] = 0.5;   // clamp wild guesses
+        }
+    }
+    return s;
+}
+
 // ── inferProcessPlan() ───────────────────────────────────────────────────
 //
 // Buckets the de-duplicated candidates by Group A/B/C using the classify()
@@ -757,7 +788,8 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
             step.depends_on = {};   // slice-1: linear; topological deps TODO.
             step.note       = std::string("re::inferProcessPlan group=") +
                               groupName + " conf=" + std::to_string(c.confidence);
-            plan.append(step);
+            // Normalise edge-op params so the returned plan is replay-ready.
+            plan.append(liftRecoveredStep(step));
         }
     };
 

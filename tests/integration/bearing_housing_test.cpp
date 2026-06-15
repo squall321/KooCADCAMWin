@@ -282,30 +282,8 @@ void printPlan(const char* label, const process::ProcessPlan& plan)
 // in watch_re_roundtrip_test.cpp).  Also clamps recovered chamfer_size_mm
 // to the 0.1 mm DFM minimum so re-execution doesn't get rejected by the
 // chamfer_edge::validate() gate.
-process::StepInvocation liftRecoveredStep(const process::StepInvocation& step)
-{
-    process::StepInvocation s = step;
-    if (s.skill_id == "chamfer_edge" || s.skill_id == "fillet_edge") {
-        if (s.params.contains("edge_selector") &&
-            s.params["edge_selector"].is_object())
-        {
-            const auto& es = s.params["edge_selector"];
-            if (es.contains("z_mm"))
-                s.params["edges_at_z_mm"] = es["z_mm"];
-            if (es.contains("tolerance_mm"))
-                s.params["tolerance_mm"] = es["tolerance_mm"];
-        }
-        if (s.skill_id == "chamfer_edge" &&
-            s.params.contains("chamfer_size_mm") &&
-            s.params["chamfer_size_mm"].is_number())
-        {
-            const double sz = s.params["chamfer_size_mm"].get<double>();
-            if (sz < 0.1) s.params["chamfer_size_mm"] = 0.1;
-            if (sz > 2.0) s.params["chamfer_size_mm"] = 0.5;  // clamp wild guesses
-        }
-    }
-    return s;
-}
+// liftRecoveredStep is now production re::liftRecoveredStep (promoted from the
+// identical copies that lived here and in the watch RE tests).
 
 }  // namespace
 
@@ -815,7 +793,7 @@ TEST(BearingHousing, RecoveredPlanReExecutes)
             ++droppedHollow;
             continue;
         }
-        replayable.append(liftRecoveredStep(step));
+        replayable.append(re::liftRecoveredStep(step));
     }
 
     std::printf("[ReExec] inferred=%d  replayable=%d  "

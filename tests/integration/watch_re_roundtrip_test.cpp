@@ -111,36 +111,8 @@ void printPlan(const char* label, const process::ProcessPlan& plan)
     }
 }
 
-// Lift inferred chamfer_edge / fillet_edge params from the recognizer's
-// nested edge_selector JSON object up to the top-level shorthand that
-// the Executor's parseEdgeSelector() expects.  Without this lift the
-// re-execution would silently fall back to defaults (z=0, tol=1e-3).
-process::StepInvocation liftEdgeSelector(const process::StepInvocation& step)
-{
-    process::StepInvocation s = step;
-    if (s.skill_id == "chamfer_edge" || s.skill_id == "fillet_edge") {
-        if (s.params.contains("edge_selector") &&
-            s.params["edge_selector"].is_object())
-        {
-            const auto& es = s.params["edge_selector"];
-            if (es.contains("z_mm"))
-                s.params["edges_at_z_mm"] = es["z_mm"];
-            if (es.contains("tolerance_mm"))
-                s.params["tolerance_mm"] = es["tolerance_mm"];
-        }
-        // Guard against the recognizer's coarse chamfer_size_mm estimate
-        // landing below the 0.1 mm DFM minimum.  We clamp upward so that
-        // re-execution at least completes the chamfer step.
-        if (s.skill_id == "chamfer_edge" &&
-            s.params.contains("chamfer_size_mm") &&
-            s.params["chamfer_size_mm"].is_number())
-        {
-            const double sz = s.params["chamfer_size_mm"].get<double>();
-            if (sz < 0.1) s.params["chamfer_size_mm"] = 0.1;
-        }
-    }
-    return s;
-}
+// Edge-selector lifting is now production re::liftRecoveredStep (promoted from
+// the three identical copies that lived in the integration tests).
 
 // Hand-written diff (set-based, robust against re-ordering or repeated
 // skills).  adapt::PlanEditor::diff is also exercised by callers.
@@ -275,7 +247,7 @@ TEST(WatchReRoundtrip, DrillAndChamferRecovered)
     // ── Re-execute the inferred plan ────────────────────────────────
     process::ProcessPlan replayable;
     for (const auto& step : inferred.steps()) {
-        replayable.append(liftEdgeSelector(step));
+        replayable.append(re::liftRecoveredStep(step));
     }
 
     auto stock2 = skill::createCuboidStock(50.0, 50.0, 10.0);
@@ -428,7 +400,7 @@ TEST(WatchReRoundtrip, ThreeStepRecoveryAndOrdering)
     // Re-execute the inferred plan and compare against the synth.
     process::ProcessPlan replayable;
     for (const auto& step : inferred.steps()) {
-        replayable.append(liftEdgeSelector(step));
+        replayable.append(re::liftRecoveredStep(step));
     }
 
     auto stock2 = skill::createCuboidStock(60.0, 60.0, 12.0);
@@ -545,7 +517,7 @@ TEST(WatchReRoundtrip, DISABLED_CylindricalDrillAndPocketRoundtrip)
     // Re-execute on a fresh cylindrical stock.
     process::ProcessPlan replayable;
     for (const auto& step : inferred.steps()) {
-        replayable.append(liftEdgeSelector(step));
+        replayable.append(re::liftRecoveredStep(step));
     }
     auto stock2 = skill::createCylindricalStock(44.0, 10.0);
     auto resynth = process::Executor::execute(replayable, stock2, process::ExecuteOptions{true});

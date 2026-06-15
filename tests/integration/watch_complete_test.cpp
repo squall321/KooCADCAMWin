@@ -382,32 +382,7 @@ void printPlan(const char* label, const process::ProcessPlan& plan)
     }
 }
 
-// Lift inferred edge_selector params up to the top-level shorthand the
-// Executor's parseEdgeSelector() expects (mirrors the helper in
-// watch_re_roundtrip_test.cpp).
-process::StepInvocation liftEdgeSelector(const process::StepInvocation& step)
-{
-    process::StepInvocation s = step;
-    if (s.skill_id == "chamfer_edge" || s.skill_id == "fillet_edge") {
-        if (s.params.contains("edge_selector") &&
-            s.params["edge_selector"].is_object())
-        {
-            const auto& es = s.params["edge_selector"];
-            if (es.contains("z_mm"))
-                s.params["edges_at_z_mm"] = es["z_mm"];
-            if (es.contains("tolerance_mm"))
-                s.params["tolerance_mm"] = es["tolerance_mm"];
-        }
-        if (s.skill_id == "chamfer_edge" &&
-            s.params.contains("chamfer_size_mm") &&
-            s.params["chamfer_size_mm"].is_number())
-        {
-            const double sz = s.params["chamfer_size_mm"].get<double>();
-            if (sz < 0.1) s.params["chamfer_size_mm"] = 0.1;
-        }
-    }
-    return s;
-}
+// Edge-selector lifting is now production re::liftRecoveredStep.
 
 }  // namespace
 
@@ -676,7 +651,7 @@ TEST(WatchComplete, DISABLED_ReRoundTripInfersAtLeast5Steps)
     // recognition recovery, not perfect synthesis closure.
     process::ProcessPlan replayable;
     for (const auto& step : inferred.steps()) {
-        replayable.append(liftEdgeSelector(step));
+        replayable.append(re::liftRecoveredStep(step));
     }
     auto stock2 = skill::createCylindricalStock(44.0, 10.0);
     auto resynth = process::Executor::execute(replayable, stock2);
