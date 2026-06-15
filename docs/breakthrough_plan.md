@@ -70,6 +70,8 @@
 
 **B3.5 — liftRecoveredStep 프로덕션 승격 (2026-06-15e):** RE 복원 chamfer_edge/fillet_edge 의 nested `edge_selector` 를 Executor 가 기대하는 top-level `edges_at_z_mm`/`tolerance_mm` 로 들어올리고 chamfer_size 를 0.1–2.0mm 밴드로 클램프하는 헬퍼가 **3개 통합테스트(bearing/watch_complete/watch_re_roundtrip)에 동일 복제**돼 있었음(audit 지적). `re::liftRecoveredStep` 로 승격 + `inferProcessPlan` 이 emit 하는 모든 스텝에 적용 → **복원 플랜이 기본적으로 replay-ready**(dedupe 이후 단계라 인식/특이성 영향 0, idempotent). 3개 테스트 로컬 복제 제거 → `re::liftRecoveredStep` 호출. recognizer_test 에 단위 3종(edge_selector lift + idempotent / wild chamfer 클램프 / non-edge passthrough) — 기존 exe 내 gtest 케이스라 ctest 엔트리 수 806 불변.
 
+**B7.4-lite — grammar 스케일 recall/precision 측정 (2026-06-15f):** koo_corpus 는 단일-스킬 apply 모델이라 멀티홀 compound 와 안 맞아, compound_grammar_test 에 스케일 측정 루프 추가(test-only, src 무변경 → incremental authoritative). **recall**: bolt_circle n=3–8 × R=15/25/35 = 18/18, grid 2×3/2×4/3×3/3×4/4×4 = 5/5(hole_count 정확), step-bore k=3/4/5 = 3/3. **precision**: 비패턴 배치(혼합직경/2홀/공선-불균일/concyclic 90° 코너필렛) 0 발화. 그래머 테스트 22→26. **알려진 특성**: bolt_circle n=3 은 임의의 동경·평행 3홀이 항상 concyclic 이라 발화(최소 3볼트 패턴으로 타당하나 느슨; n≥4 는 over-determined 라 specific). 양산 정밀도 필요 시 n≥4 게이트 고려 가능(미적용, scope).
+
 ### B2. 스킬 계약 기계화 — 드리프트의 구조적 차단
 1. **B2.1 `finalizeOutput()` 헬퍼** (src/skills/OutputUnifier.hpp, S) — 전파+서명+SkillOutput 생성을 한 함수로. (대안으로 검증자가 제시한 "Executor-side 일원화"는 직접 apply 체인을 깨뜨리므로 채택 안 함 — recognizer_test가 바로 그 경로)
 2. **B2.2 기계화 codemod** (M, 실측 10-14h) — 332 미전파 + 269 loop + 170 setFeatures를 finalizeOutput으로 통일. 100개 배치마다 full ctest. /WX 클린 빌드 필수.

@@ -450,3 +450,98 @@ TEST(CompoundGrammar, SingleHoleNoBoltCircle)
     EXPECT_EQ(findCompound(cands, "bolt_circle_pattern"), nullptr)
         << "bolt-circle grammar false-fired on a single hole";
 }
+
+// ── 5. Scale recall / precision (B7.4-lite measurement) ─────────────────────
+// The unit tests above prove each pattern on a representative case; these sweep
+// parameter ranges to MEASURE recall (the pattern fires with the right count
+// across sizes) and precision (no pattern fires on a batch of non-pattern hole
+// sets).  Pure-function over synthetic atoms → deterministic and fast.
+
+namespace {
+int countSections(double cx, double cy, int k, std::vector<skill::RecognizedFeature>& out)
+{
+    for (int i = 0; i < k; ++i)                    // k concentric distinct-dia bores
+        out.push_back(sectionAt(cx, cy, 6.0 + 3.0 * i, i,
+                                i == 0 ? "drill_hole" : "bore_cylindrical"));
+    return k;
+}
+}  // namespace
+
+TEST(CompoundGrammar, BoltCircleRecallAcrossSizes)
+{
+    int total = 0, recalled = 0;
+    for (int n = 3; n <= 8; ++n) {
+        for (double R : { 15.0, 25.0, 35.0 }) {
+            ++total;
+            const auto out = re::recognizeCompounds(ringOfHoles(n, R, 5.0));
+            const auto* bc = findCompound(out, "bolt_circle_pattern");
+            if (bc && bc->recovered_params.value("hole_count", 0) == n &&
+                std::abs(bc->recovered_params.value("bolt_circle_dia_mm", 0.0) - 2 * R) < 1e-3)
+                ++recalled;
+        }
+    }
+    EXPECT_EQ(recalled, total) << "bolt-circle recall " << recalled << "/" << total;
+}
+
+TEST(CompoundGrammar, GridRecallAcrossSizes)
+{
+    const int sizes[][2] = { {2,3}, {2,4}, {3,3}, {3,4}, {4,4} };
+    int total = 0, recalled = 0;
+    for (const auto& cr : sizes) {
+        ++total;
+        const auto out = re::recognizeCompounds(gridOfHoles(cr[0], cr[1], 7.0, 5.0, 3.0));
+        const auto* g = findCompound(out, "rectangular_hole_grid");
+        if (g && g->recovered_params.value("hole_count", 0) == cr[0] * cr[1])
+            ++recalled;
+    }
+    EXPECT_EQ(recalled, total) << "grid recall " << recalled << "/" << total;
+}
+
+TEST(CompoundGrammar, StepBoreRecallAcrossSteps)
+{
+    int total = 0, recalled = 0;
+    for (int k = 3; k <= 5; ++k) {
+        ++total;
+        std::vector<skill::RecognizedFeature> atoms;
+        countSections(30.0, 30.0, k, atoms);
+        const auto out = re::recognizeCompounds(atoms);
+        const auto* sb = findCompound(out, "coaxial_step_bore");
+        if (sb && sb->recovered_params.value("step_count", 0) == k)
+            ++recalled;
+    }
+    EXPECT_EQ(recalled, total) << "step-bore recall " << recalled << "/" << total;
+}
+
+// Precision: a batch of hole sets that are NOT clean patterns must produce
+// zero grammar compounds (mixed diameters, two holes, collinear-uneven pitch,
+// concyclic but partial-wrap corner fillets).
+TEST(CompoundGrammar, PrecisionBatchNoFalseFire)
+{
+    std::vector<std::vector<skill::RecognizedFeature>> negatives;
+    // mixed diameters on a circle (not a uniform bolt set)
+    negatives.push_back({ drillAt(50, 30, 5, 0), drillAt(20, 47, 8, 1),
+                          drillAt(20, 13, 11, 2) });
+    // two holes
+    negatives.push_back({ drillAt(10, 30, 6, 0), drillAt(50, 30, 6, 1) });
+    // collinear, uneven pitch
+    negatives.push_back({ drillAt(10, 30, 4, 0), drillAt(20, 30, 4, 1),
+                          drillAt(45, 30, 4, 2), drillAt(80, 30, 4, 3) });
+    // four concyclic *partial-wrap* corner fillets (90°) — rejected by the
+    // revolution gate, must not read as a bolt circle
+    {
+        std::vector<skill::RecognizedFeature> corners;
+        const double q = 0.5 * M_PI, hx = 20, hy = 12;
+        corners.push_back(drillAt(30 - hx, 30 - hy, 2, 0, 0.95, q));
+        corners.push_back(drillAt(30 + hx, 30 - hy, 2, 1, 0.95, q));
+        corners.push_back(drillAt(30 + hx, 30 + hy, 2, 2, 0.95, q));
+        corners.push_back(drillAt(30 - hx, 30 + hy, 2, 3, 0.95, q));
+        negatives.push_back(corners);
+    }
+
+    int fired = 0;
+    for (const auto& neg : negatives) {
+        const auto out = re::recognizeCompounds(neg);
+        if (!out.empty()) ++fired;
+    }
+    EXPECT_EQ(fired, 0) << fired << " non-pattern set(s) falsely produced a compound";
+}
