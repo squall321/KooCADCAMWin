@@ -7,6 +7,7 @@
 add_library(koo_process STATIC
     ProcessPlan.cpp
     Executor.cpp
+    ParamClamp.cpp
 )
 
 target_include_directories(koo_process PUBLIC ${CMAKE_SOURCE_DIR}/src)

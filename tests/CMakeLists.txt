@@ -1202,6 +1202,19 @@ koo_apply_compiler_flags(process_plan_test)
 add_test(NAME process_plan COMMAND process_plan_test)
 set_tests_properties(process_plan PROPERTIES TIMEOUT 60 LABELS "process")
 
+# ── B3.4 recovered-parameter clamp ────────────────────────────
+add_executable(param_clamp_test process/param_clamp_test.cpp)
+target_link_libraries(param_clamp_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_process
+    koo_skills
+    koo_engine
+)
+target_include_directories(param_clamp_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(param_clamp_test)
+add_test(NAME param_clamp COMMAND param_clamp_test)
+set_tests_properties(param_clamp PROPERTIES TIMEOUT 60 LABELS "process")
+
 # ── Layer 5 LLM adapter / PlanEditor tests ────────────────────
 add_executable(plan_editor_test adapt/plan_editor_test.cpp)
 target_link_libraries(plan_editor_test PRIVATE

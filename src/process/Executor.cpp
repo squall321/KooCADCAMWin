@@ -2,6 +2,7 @@
 
 #include "Executor.hpp"
 
+#include "ParamClamp.hpp"
 #include "skills/Workpiece.hpp"
 #include "skills/Datum.hpp"
 
@@ -4953,7 +4954,11 @@ ExecutionResult Executor::execute(const ProcessPlan& plan,
         }
 
         try {
-            sk::SkillOutput out = it->second(*current, step.params);
+            // B3.4: clamp recovered params to the live stock so an over-specified
+            // RE candidate (e.g. wall_thickness > stock) cannot crash apply().
+            // No-op for skills without a clamp rule.
+            const json clamped = clampParams(step.skill_id, step.params, *current);
+            sk::SkillOutput out = it->second(*current, clamped);
             if (!out.workpiece) {
                 std::string msg = "Executor: skill '" + step.skill_id +
                                   "' returned null workpiece at step " +
