@@ -187,3 +187,115 @@ TEST(PhoneFrontModel, RunDFMPassesOnDefaultSpec)
     EXPECT_TRUE(hasCode("DFM-012")) << "face-count rule must run";
     EXPECT_TRUE(hasCode("DFM-016")) << "fill-ratio rule must run";
 }
+
+// ── M2-phase-2 steps 5–7 ───────────────────────────────────────────────────
+
+namespace {
+// A base slab (steps 1–2) to apply individual M2-phase-2 steps onto.
+TopoDS_Shape phoneBase()
+{
+    auto spec = koocadcam::engine::PhoneFrontModel::defaultSpec();
+    koocadcam::engine::PhoneFrontModel m;
+    auto s = m.buildBase(spec).shape;
+    return m.applyCornerRadius(s, spec).shape;
+}
+}  // namespace
+
+// Step 5: side buttons cut material from the body and stay a valid solid.
+TEST(PhoneFrontModel, SideButtonsCutBothSides)
+{
+    using namespace koocadcam;
+    auto spec = engine::PhoneFrontModel::defaultSpec();
+    const TopoDS_Shape base = phoneBase();
+    engine::PhoneFrontModel m;
+    const TopoDS_Shape out = m.addSideButtons(base, spec).shape;
+
+    ASSERT_FALSE(out.IsNull());
+    EXPECT_TRUE(BRepCheck_Analyzer(out).IsValid());
+    EXPECT_LT(volumeOf(out), volumeOf(base)) << "side buttons must remove material";
+    // Width is unchanged (pockets are shallow, well inside the body).
+    EXPECT_NEAR(engine::prim::optimalBbox(out).dx(), 76.0, 0.5);
+}
+
+// Step 5: missing/empty side_buttons is a pass-through (no change).
+TEST(PhoneFrontModel, SideButtonsAbsentIsNoOp)
+{
+    using namespace koocadcam;
+    auto spec = engine::PhoneFrontModel::defaultSpec();
+    spec.erase("side_buttons");
+    const TopoDS_Shape base = phoneBase();
+    engine::PhoneFrontModel m;
+    const TopoDS_Shape out = m.addSideButtons(base, spec).shape;
+    EXPECT_NEAR(volumeOf(out), volumeOf(base), 1e-6);
+}
+
+// Step 6: the USB-C port cuts an opening on the bottom (−Y) edge.
+TEST(PhoneFrontModel, PortHoleOnBottomEdge)
+{
+    using namespace koocadcam;
+    auto spec = engine::PhoneFrontModel::defaultSpec();
+    const TopoDS_Shape base = phoneBase();
+    engine::PhoneFrontModel m;
+    const TopoDS_Shape out = m.addPortHole(base, spec).shape;
+
+    ASSERT_FALSE(out.IsNull());
+    EXPECT_TRUE(BRepCheck_Analyzer(out).IsValid());
+    EXPECT_LT(volumeOf(out), volumeOf(base)) << "port must remove material";
+    // The bottom edge stays at y = -80 (the cut opens the face, not extends it).
+    EXPECT_NEAR(engine::prim::optimalBbox(out).yMin, -80.0, 0.5);
+}
+
+// Step 7: deco rings cut shallow annular grooves around the rear cameras.
+TEST(PhoneFrontModel, DecoRingsCutGrooves)
+{
+    using namespace koocadcam;
+    auto spec = engine::PhoneFrontModel::defaultSpec();
+    // Apply against a body that already has the camera holes (step 4).
+    engine::PhoneFrontModel m;
+    auto s = m.buildBase(spec).shape;
+    s = m.applyCornerRadius(s, spec).shape;
+    s = m.addCameraHoles(s, spec).shape;
+    const double vBefore = volumeOf(s);
+    const TopoDS_Shape out = m.addCameraDecoRings(s, spec).shape;
+
+    ASSERT_FALSE(out.IsNull());
+    EXPECT_TRUE(BRepCheck_Analyzer(out).IsValid());
+    EXPECT_LT(volumeOf(out), vBefore) << "deco rings must remove material";
+}
+
+// DFM-018: a deco-ring whose annular land is below the min wall warns.
+TEST(PhoneFrontModel, DFM018FiresOnThinDecoRingLand)
+{
+    using namespace koocadcam;
+    auto spec = engine::PhoneFrontModel::defaultSpec();
+    spec["camera_deco_rings"] = nlohmann::json::array({
+        nlohmann::json{ { "offset_x_mm", -22.0 }, { "offset_y_mm", -55.0 },
+                        { "outer_dia_mm", 9.0 }, { "inner_dia_mm", 8.6 },  // land 0.2 < 0.4
+                        { "depth_mm", 0.3 } } });
+    std::vector<engine::BuildWarning> warnings;
+    TopoDS_Shape shape = engine::PhoneFrontModel::buildAll(spec, warnings);
+    ASSERT_FALSE(shape.IsNull());
+    auto report = engine::PhoneFrontModel::runDFM(shape, spec);
+
+    bool dfm018 = false;
+    for (const auto& f : report.findings) if (f.code == "DFM-018") dfm018 = true;
+    EXPECT_TRUE(dfm018) << "thin deco-ring land must raise DFM-018";
+}
+
+// Step 7: a ring whose inner_dia >= outer_dia is skipped with a warning.
+TEST(PhoneFrontModel, DecoRingDegenerateIsSkipped)
+{
+    using namespace koocadcam;
+    auto spec = engine::PhoneFrontModel::defaultSpec();
+    spec["camera_deco_rings"] = nlohmann::json::array({
+        nlohmann::json{ { "offset_x_mm", -22.0 }, { "offset_y_mm", -55.0 },
+                        { "outer_dia_mm", 8.0 }, { "inner_dia_mm", 9.0 },
+                        { "depth_mm", 0.3 } } });
+    const TopoDS_Shape base = phoneBase();
+    engine::PhoneFrontModel m;
+    auto r = m.addCameraDecoRings(base, spec);
+    EXPECT_NEAR(volumeOf(r.shape), volumeOf(base), 1e-6) << "degenerate ring left no groove";
+    bool warned = false;
+    for (const auto& w : r.warnings) if (w.code == "W_DECO_RING") warned = true;
+    EXPECT_TRUE(warned) << "degenerate ring must warn";
+}

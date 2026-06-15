@@ -17,8 +17,9 @@
 
 namespace koocadcam::engine {
 
-// M2-phase-1: 4-step rectangular-slab phone front-case builder.
-// Steps 5–7 (side buttons, port hole, camera deco rings) land in M2-phase-2.
+// 7-step rectangular-slab phone front-case builder.  Steps 1–4 (M2-phase-1):
+// base, corner rim fillets, display pocket, rear camera holes.  Steps 5–7
+// (M2-phase-2): side buttons, USB-C port, camera deco rings.
 class PhoneFrontModel : public ProductFrontModel<PhoneFrontModel>
 {
 public:
@@ -50,7 +51,26 @@ public:
     StepResult addCameraHoles(const TopoDS_Shape& in,
                               const nlohmann::json& spec);
 
-    // ── Convenience: run all 4 M2-phase-1 steps in order.
+    // ── Step 5: side buttons (rectangular pockets on the flat ±X faces)
+    // spec["side_buttons"] missing or empty → pass-through.  Each button =
+    // { side ("left"|"right"), center_y_mm, center_z_mm, length_mm, height_mm,
+    //   depth_mm }.  Compound + single Boolean via prim::cutMany.
+    StepResult addSideButtons(const TopoDS_Shape& in,
+                              const nlohmann::json& spec);
+
+    // ── Step 6: USB-C port (obround cut-out on the bottom −Y edge)
+    // spec["port_hole"] missing → pass-through.
+    // { width_mm, height_mm, depth_mm, center_x_mm, center_z_mm }.
+    StepResult addPortHole(const TopoDS_Shape& in,
+                           const nlohmann::json& spec);
+
+    // ── Step 7: camera deco rings (recessed annuli around rear lenses)
+    // spec["camera_deco_rings"] missing or empty → pass-through.  Each ring =
+    // { offset_x_mm, offset_y_mm, outer_dia_mm, inner_dia_mm, depth_mm }.
+    StepResult addCameraDecoRings(const TopoDS_Shape& in,
+                                  const nlohmann::json& spec);
+
+    // ── Convenience: run all 7 steps in order.
     static TopoDS_Shape buildAll(const nlohmann::json& spec,
                                  std::vector<BuildWarning>& warnings);
 

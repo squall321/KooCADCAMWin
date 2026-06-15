@@ -584,12 +584,31 @@ DFMReport runProductDFM(const TopoDS_Shape& shape,
         }
     }
 
-    // ── DFM-018: camera deco-ring parallelism to top face ≤ 0.1° ───────
-    // Per spec, scope = Phone only.  WatchFrontModel reports N/A; the
-    // PhoneFrontModel will receive its own variant in a separate change.
-    {
-        if (profile.decoRingRule) {
-            // Deco-ring metadata is not modelled yet — future phone hook.
+    // ── DFM-018: camera deco-ring annulus validity (Phone only) ────────
+    // Now that PhoneFrontModel models spec["camera_deco_rings"], validate each
+    // ring: it must be a real annulus (inner < outer) whose remaining annular
+    // land is at least the profile's minimum wall — a thinner land tears during
+    // anodising/machining.  Watch profiles leave decoRingRule false → N/A.
+    if (profile.decoRingRule && spec.contains("camera_deco_rings") &&
+        spec["camera_deco_rings"].is_array()) {
+        const auto& rings = spec["camera_deco_rings"];
+        for (std::size_t i = 0; i < rings.size(); ++i) {
+            const auto&  r     = rings[i];
+            const double outer = r.value("outer_dia_mm", 0.0);
+            const double inner = r.value("inner_dia_mm", 0.0);
+            const std::string at = "camera_deco_rings[" + std::to_string(i) + "]";
+            if (inner >= outer) {
+                addFinding("DFM-018", "error",
+                    at + " inner_dia " + std::to_string(inner) +
+                    " >= outer_dia " + std::to_string(outer) + " mm (not an annulus)");
+                continue;
+            }
+            const double land = (outer - inner) / 2.0;
+            if (land < profile.minWallMm) {
+                addFinding("DFM-018", "warning",
+                    at + " annular land " + std::to_string(land) +
+                    " mm < min wall " + std::to_string(profile.minWallMm) + " mm");
+            }
         }
     }
 
