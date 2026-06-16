@@ -13,6 +13,7 @@ namespace koocadcam::gui {
 class OcctViewWidget;
 class AppMenus;
 class ParameterPanel;
+class PhonePanel;
 class ProcessPlanEditor;
 
 class MainWindow : public QMainWindow
@@ -24,6 +25,11 @@ public:
 
     OcctViewWidget* viewWidget() const { return m_view; }
     [[nodiscard]] ParameterPanel* parameterPanel() const { return m_paramPanel; }
+    [[nodiscard]] PhonePanel*     phonePanel()     const { return m_phonePanel; }
+
+    // Product mode switches: raise the matching dock and rebuild from its spec.
+    void activatePhone();
+    void activateWatch();
 
     // Layer 3/4/5 GUI accessors — used by AppMenus to drive recognition,
     // plan execution, and natural-language editing.
@@ -39,6 +45,10 @@ private:
     OcctViewWidget*    m_view              {nullptr};
     AppMenus*          m_menus             {nullptr};
     ParameterPanel*    m_paramPanel        {nullptr};
+    QDockWidget*       m_paramDock         {nullptr};
+    PhonePanel*        m_phonePanel        {nullptr};
+    QDockWidget*       m_phoneDock         {nullptr};
+    bool               m_phoneMode         {false};
     ProcessPlanEditor* m_processPlanEditor {nullptr};
     QDockWidget*       m_processPlanDock   {nullptr};
 };

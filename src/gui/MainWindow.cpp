@@ -4,11 +4,13 @@
 #include "AppMenus.hpp"
 #include "OcctViewWidget.hpp"
 #include "ParameterPanel.hpp"
+#include "PhonePanel.hpp"
 #include "ProcessPlanEditor.hpp"
 
 #include <adapt/LlmBridge.hpp>
 #include <adapt/NaturalLanguageStub.hpp>
 #include <adapt/PlanEditor.hpp>
+#include <engine/PhoneFrontModel.hpp>
 #include <engine/WatchFrontModel.hpp>
 #include <process/Executor.hpp>
 #include <skills/Skill.hpp>
@@ -34,14 +36,26 @@ MainWindow::MainWindow(QWidget* parent)
     m_view = new OcctViewWidget(this);
     setCentralWidget(m_view);
 
-    // ── Parameter panel dock ─────────────────────────────────────────────────
+    // ── Parameter panel dock (watch) ─────────────────────────────────────────
     m_paramPanel = new ParameterPanel(this);
-    QDockWidget* dock = new QDockWidget(tr("Parameters"), this);
-    dock->setWidget(m_paramPanel);
-    dock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
-    addDockWidget(Qt::RightDockWidgetArea, dock);
+    m_paramDock = new QDockWidget(tr("Watch Parameters"), this);
+    m_paramDock->setWidget(m_paramPanel);
+    m_paramDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+    addDockWidget(Qt::RightDockWidgetArea, m_paramDock);
 
     connect(m_paramPanel, &ParameterPanel::specChanged,
+            this, &MainWindow::onSpecChanged);
+
+    // ── Phone panel dock (tabbed behind the watch dock, hidden until New Phone) ─
+    m_phonePanel = new PhonePanel(this);
+    m_phoneDock = new QDockWidget(tr("Phone Parameters"), this);
+    m_phoneDock->setWidget(m_phonePanel);
+    m_phoneDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+    addDockWidget(Qt::RightDockWidgetArea, m_phoneDock);
+    tabifyDockWidget(m_paramDock, m_phoneDock);
+    m_paramDock->raise();
+
+    connect(m_phonePanel, &PhonePanel::specChanged,
             this, &MainWindow::onSpecChanged);
 
     // ── Process plan editor dock (Layer 3/4/5 GUI) ───────────────────────────
@@ -80,29 +94,61 @@ MainWindow::~MainWindow() = default;
 void MainWindow::onSpecChanged()
 {
     using koocadcam::engine::WatchFrontModel;
+    using koocadcam::engine::PhoneFrontModel;
     using koocadcam::engine::BuildWarning;
     try {
-        nlohmann::json spec = m_paramPanel->currentSpec();
+        // The product follows whichever panel emitted the change (robust to
+        // tab switching); the initial timer-driven build has no panel sender
+        // and defaults to the watch.  m_phoneMode tracks the last activation
+        // for the menu/UX, but the build decision keys off the sender.
+        const bool phone = (sender() == m_phonePanel) ||
+                           (sender() != m_paramPanel && m_phoneMode);
+        const char* product = phone ? "Phone" : "Watch";
+        nlohmann::json spec = phone ? m_phonePanel->currentSpec()
+                                    : m_paramPanel->currentSpec();
         std::vector<BuildWarning> warnings;
-        TopoDS_Shape shape = WatchFrontModel::buildAll(spec, warnings);
+        TopoDS_Shape shape = phone ? PhoneFrontModel::buildAll(spec, warnings)
+                                   : WatchFrontModel::buildAll(spec, warnings);
         if (shape.IsNull()) {
-            QString msg = "Build failed";
-            if (!warnings.empty()) {
+            QString msg = QString("%1 build failed").arg(product);
+            if (!warnings.empty())
                 msg += QString::fromStdString(": " + warnings.front().message);
-            }
             statusBar()->showMessage(msg, 5000);
             return;
         }
         m_view->setShape(shape);
-        QString status = "Watch rebuilt";
-        if (!warnings.empty()) {
-            status += QString(" (%1 warnings)").arg(static_cast<int>(warnings.size()));
-        }
-        statusBar()->showMessage(status, 3000);
+
+        // Run the manufacturability gate and surface the verdict (B6.4: the
+        // live loop now reports DFM for both products, not just the demo menu).
+        auto report = phone ? PhoneFrontModel::runDFM(shape, spec)
+                            : WatchFrontModel::runDFM(shape, spec);
+        QString status = QString("%1 rebuilt — DFM %2 (%3 finding(s))")
+            .arg(product)
+            .arg(report.passed ? "PASS" : "FAIL")
+            .arg(static_cast<int>(report.findings.size()));
+        if (!warnings.empty())
+            status += QString(", %1 warning(s)").arg(static_cast<int>(warnings.size()));
+        statusBar()->showMessage(status, 4000);
     } catch (const std::exception& e) {
         statusBar()->showMessage(
             QString("Build exception: %1").arg(e.what()), 8000);
     }
+}
+
+void MainWindow::activatePhone()
+{
+    m_phoneMode = true;
+    m_phoneDock->show();
+    m_phoneDock->raise();
+    m_phonePanel->triggerRebuild();
+}
+
+void MainWindow::activateWatch()
+{
+    m_phoneMode = false;
+    m_paramDock->show();
+    m_paramDock->raise();
+    m_paramPanel->triggerRebuild();
 }
 
 // ── Slot: execute plan from editor ───────────────────────────────────────────

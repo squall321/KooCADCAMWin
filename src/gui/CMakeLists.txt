@@ -5,6 +5,7 @@ add_library(koo_gui STATIC
     AppMenus.cpp
     FieldSchema.cpp
     ParameterPanel.cpp
+    PhonePanel.cpp
     ProcessPlanEditor.cpp
     occt/OcctGlTools.cpp     # MIT — Kirill Gavrilov 2023, see licenses/OcctGlTools_MIT.txt
 )

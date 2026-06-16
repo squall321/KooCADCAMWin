@@ -2,6 +2,7 @@
 
 #include "AppMenus.hpp"
 #include "MainWindow.hpp"
+#include "PhonePanel.hpp"
 #include "OcctViewWidget.hpp"
 #include "ParameterPanel.hpp"
 #include "ProcessPlanEditor.hpp"
@@ -273,20 +274,11 @@ void AppMenus::onRenderFullDemoWatch()
 
 void AppMenus::onNewPhoneRect()
 {
-    // M2-phase-1 visual smoke: build the default phone via PhoneFrontModel and
-    // push the shape directly to the viewer.  ParameterPanel still drives the
-    // watch spec (phone widget set lands in M2-phase-2), so this menu is a
-    // one-shot view-only render.
-    nlohmann::json spec = koocadcam::engine::PhoneFrontModel::defaultSpec();
-    std::vector<koocadcam::engine::BuildWarning> warnings;
-    TopoDS_Shape shape = koocadcam::engine::PhoneFrontModel::buildAll(spec, warnings);
-    if (shape.IsNull()) {
-        QMessageBox::critical(
-            m_window, tr("New Phone"),
-            tr("Failed to build phone shape (%1 warning(s)).").arg(warnings.size()));
-        return;
-    }
-    m_window->viewWidget()->setShape(shape);
+    // B6.4: load the default phone into the PhonePanel and switch the live
+    // build loop to phone mode — the phone is now a fully editable, DFM-gated
+    // product, not a one-shot view-only render.
+    m_window->phonePanel()->setSpec(koocadcam::engine::PhoneFrontModel::defaultSpec());
+    m_window->activatePhone();
 }
 
 void AppMenus::onSaveWatchSpec()

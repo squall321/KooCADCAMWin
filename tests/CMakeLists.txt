@@ -110,6 +110,22 @@ set_tests_properties(parameter_panel PROPERTIES
     LABELS "gui"
 )
 
+# ── PhonePanel round-trip + editing test (headless Qt offscreen, B6.4) ──
+add_executable(phone_panel_test gui/phone_panel_test.cpp)
+target_link_libraries(phone_panel_test PRIVATE
+    GTest::gtest
+    koo_gui
+    koo_engine
+)
+target_include_directories(phone_panel_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(phone_panel_test)
+add_test(NAME phone_panel COMMAND phone_panel_test)
+set_tests_properties(phone_panel PROPERTIES
+    TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    LABELS "gui"
+)
+
 # ── Skill round-trip tests (slice 1 + slice 2) ────────────────
 # Helper macro to keep entries terse.
 macro(koo_add_skill_test name)
