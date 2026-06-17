@@ -6,6 +6,8 @@ add_library(koo_skills STATIC
     Stock.cpp
     # slice 1
     drill_hole.cpp
+    # B1.2 grammar — generative compound (recognition lives in koo_re)
+    bolt_circle_pattern.cpp
     # slice 2 — drilling variants, milling, edge, boring (12 commits, 0607398)
     counterbore.cpp
     countersink.cpp

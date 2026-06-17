@@ -1306,6 +1306,16 @@ koo_apply_compiler_flags(compound_grammar_test)
 add_test(NAME compound_grammar COMMAND compound_grammar_test)
 set_tests_properties(compound_grammar PROPERTIES TIMEOUT 120 LABELS "re")
 
+# ── B1.2 grammar — generative compound (recognise → edit → regenerate) ──
+add_executable(bolt_circle_pattern_test skills/bolt_circle_pattern_test.cpp)
+target_link_libraries(bolt_circle_pattern_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_re koo_io koo_process koo_skills koo_engine)
+target_include_directories(bolt_circle_pattern_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(bolt_circle_pattern_test)
+add_test(NAME bolt_circle_pattern COMMAND bolt_circle_pattern_test)
+set_tests_properties(bolt_circle_pattern PROPERTIES TIMEOUT 120 LABELS "skills;re")
+
 # ── Phone parametric build test (M2-phase-1) ──────────────────
 add_executable(phone_test phone/phone_test.cpp)
 target_link_libraries(phone_test PRIVATE
