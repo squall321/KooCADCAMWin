@@ -43,6 +43,7 @@ DELEGATION_WHITELIST = {
     "adaptive_clearing.cpp",        # wpNew = pocketOut.workpiece
     "bolt_circle_pattern.cpp",      # current = drill_hole::apply(...).workpiece per hole
     "linear_hole_array.cpp",        # current = drill_hole::apply(...).workpiece per hole
+    "rectangular_hole_grid.cpp",    # current = drill_hole::apply(...).workpiece per hole
     "bore_and_finish.cpp",          # wpNew = step3.workpiece
     "drill_and_tap.cpp",            # wpNew = drillOut.workpiece
     "drill_through_hole.cpp",       # wpNew = drillOut.workpiece (2-entry layout, documented)

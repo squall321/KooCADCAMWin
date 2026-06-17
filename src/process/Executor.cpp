@@ -10,6 +10,7 @@
 #include "skills/drill_hole.hpp"
 #include "skills/bolt_circle_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
+#include "skills/rectangular_hole_grid.hpp"
 #include "skills/counterbore.hpp"
 #include "skills/countersink.hpp"
 #include "skills/mill_circular_pocket.hpp"
@@ -548,6 +549,35 @@ sk::linear_hole_array::Input parseLinearHoleArray(const json& p)
         in.dir_x = p["direction"][0].get<double>();
         in.dir_y = p["direction"][1].get<double>();
     }
+    in.depth_mm     = jdouble(p, "depth_mm", 0.0);
+    in.through_hole = jbool  (p, "through_hole", true);
+    return in;
+}
+
+sk::rectangular_hole_grid::Input parseRectangularHoleGrid(const json& p)
+{
+    sk::rectangular_hole_grid::Input in;
+    in.axis_dir    = parseAxisDir(p);
+    if (p.contains("entry_face") || p.contains("entry_face_id"))
+        in.entry_face = parseFaceDatum(p);
+    else
+        in.entry_face = sk::FaceByNormal{
+            gp_Dir(-in.axis_dir.X(), -in.axis_dir.Y(), -in.axis_dir.Z()) };
+    in.cols        = static_cast<int>(jdouble(p, "cols", 0.0));
+    in.rows        = static_cast<int>(jdouble(p, "rows", 0.0));
+    in.hole_dia_mm = jdouble(p, "hole_dia_mm", 0.0);
+    in.origin_x_mm = jdouble(p, "origin_x_mm", 0.0);
+    in.origin_y_mm = jdouble(p, "origin_y_mm", 0.0);
+    in.pitch_u_mm  = jdouble(p, "pitch_u_mm", 0.0);
+    in.pitch_v_mm  = jdouble(p, "pitch_v_mm", 0.0);
+    auto vec2 = [&](const char* key, double& dx, double& dy) {
+        if (p.contains(key) && p[key].is_array() && p[key].size() >= 2) {
+            dx = p[key][0].get<double>();
+            dy = p[key][1].get<double>();
+        }
+    };
+    vec2("u_dir", in.u_dx, in.u_dy);
+    vec2("v_dir", in.v_dx, in.v_dy);
     in.depth_mm     = jdouble(p, "depth_mm", 0.0);
     in.through_hole = jbool  (p, "through_hole", true);
     return in;
@@ -4162,6 +4192,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::linear_hole_array::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::linear_hole_array::apply(wp, parseLinearHoleArray(p));
+    };
+    t[sk::rectangular_hole_grid::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::rectangular_hole_grid::apply(wp, parseRectangularHoleGrid(p));
     };
     t[sk::counterbore::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::counterbore::apply(wp, parseCounterbore(p));

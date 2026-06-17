@@ -156,7 +156,9 @@ bool fitLineXY(const std::vector<Hole>& pts, double& dirx, double& diry,
 // residual.  A 2x2 grid (4 concyclic points) is intentionally NOT handled here —
 // it is claimed upstream as a bolt circle.
 bool fitGridXY(const std::vector<Hole>& pts, double& pitchU, double& pitchV,
-               int& cols, int& rows, double& maxResidual)
+               int& cols, int& rows, double& maxResidual,
+               double& originX, double& originY,
+               double& uDx, double& uDy, double& vDx, double& vDy)
 {
     const std::size_t n = pts.size();
     if (n < 6) return false;
@@ -215,6 +217,10 @@ bool fitGridXY(const std::vector<Hole>& pts, double& pitchU, double& pitchV,
     if (static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows) != n)
         return false;                                   // not a FULL rectangle
     pitchU = ulen;  pitchV = std::hypot(vx, vy);
+    // Origin (corner) + unit basis directions, so the pattern can be regenerated.
+    originX = Ox;  originY = Oy;
+    uDx = ux / ulen;          uDy = uy / ulen;
+    vDx = vx / pitchV;        vDy = vy / pitchV;
     return true;
 }
 
@@ -326,7 +332,9 @@ void matchHolePatterns(const std::vector<Hole>& holes,
         // ── rectangular hole grid ──────────────────────────────────────
         {
             double pu, pv;  int cols, rows;  double gresid;
-            if (fitGridXY(pts, pu, pv, cols, rows, gresid)) {
+            double ox, oy, udx, udy, vdx, vdy;
+            if (fitGridXY(pts, pu, pv, cols, rows, gresid,
+                          ox, oy, udx, udy, vdx, vdy)) {
                 for (std::size_t j : grp) used[j] = true;
                 skill::RecognizedFeature rf;
                 rf.skill_id         = "rectangular_hole_grid";
@@ -337,6 +345,10 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                     { "rows",        rows },
                     { "pitch_u_mm",  pu },
                     { "pitch_v_mm",  pv },
+                    { "origin_x_mm", ox },
+                    { "origin_y_mm", oy },
+                    { "u_dir",       { udx, udy, 0.0 } },
+                    { "v_dir",       { vdx, vdy, 0.0 } },
                     { "axis_dir",    axis },
                 };
                 rf.confidence       = std::min(0.95, 0.88 + (0.3 - gresid) * 0.1);

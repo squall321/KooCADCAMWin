@@ -1325,6 +1325,15 @@ koo_apply_compiler_flags(linear_hole_array_test)
 add_test(NAME linear_hole_array COMMAND linear_hole_array_test)
 set_tests_properties(linear_hole_array PROPERTIES TIMEOUT 120 LABELS "skills;re")
 
+add_executable(rectangular_hole_grid_test skills/rectangular_hole_grid_test.cpp)
+target_link_libraries(rectangular_hole_grid_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_re koo_io koo_process koo_skills koo_engine)
+target_include_directories(rectangular_hole_grid_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(rectangular_hole_grid_test)
+add_test(NAME rectangular_hole_grid COMMAND rectangular_hole_grid_test)
+set_tests_properties(rectangular_hole_grid PROPERTIES TIMEOUT 120 LABELS "skills;re")
+
 # ── Phone parametric build test (M2-phase-1) ──────────────────
 add_executable(phone_test phone/phone_test.cpp)
 target_link_libraries(phone_test PRIVATE
