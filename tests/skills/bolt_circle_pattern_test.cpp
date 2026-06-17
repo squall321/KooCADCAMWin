@@ -139,6 +139,64 @@ TEST(BoltCirclePattern, SubsumesConstituentDrillsInPlan)
     EXPECT_EQ(drills, 0) << "constituent drills must be subsumed by the compound";
 }
 
+// 7. CAPSTONE — the whole loop: recognise a foreign bolt circle, edit the
+// recovered compound step (4 → 6 holes), re-execute, and confirm the
+// regenerated part is a 6-hole bolt circle.  This is generalised design
+// automation demonstrated end to end.
+TEST(BoltCirclePattern, EndToEndRecogniseEditRegenerate)
+{
+    namespace fs = std::filesystem;
+
+    // (a) A foreign part containing a 4-hole bolt circle.
+    auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);
+    auto built = skill::bolt_circle_pattern::apply(*stock, ring(4));
+    auto roundTrip = [](const TopoDS_Shape& s) {
+        const fs::path p = fs::temp_directory_path() /
+                           ("koo_bce2e_" + std::to_string(::rand()) + ".step");
+        std::string err;
+        io::StepIO::write(s, p, err);
+        auto reim = io::StepIO::read(p, err);
+        std::error_code ec; fs::remove(p, ec);
+        return reim;
+    };
+    auto reim = roundTrip(built.workpiece->shape());
+    ASSERT_TRUE(reim);
+    skill::Workpiece foreign(*reim);
+
+    // (b) Recognise → a clean recovered plan (compound, drills subsumed).
+    process::ProcessPlan plan = re::inferProcessPlan(foreign, 0.7);
+    int idx = -1;
+    for (int i = 0; i < static_cast<int>(plan.steps().size()); ++i)
+        if (plan.steps()[i].skill_id == "bolt_circle_pattern") { idx = i; break; }
+    ASSERT_GE(idx, 0) << "recovered plan has no bolt_circle_pattern step";
+    ASSERT_EQ(plan.steps()[idx].params.value("hole_count", 0), 4);
+
+    // (c) EDIT the recovered compound in place: 4 → 6 holes.
+    nlohmann::json edited = plan.steps()[idx].params;
+    edited["hole_count"] = 6;
+    ASSERT_TRUE(plan.replaceParams(idx, edited));
+
+    // (d) Re-execute the edited plan on fresh stock.
+    auto fresh = skill::createCuboidStock(80.0, 80.0, 15.0);
+    const auto result = process::Executor::execute(plan, fresh);
+    ASSERT_TRUE(result.ok())
+        << "edited plan failed; errors="
+        << (result.errors.empty() ? "" : result.errors.front());
+    ASSERT_NE(result.workpiece, nullptr);
+
+    // (e) The regenerated part is now a 6-hole bolt circle.
+    auto reim2 = roundTrip(result.workpiece->shape());
+    ASSERT_TRUE(reim2);
+    skill::Workpiece regen(*reim2);
+    const auto cands = re::analyze(regen, /*applyCap=*/true);
+    const skill::RecognizedFeature* bc = nullptr;
+    for (const auto& c : cands)
+        if (c.skill_id == "bolt_circle_pattern") { bc = &c; break; }
+    ASSERT_NE(bc, nullptr) << "regenerated part not recognised as a bolt circle";
+    EXPECT_EQ(bc->recovered_params.value("hole_count", 0), 6)
+        << "the edit (4→6) did not regenerate a 6-hole bolt circle";
+}
+
 // 5. DISPATCH: a ProcessPlan with a bolt_circle_pattern step executes via the
 // Executor (the step is now replayable, not dropped as un-dispatchable).
 TEST(BoltCirclePattern, DispatchableViaExecutor)
