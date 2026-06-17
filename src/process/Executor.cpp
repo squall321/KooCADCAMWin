@@ -9,6 +9,7 @@
 // Slice-1 registered skills
 #include "skills/drill_hole.hpp"
 #include "skills/bolt_circle_pattern.hpp"
+#include "skills/linear_hole_array.hpp"
 #include "skills/counterbore.hpp"
 #include "skills/countersink.hpp"
 #include "skills/mill_circular_pocket.hpp"
@@ -525,6 +526,30 @@ sk::bolt_circle_pattern::Input parseBoltCirclePattern(const json& p)
     in.depth_mm           = jdouble(p, "depth_mm", 0.0);
     in.through_hole       = jbool  (p, "through_hole", true);
     in.start_angle_deg    = jdouble(p, "start_angle_deg", 0.0);
+    return in;
+}
+
+sk::linear_hole_array::Input parseLinearHoleArray(const json& p)
+{
+    sk::linear_hole_array::Input in;
+    in.axis_dir     = parseAxisDir(p);
+    if (p.contains("entry_face") || p.contains("entry_face_id"))
+        in.entry_face = parseFaceDatum(p);
+    else
+        in.entry_face = sk::FaceByNormal{
+            gp_Dir(-in.axis_dir.X(), -in.axis_dir.Y(), -in.axis_dir.Z()) };
+    in.hole_count   = static_cast<int>(jdouble(p, "hole_count", 0.0));
+    in.hole_dia_mm  = jdouble(p, "hole_dia_mm", 0.0);
+    in.start_x_mm   = jdouble(p, "start_x_mm", 0.0);
+    in.start_y_mm   = jdouble(p, "start_y_mm", 0.0);
+    in.pitch_mm     = jdouble(p, "pitch_mm", 0.0);
+    if (p.contains("direction") && p["direction"].is_array() &&
+        p["direction"].size() >= 2) {
+        in.dir_x = p["direction"][0].get<double>();
+        in.dir_y = p["direction"][1].get<double>();
+    }
+    in.depth_mm     = jdouble(p, "depth_mm", 0.0);
+    in.through_hole = jbool  (p, "through_hole", true);
     return in;
 }
 
@@ -4134,6 +4159,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::bolt_circle_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::bolt_circle_pattern::apply(wp, parseBoltCirclePattern(p));
+    };
+    t[sk::linear_hole_array::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::linear_hole_array::apply(wp, parseLinearHoleArray(p));
     };
     t[sk::counterbore::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::counterbore::apply(wp, parseCounterbore(p));
