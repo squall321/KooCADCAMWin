@@ -260,6 +260,10 @@ void matchHolePatterns(const std::vector<Hole>& holes,
         const double dia = holes[i].dia;
         const int    n   = static_cast<int>(grp.size());
         const json   axis = { holes[i].ax, holes[i].ay, holes[i].az };
+        // Centres of the consumed holes, so inferProcessPlan can SUBSUME the
+        // individual drill steps once the compound replaces them.
+        json holeCenters = json::array();
+        for (const auto& h : pts) holeCenters.push_back({ h.x, h.y });
 
         // ── bolt-circle ────────────────────────────────────────────────
         double cx, cy, r, cresid;
@@ -274,6 +278,7 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                 { "center_x_mm",        cx },
                 { "center_y_mm",        cy },
                 { "axis_dir",           axis },
+                { "hole_centers",       holeCenters },
             };
             rf.confidence       = std::min(0.95, 0.9 + (0.3 - cresid) * 0.1);
             rf.matched_geometry = {
@@ -317,6 +322,7 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                         { "start_y_mm",   lcy + dy * t0 },
                         { "direction",    { dx, dy, 0.0 } },
                         { "axis_dir",     axis },
+                        { "hole_centers", holeCenters },
                     };
                     rf.confidence       = std::min(0.95, 0.88 + (0.3 - lresid) * 0.1);
                     rf.matched_geometry = {
@@ -350,6 +356,7 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                     { "u_dir",       { udx, udy, 0.0 } },
                     { "v_dir",       { vdx, vdy, 0.0 } },
                     { "axis_dir",    axis },
+                    { "hole_centers", holeCenters },
                 };
                 rf.confidence       = std::min(0.95, 0.88 + (0.3 - gresid) * 0.1);
                 rf.matched_geometry = {

@@ -187,6 +187,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 
 namespace koocadcam::re {
 
@@ -775,6 +776,46 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
             [](const skill::RecognizedFeature& a, const skill::RecognizedFeature& b2) {
                 return a.confidence > b2.confidence;
             });
+    }
+
+    // SUBSUMPTION: a recognised, DISPATCHABLE hole-pattern compound REPLACES the
+    // individual drill steps it consumed, so the recovered plan carries the
+    // pattern as ONE editable step — edit it (e.g. 4→6 bolts) and it regenerates
+    // cleanly instead of leaving the original drills behind.  Only the
+    // generative hole-pattern compounds qualify (each has an apply()); other
+    // compounds keep their atoms.
+    {
+        static const std::unordered_set<std::string> kHolePatternCompounds = {
+            "bolt_circle_pattern", "linear_hole_array", "rectangular_hole_grid",
+        };
+        std::vector<std::pair<double, double>> consumed;
+        for (const auto& c : buckets[static_cast<int>(Group::Unknown)]) {
+            if (!kHolePatternCompounds.count(c.skill_id)) continue;
+            const auto& rp = c.recovered_params;
+            if (rp.is_object() && rp.contains("hole_centers") &&
+                rp["hole_centers"].is_array()) {
+                for (const auto& p : rp["hole_centers"]) {
+                    if (p.is_array() && p.size() >= 2 &&
+                        p[0].is_number() && p[1].is_number())
+                        consumed.emplace_back(p[0].get<double>(), p[1].get<double>());
+                }
+            }
+        }
+        if (!consumed.empty()) {
+            auto& holes = buckets[static_cast<int>(Group::B_Hole)];
+            holes.erase(std::remove_if(holes.begin(), holes.end(),
+                [&consumed](const skill::RecognizedFeature& c) {
+                    if (c.skill_id != "drill_hole" &&
+                        c.skill_id != "drill_through_hole") return false;
+                    const auto& p = c.recovered_params;
+                    if (!p.is_object()) return false;
+                    const double x = p.value("position_x_mm", 1e9);
+                    const double y = p.value("position_y_mm", 1e9);
+                    for (const auto& cc : consumed)
+                        if (std::hypot(x - cc.first, y - cc.second) < 0.5) return true;
+                    return false;
+                }), holes.end());
+        }
     }
 
     process::ProcessPlan plan;

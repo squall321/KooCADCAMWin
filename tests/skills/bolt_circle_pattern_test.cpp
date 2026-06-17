@@ -111,6 +111,34 @@ TEST(BoltCirclePattern, RoundTripIsRecognised)
     EXPECT_EQ(bc->recovered_params.value("hole_count", 0), 4);
 }
 
+// 6. SUBSUME: inferProcessPlan replaces the constituent drills with the single
+// bolt_circle_pattern step, so the recovered plan is a clean editable unit.
+TEST(BoltCirclePattern, SubsumesConstituentDrillsInPlan)
+{
+    namespace fs = std::filesystem;
+    auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);
+    auto out = skill::bolt_circle_pattern::apply(*stock, ring(4));
+
+    const fs::path p = fs::temp_directory_path() /
+                       ("koo_bcps_" + std::to_string(::rand()) + ".step");
+    std::string err;
+    io::StepIO::write(out.workpiece->shape(), p, err);
+    auto reim = io::StepIO::read(p, err);
+    std::error_code ec; fs::remove(p, ec);
+    ASSERT_TRUE(reim);
+    skill::Workpiece foreign(*reim);
+
+    const process::ProcessPlan plan = re::inferProcessPlan(foreign, 0.7);
+    bool hasBolt = false;
+    int  drills  = 0;
+    for (const auto& s : plan.steps()) {
+        if (s.skill_id == "bolt_circle_pattern") hasBolt = true;
+        if (s.skill_id == "drill_hole" || s.skill_id == "drill_through_hole") ++drills;
+    }
+    EXPECT_TRUE(hasBolt) << "recovered plan must carry the bolt circle";
+    EXPECT_EQ(drills, 0) << "constituent drills must be subsumed by the compound";
+}
+
 // 5. DISPATCH: a ProcessPlan with a bolt_circle_pattern step executes via the
 // Executor (the step is now replayable, not dropped as un-dispatchable).
 TEST(BoltCirclePattern, DispatchableViaExecutor)
