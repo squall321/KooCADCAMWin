@@ -191,7 +191,9 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     // 7) Build new workpiece, register feature (preserve the chain history so
     //    wp.features() stays the FULL build history, per the Workpiece contract).
-    auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    //    validateOrHeal gates the Boolean output (heal-or-throw) so an invalid
+    //    BRep never silently becomes a "valid" Workpiece.
+    auto wpNew = std::make_shared<Workpiece>(validateOrHeal(newShape, "drill_hole"), wp.material());
     for (const auto& prev : wp.features()) wpNew->addFeature(prev);
     wpNew->addFeature(sig);
 

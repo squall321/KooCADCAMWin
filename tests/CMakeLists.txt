@@ -148,6 +148,17 @@ koo_apply_compiler_flags(skill_contract_test)
 add_test(NAME skill_contract COMMAND skill_contract_test)
 set_tests_properties(skill_contract PROPERTIES TIMEOUT 120 LABELS "skill;contract")
 
+# ── Skill-synthesis output gate test (modeling roadmap #1) ──────────
+# validateOrHeal + Workpiece ctor null-guard: a null/empty/invalid BRep is
+# rejected (or healed) rather than silently accepted as a valid Workpiece.
+add_executable(workpiece_validate_test skills/workpiece_validate_test.cpp)
+target_link_libraries(workpiece_validate_test PRIVATE
+    GTest::gtest GTest::gtest_main koo_skills koo_engine koo_io)
+target_include_directories(workpiece_validate_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(workpiece_validate_test)
+add_test(NAME workpiece_validate COMMAND workpiece_validate_test)
+set_tests_properties(workpiece_validate PROPERTIES TIMEOUT 60 LABELS "skill")
+
 # ── koo_corpus CLI: self-labelled synthetic corpus + recall meter ────
 # (breakthrough plan B7.1-B7.2)
 # Usage: koo_corpus [samples_per_skill=3] [--gate <recall>] [--scale <f>]

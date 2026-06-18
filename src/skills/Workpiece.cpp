@@ -5,11 +5,13 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <NCollection_IndexedMap.hxx>
+#include <ShapeFix_Shape.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -18,14 +20,67 @@
 #include <gp_Cylinder.hxx>
 #include <gp_Pln.hxx>
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace koocadcam::skill {
+
+// ── Skill-synthesis output gate ────────────────────────────────────────────
+//
+// The engine path gates every step (StepGuard: IsNull -> BRepCheck) and
+// FeatureEditor heals-or-rejects.  The 250+-skill synthesis path historically
+// did neither: a skill did make_shared<Workpiece>(boolResult) straight off a
+// Boolean, so a null / empty / topologically-invalid BRep silently became a
+// "valid" Workpiece and flowed into the feature chain and STEP export.
+//
+// validateOrHeal closes that hole for any output routed through finalizeOutput:
+// it rejects null / empty shapes, runs BRepCheck, attempts ONE ShapeFix heal
+// when invalid (TKShHealing is linked), and throws SkillError when the result
+// is unrecoverable — never hands back damaged geometry as if it were valid.
+TopoDS_Shape validateOrHeal(const TopoDS_Shape& shape, const char* context)
+{
+    const std::string ctx = context ? context : "skill output";
+
+    if (shape.IsNull())
+        throw SkillError(ctx + ": produced a null shape");
+
+    // Empty BRep (no faces) — a cut that consumed all material, or a failed
+    // Boolean that returned an empty compound.
+    if (!TopExp_Explorer(shape, TopAbs_FACE).More())
+        throw SkillError(ctx + ": produced an empty shape (no faces)");
+
+    if (BRepCheck_Analyzer(shape).IsValid())
+        return shape;
+
+    // One healing pass before giving up.
+    spdlog::warn("{}: BRepCheck invalid — attempting ShapeFix heal", ctx);
+    ShapeFix_Shape fixer(shape);
+    try {
+        fixer.Perform();
+    } catch (const Standard_Failure& e) {
+        throw SkillError(ctx + ": ShapeFix raised an OCCT exception: " + e.what());
+    }
+    const TopoDS_Shape healed = fixer.Shape();
+    if (!healed.IsNull() && TopExp_Explorer(healed, TopAbs_FACE).More() &&
+        BRepCheck_Analyzer(healed).IsValid()) {
+        spdlog::warn("{}: healed to a valid BRep", ctx);
+        return healed;
+    }
+    throw SkillError(ctx + ": invalid BRep that ShapeFix could not heal");
+}
 
 Workpiece::Workpiece(const TopoDS_Shape& shape, const std::string& material)
     : m_shape(shape), m_material(material)
 {
+    // Baseline invariant: a Workpiece is never built from a null shape.  This
+    // protects every construction site (incl. the ~750 not yet routed through
+    // finalizeOutput) against the worst silent-corruption case at near-zero
+    // cost.  Full BRepCheck + healing lives in validateOrHeal/finalizeOutput.
+    if (m_shape.IsNull())
+        throw SkillError("Workpiece: constructed from a null shape");
     enumerate();
 }
 

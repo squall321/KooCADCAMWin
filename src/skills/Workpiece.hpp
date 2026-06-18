@@ -94,12 +94,22 @@ private:
     std::vector<FeatureSignature>      m_features;
 };
 
+// ── Skill-synthesis output gate ────────────────────────────────────────────
+//
+// Validate (and heal if needed) a skill-output shape, or throw SkillError.
+// Mirrors the engine-side StepGuard / FeatureEditor gate for the skill
+// synthesis path: rejects null / empty shapes, runs BRepCheck, attempts a
+// single ShapeFix heal when invalid, and throws when unrecoverable.  A
+// null/empty/invalid BRep must never be silently accepted as a Workpiece.
+TopoDS_Shape validateOrHeal(const TopoDS_Shape& shape,
+                            const char* context = "skill output");
+
 // ── Canonical apply() epilogue ─────────────────────────────────────────────
 //
-// The single sanctioned way to finish a skill apply(): builds the output
-// workpiece from `newShape`, carries the FULL prior feature chain, appends
-// the new signature, and packages the SkillOutput.  New skills should end
-// with:
+// The single sanctioned way to finish a skill apply(): VALIDATES newShape
+// (validateOrHeal — heal-or-throw), builds the output workpiece, carries the
+// FULL prior feature chain, appends the new signature, and packages the
+// SkillOutput.  New skills should end with:
 //
 //     return finalizeOutput(wp, newShape, sig);
 //
@@ -109,7 +119,7 @@ inline SkillOutput finalizeOutput(const Workpiece& wp,
                                   const TopoDS_Shape& newShape,
                                   const FeatureSignature& sig)
 {
-    auto wpNew = std::make_shared<Workpiece>(newShape, wp.material());
+    auto wpNew = std::make_shared<Workpiece>(validateOrHeal(newShape), wp.material());
     for (const auto& prev : wp.features()) wpNew->addFeature(prev);
     wpNew->addFeature(sig);
     return SkillOutput{ wpNew, sig };
