@@ -11,6 +11,7 @@
 #include "skills/bolt_circle_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
 #include "skills/rectangular_hole_grid.hpp"
+#include "skills/coaxial_step_bore.hpp"
 #include "skills/counterbore.hpp"
 #include "skills/countersink.hpp"
 #include "skills/mill_circular_pocket.hpp"
@@ -580,6 +581,30 @@ sk::rectangular_hole_grid::Input parseRectangularHoleGrid(const json& p)
     vec2("v_dir", in.v_dx, in.v_dy);
     in.depth_mm     = jdouble(p, "depth_mm", 0.0);
     in.through_hole = jbool  (p, "through_hole", true);
+    return in;
+}
+
+sk::coaxial_step_bore::Input parseCoaxialStepBore(const json& p)
+{
+    sk::coaxial_step_bore::Input in;
+    in.axis_dir    = parseAxisDir(p);
+    if (p.contains("entry_face") || p.contains("entry_face_id"))
+        in.entry_face = parseFaceDatum(p);
+    else
+        in.entry_face = sk::FaceByNormal{
+            gp_Dir(-in.axis_dir.X(), -in.axis_dir.Y(), -in.axis_dir.Z()) };
+    in.center_x_mm = jdouble(p, "position_x_mm", 0.0);
+    in.center_y_mm = jdouble(p, "position_y_mm", 0.0);
+    if (p.contains("steps") && p["steps"].is_array()) {
+        for (const auto& s : p["steps"]) {
+            if (!s.is_object()) continue;
+            sk::coaxial_step_bore::Step st;
+            st.diameter_mm = s.value("diameter_mm", 0.0);
+            st.depth_mm    = s.value("depth_mm", 0.0);
+            st.through     = s.value("through", false);
+            in.steps.push_back(st);
+        }
+    }
     return in;
 }
 
@@ -4195,6 +4220,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::rectangular_hole_grid::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::rectangular_hole_grid::apply(wp, parseRectangularHoleGrid(p));
+    };
+    t[sk::coaxial_step_bore::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::coaxial_step_bore::apply(wp, parseCoaxialStepBore(p));
     };
     t[sk::counterbore::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::counterbore::apply(wp, parseCounterbore(p));

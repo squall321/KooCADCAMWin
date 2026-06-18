@@ -1334,6 +1334,15 @@ koo_apply_compiler_flags(rectangular_hole_grid_test)
 add_test(NAME rectangular_hole_grid COMMAND rectangular_hole_grid_test)
 set_tests_properties(rectangular_hole_grid PROPERTIES TIMEOUT 120 LABELS "skills;re")
 
+add_executable(coaxial_step_bore_test skills/coaxial_step_bore_test.cpp)
+target_link_libraries(coaxial_step_bore_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_re koo_io koo_process koo_skills koo_engine)
+target_include_directories(coaxial_step_bore_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(coaxial_step_bore_test)
+add_test(NAME coaxial_step_bore COMMAND coaxial_step_bore_test)
+set_tests_properties(coaxial_step_bore PROPERTIES TIMEOUT 120 LABELS "skills;re")
+
 # ── Phone parametric build test (M2-phase-1) ──────────────────
 add_executable(phone_test phone/phone_test.cpp)
 target_link_libraries(phone_test PRIVATE

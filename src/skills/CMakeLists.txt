@@ -10,6 +10,7 @@ add_library(koo_skills STATIC
     bolt_circle_pattern.cpp
     linear_hole_array.cpp
     rectangular_hole_grid.cpp
+    coaxial_step_bore.cpp
     # slice 2 — drilling variants, milling, edge, boring (12 commits, 0607398)
     counterbore.cpp
     countersink.cpp

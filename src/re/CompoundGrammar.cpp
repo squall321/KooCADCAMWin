@@ -28,6 +28,8 @@ struct Hole {
     double dia;
     double ax, ay, az;            // axis direction
     double wrap = 0.0;            // summed wrap over distinct faces (radians)
+    double depth = 0.0;           // axial extent of this section (mm; 0 ⇒ through)
+    bool   through = false;
     std::unordered_set<int> faces;
 };
 
@@ -404,11 +406,32 @@ void matchCoaxialStepBores(const std::vector<Hole>& sections,
         std::sort(dias.begin(), dias.end(), std::greater<double>());
         json diaArr = json::array();
         for (double d : dias) diaArr.push_back(d);
+
+        // Per-step geometry, so the step bore can be REGENERATED: each step's
+        // diameter + its depth measured from the part-top entry (= the deepest
+        // section top), or a through flag.  Take the first section per distinct
+        // diameter (sections of equal dia were merged in assembly).
+        double topZ = -1e300;
+        for (std::size_t j : grp) topZ = std::max(topZ, sections[j].z);
+        std::vector<std::size_t> repBy;            // one section index per dia
+        for (double d : dias)
+            for (std::size_t j : grp)
+                if (std::abs(sections[j].dia - d) <= 0.1) { repBy.push_back(j); break; }
+        json steps = json::array();
+        for (std::size_t j : repBy) {
+            const Hole& s = sections[j];
+            json st = { { "diameter_mm", s.dia }, { "through", s.through } };
+            // Cumulative depth from the part top down to this section's bottom.
+            st["depth_mm"] = s.through ? 0.0 : (topZ - s.z + s.depth);
+            steps.push_back(st);
+        }
+
         skill::RecognizedFeature rf;
         rf.skill_id         = "coaxial_step_bore";
         rf.recovered_params = {
             { "step_count",    static_cast<int>(dias.size()) },
             { "diameters_mm",  diaArr },
+            { "steps",         steps },
             { "max_dia_mm",    dias.front() },
             { "min_dia_mm",    dias.back() },
             { "position_x_mm", sections[i].x },
@@ -448,6 +471,9 @@ std::vector<Hole> assembleHoles(const std::vector<skill::RecognizedFeature>& can
         a.y = num(p, "position_y_mm");
         a.z = num(p, "position_z_mm");
         a.dia = dia;
+        a.depth = num(p, "depth_mm");
+        a.through = p.contains("through_hole") && p["through_hole"].is_boolean() &&
+                    p["through_hole"].get<bool>();
         a.ax = 0.0; a.ay = 0.0; a.az = -1.0;
         if (p.contains("axis_dir") && p["axis_dir"].is_array() &&
             p["axis_dir"].size() == 3) {
@@ -470,6 +496,10 @@ std::vector<Hole> assembleHoles(const std::vector<skill::RecognizedFeature>& can
             host = &h; break;
         }
         if (!host) { holes.push_back(a); host = &holes.back(); }
+        else {
+            host->depth   = std::max(host->depth, a.depth);
+            host->through = host->through || a.through;
+        }
         // Count each distinct face's wrap once (drill_hole + drill_through_hole
         // report the SAME face; only the first should contribute its arc).
         if (faceId < 0 || host->faces.insert(faceId).second)
