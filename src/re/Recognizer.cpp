@@ -738,13 +738,16 @@ process::StepInvocation liftRecoveredStep(const process::StepInvocation& step)
             if (es.contains("z_mm"))         s.params["edges_at_z_mm"] = es["z_mm"];
             if (es.contains("tolerance_mm")) s.params["tolerance_mm"]  = es["tolerance_mm"];
         }
-        // Clamp a chamfer-size guess into the manufacturable band.
+        // Floor a sub-manufacturable chamfer to the DFM minimum.  The recognized
+        // chamfer_size is MEASURED from the bevel strip (chamfer_edge's accept
+        // band is [0.05, 50] mm), so it must NOT be over-written upward — an
+        // earlier 2.0→0.5 "clamp" silently shrank legitimately-large measured
+        // chamfers (3 mm → 0.5 mm) and is removed.
         if (s.skill_id == "chamfer_edge" &&
             s.params.contains("chamfer_size_mm") &&
             s.params["chamfer_size_mm"].is_number()) {
             const double sz = s.params["chamfer_size_mm"].get<double>();
-            if (sz < 0.1) s.params["chamfer_size_mm"] = 0.1;
-            if (sz > 2.0) s.params["chamfer_size_mm"] = 0.5;   // clamp wild guesses
+            if (sz < 0.1) s.params["chamfer_size_mm"] = 0.1;   // DFM floor only
         }
     }
     return s;

@@ -243,6 +243,33 @@ grounding 으로 방향을 정했다.  회귀: `tests/re/fpscan_test.cpp`.
 
 ---
 
+## Recognizer
+
+**replay 경로의 게이트.**  `re::analyze` / `re::inferProcessPlan` 이 복원한 후보를
+dispatchable 한 `process::StepInvocation` 으로 정규화하는 단계.  핵심 함수
+`liftRecoveredStep(step)` 은 recovered `chamfer_edge` / `fillet_edge` step 의 datum
+params(`edges_at_z_mm`, `tolerance_mm`)를 채우고 edge-op 을 곧바로 replay 가능하게
+만든다.  소스: [[src/re/Recognizer.cpp]].  compound subsumption 은
+[[engine/reverse-route#compound-grammar]] 참조.
+
+### chamfer 보존 (silent-corruption 수정)
+
+`chamfer_size_mm` 은 베벨 스트립에서 **측정된** 값이다(`chamfer_edge` 의 accept band
+[0.05, 50] mm).  따라서 측정된 3 mm chamfer 는 replay 시에도 3 mm 여야 한다.
+
+- **제거**: 측정값을 무조건 2.0 mm 위면 0.5 mm 로 끌어내리던 `2.0→0.5` clamp.  이
+  clamp 가 정당하게 큰 measured chamfer(3 mm → 0.5 mm)를 **소리 없이 깎아** RE
+  round-trip 을 망가뜨렸다.
+- **현재**: sub-0.1 mm 값만 0.1 mm(DFM floor)로 바닥 처리.  upward rewrite 없음.
+
+> **원칙 — clamp/gate 는 crash-class 또는 true-defect 입력만 고친다.**  유효한
+> measured / structural 값을 절대 silent 하게 corrupt 하지 않는다.  measured 값을
+> upward 로 덮어쓰는 clamp 는 거의 항상 버그다(같은 교훈:
+> [[engine/skills#param-clamp]], [[engine/skills#auto_rib_between_two_walls]],
+> [[engine/dfm-rules#DFM-018]]).  회귀: `tests/re/recognizer_test.cpp`.
+
+---
+
 ## 참고 링크
 
 - [[engine/parametric-templates]] — FeatureGraph 구조

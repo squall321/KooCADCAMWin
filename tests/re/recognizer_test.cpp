@@ -237,14 +237,22 @@ TEST(Recognizer, LiftRecoveredStepRaisesEdgeSelector)
     EXPECT_EQ(s2.params, s.params);
 }
 
-TEST(Recognizer, LiftRecoveredStepClampsWildChamfer)
+TEST(Recognizer, LiftRecoveredStepPreservesMeasuredChamfer)
 {
     using namespace koocadcam;
-    process::StepInvocation step;
-    step.skill_id = "chamfer_edge";
-    step.params = { { "chamfer_size_mm", 3.0 } };   // wildly large guess
-    EXPECT_NEAR(re::liftRecoveredStep(step).params.value("chamfer_size_mm", 0.0),
-                0.5, 1e-9);
+    // A measured chamfer is trustworthy across the recognizer's band — it must
+    // NOT be shrunk.  Only a sub-0.1 mm value is floored to the DFM minimum.
+    process::StepInvocation big;
+    big.skill_id = "chamfer_edge";
+    big.params = { { "chamfer_size_mm", 3.0 } };
+    EXPECT_NEAR(re::liftRecoveredStep(big).params.value("chamfer_size_mm", 0.0),
+                3.0, 1e-9) << "a measured 3 mm chamfer must survive the lift";
+
+    process::StepInvocation tiny;
+    tiny.skill_id = "chamfer_edge";
+    tiny.params = { { "chamfer_size_mm", 0.04 } };
+    EXPECT_NEAR(re::liftRecoveredStep(tiny).params.value("chamfer_size_mm", 0.0),
+                0.1, 1e-9) << "a sub-0.1 mm chamfer is floored to the DFM minimum";
 }
 
 TEST(Recognizer, LiftRecoveredStepPassesThroughNonEdge)

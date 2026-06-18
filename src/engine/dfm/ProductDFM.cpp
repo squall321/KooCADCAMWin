@@ -584,14 +584,26 @@ DFMReport runProductDFM(const TopoDS_Shape& shape,
         }
     }
 
-    // ── DFM-018: camera deco-ring annulus validity (Phone only) ────────
+    // ── DFM-018: camera deco-ring validity (Phone only) ────────────────
     // Now that PhoneFrontModel models spec["camera_deco_rings"], validate each
-    // ring: it must be a real annulus (inner < outer) whose remaining annular
-    // land is at least the profile's minimum wall — a thinner land tears during
-    // anodising/machining.  Watch profiles leave decoRingRule false → N/A.
+    // ring on the TWO walls that can actually tear: (a) the groove channel width
+    // (outer−inner)/2, which the cutter must fit, and (b) the LENS SURROUND —
+    // the lip between the camera hole and the ring's inner wall,
+    // (inner_dia − matching_camera_hole_dia)/2 — which is the tear-prone wall.
+    // Watch profiles leave decoRingRule false → N/A.
     if (profile.decoRingRule && spec.contains("camera_deco_rings") &&
         spec["camera_deco_rings"].is_array()) {
         const auto& rings = spec["camera_deco_rings"];
+        // Match a ring to the camera at the same offset to size the surround.
+        auto cameraDiaAt = [&](double x, double y) -> double {
+            if (!spec.contains("cameras") || !spec["cameras"].is_array()) return 0.0;
+            for (const auto& c : spec["cameras"]) {
+                if (std::abs(c.value("offset_x_mm", 1e9) - x) < 0.5 &&
+                    std::abs(c.value("offset_y_mm", 1e9) - y) < 0.5)
+                    return c.value("hole_dia_mm", 0.0);
+            }
+            return 0.0;
+        };
         for (std::size_t i = 0; i < rings.size(); ++i) {
             const auto&  r     = rings[i];
             const double outer = r.value("outer_dia_mm", 0.0);
@@ -603,11 +615,22 @@ DFMReport runProductDFM(const TopoDS_Shape& shape,
                     " >= outer_dia " + std::to_string(outer) + " mm (not an annulus)");
                 continue;
             }
-            const double land = (outer - inner) / 2.0;
-            if (land < profile.minWallMm) {
+            const double groove = (outer - inner) / 2.0;
+            if (groove < profile.minWallMm) {
                 addFinding("DFM-018", "warning",
-                    at + " annular land " + std::to_string(land) +
+                    at + " groove width " + std::to_string(groove) +
                     " mm < min wall " + std::to_string(profile.minWallMm) + " mm");
+            }
+            const double camDia = cameraDiaAt(r.value("offset_x_mm", 1e9),
+                                              r.value("offset_y_mm", 1e9));
+            if (camDia > 0.0) {
+                const double surround = (inner - camDia) / 2.0;
+                if (surround < profile.minWallMm) {
+                    addFinding("DFM-018", "warning",
+                        at + " lens surround " + std::to_string(surround) +
+                        " mm < min wall " + std::to_string(profile.minWallMm) +
+                        " mm (ring too close to the camera hole)");
+                }
             }
         }
     }

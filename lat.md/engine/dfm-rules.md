@@ -378,6 +378,26 @@
 - **Pass example**: 데코링 상면과 케이스 상면 각도 0.04° → 통과.
 - **Linked from**: [[engine/feature-phone#Camera Island]]
 
+#### 구현 노트: 데코링 유효성 (surround check)
+
+`dfm::runProductDFM` 의 DFM-018 은 `spec["camera_deco_rings"]` 를 받아 찢어질 수 있는
+**두 벽**을 검사한다 (phone 프로파일 `decoRingRule` 일 때만, watch 는 N/A):
+
+1. **groove 채널 폭** = `(outer_dia − inner_dia)/2` — 컷터가 들어가야 하는 벽.
+2. **lens surround** = `(inner_dia − matching_camera_hole_dia)/2` — 카메라 홀과 링
+   내벽 사이의 lip, **찢어지기 쉬운 벽**.
+
+링↔카메라 매칭은 `cameraDiaAt(x,y)` 람다가 같은 offset(±0.5 mm)의 카메라를 찾아
+`hole_dia_mm` 을 돌려준다.  두 값 중 하나라도 `profile.minWallMm` 미만이면 Warning.
+
+> **수정(silent-corruption)**: 이전 규칙은 groove 폭**만** 측정해, 카메라 홀에
+> 위험하게 가까운 링(얇은 lens surround)을 **놓쳤다**.  이제 measured 카메라
+> 직경으로 surround 도 검사한다.  원칙은 동일 — 검사/게이트는 측정 가능한 실제
+> 결함을 빠짐없이 잡되, 유효한 값을 임의로 덮어쓰지 않는다 (같은 교훈:
+> [[engine/reverse-route#Recognizer]], [[engine/skills#param-clamp]],
+> [[engine/skills#auto_rib_between_two_walls]]).  소스:
+> [[src/engine/dfm/ProductDFM.cpp]].
+
 ---
 
 ### DFM-019: Engraved Text/Logo Minimum Stroke Width
@@ -532,6 +552,7 @@
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | v1.0 | 2026-05-25 | 초기 25개 규칙 정의. Watch + Smartphone 케이스 금속 CNC 가공 기준. |
+| v1.0.1 | 2026-06-18 | DFM-018 데코링 검사에 lens surround `(inner−matching_camera_dia)/2` 추가 (이전엔 groove 폭만 측정). 2차 adversarial 리뷰 silent-corruption 수정. |
 
 ---
 

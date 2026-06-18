@@ -304,16 +304,18 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             if (dist > 5.0 || dist < 0.5) continue;
 
             // A rib is THIN relative to the body: its two side faces are a few
-            // mm apart INSIDE a larger part.  Reject when that gap spans most of
-            // the part's extent along the normal — that is the part's own
-            // thickness (a thin plate / slab), not a rib between two walls.
-            // (Measured: this was the auto_rib fpscan un-cap survivor on an
-            // 80x80x4 plate.)
+            // mm apart INSIDE a larger part.  Reject only when the gap is BOTH a
+            // large fraction of the part extent along the normal (so it is the
+            // part's own thickness, a slab) AND large in absolute terms — so a
+            // genuine thin rib in a thin body (e.g. 1.6 mm rib in a 3 mm wall) is
+            // NOT mistaken for a slab.  (Measured: the fpscan survivor was an
+            // 80x80x4 plate — a 4 mm gap that clears both conditions.)
+            constexpr double kSlabAbsMm = 3.0;
             const gp_Dir& nrm = planes[i].normal;
             const double extN = std::abs(nrm.X()) * (partBb.xMax - partBb.xMin)
                               + std::abs(nrm.Y()) * (partBb.yMax - partBb.yMin)
                               + std::abs(nrm.Z()) * (partBb.zMax - partBb.zMin);
-            if (extN > 1e-6 && dist > 0.5 * extN) continue;   // gap ≈ part thickness → slab
+            if (extN > 1e-6 && dist > 0.5 * extN && dist > kSlabAbsMm) continue;  // slab
 
             const gp_Pnt mid(
                 (planes[i].centre.X() + planes[j].centre.X()) / 2.0,

@@ -45,6 +45,18 @@ TEST(ParamClamp, ClampsOverspecHollowCavity)
     // The clamped cavity is now positive: 100 - 2*45 = 10 mm > 0.
 }
 
+// A thin-but-VALID wall (watch-grade 0.35mm, only a DFM warning) is preserved —
+// the clamp fixes crash-class input only, not DFM warnings.
+TEST(ParamClamp, PreservesValidThinWall)
+{
+    auto stock = skill::createCuboidStock(100.0, 100.0, 50.0);
+    const json in = json{
+        { "entry_face", "top" }, { "wall_thickness_mm", 0.35 }, { "depth_mm", 5.0 } };
+    const json c = process::clampParams("hollow_cavity", in, *stock);
+    EXPECT_NEAR(c.value("wall_thickness_mm", 0.0), 0.35, 1e-9)
+        << "a valid thin wall must NOT be floored up";
+}
+
 // A skill with no clamp rule is a pass-through (params returned unchanged).
 TEST(ParamClamp, NoRuleIsPassThrough)
 {

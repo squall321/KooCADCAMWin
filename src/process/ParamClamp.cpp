@@ -30,9 +30,11 @@ const std::unordered_map<std::string, ClampFn>& clampTable()
             if (out.contains("wall_thickness_mm") &&
                 out["wall_thickness_mm"].is_number()) {
                 double w = out["wall_thickness_mm"].get<double>();
-                const double wMax = 0.45 * xyMin;
+                const double wMax = 0.45 * xyMin;   // crash guard (apply() throws above ~0.5*xy)
                 if (w > wMax) w = wMax;
-                if (w < 0.4 && wMax >= 0.4) w = 0.4;     // DFM-001 floor
+                // NB: no DFM-001 0.4mm FLOOR — apply() does not crash on a thin
+                // wall (a 0.35mm watch-grade wall is valid, only a DFM warning),
+                // so the clamp must preserve it (it only fixes crash-class input).
                 out["wall_thickness_mm"] = w;
             }
             if (out.contains("depth_mm") && out["depth_mm"].is_number()) {

@@ -209,6 +209,50 @@ live stock extent 로 물리적으로 불가능한 값을 가장 가까운 valid
 clamp 는 절대 throw 하지 않음.  소스: [[src/process/ParamClamp.hpp]] ·
 [[src/process/ParamClamp.cpp]].  회귀: `tests/process/param_clamp_test.cpp`.
 
+### thin-wall 보존 (silent-corruption 수정)
+
+`hollow_cavity` clamp 가 wall 을 `0.45 * min(XY extent)` 로만 제한한다 — `apply()`
+는 wall 이 XY extent 의 절반을 넘을 때만 throw 하므로 그 crash 경계 **안쪽만** 막으면
+충분하다.
+
+- **제거**: DFM-001 의 0.4 mm wall **floor**.  이 floor 는 유효한 0.35 mm
+  watch-grade wall 을 silent 하게 0.4 mm 로 over-clamp 했다.
+- **근거**: thin wall 은 `apply()` 를 crash 시키지 않는다(DFM warning 일 뿐, 측정
+  되는 [[engine/dfm-rules#DFM-001]] watch 임계가 0.35 mm).  clamp 는 crash-class
+  입력만 고쳐야 하므로 valid thin wall 을 그대로 보존한다.
+
+> **원칙** — clamp 는 crash-class 입력(`wall > 0.45*min(XY extent)`)만 rewrite 하고,
+> 유효한 measured/structural 값은 절대 silent corrupt 하지 않는다.  같은 교훈:
+> [[engine/reverse-route#Recognizer]], [[engine/skills#auto_rib_between_two_walls]],
+> [[engine/dfm-rules#DFM-018]].
+
+---
+
+## auto_rib_between_two_walls
+
+Mechanical-structure skill (BASF 플라스틱 리브 설계 비율 기반).  두 벽 face 사이에
+리브 블록을 fuse 하고 양 끝 junction 에 chamfer cut.  `recognize()` 는 5 mm 보다
+좁고 anti-parallel 한 평면 쌍을 리브 후보로 잡는다.  소스:
+[[src/skills/auto_rib_between_two_walls.cpp]].  회귀:
+`tests/skills/auto_rib_between_two_walls_test.cpp`.
+
+### slab gate (silent-corruption 수정)
+
+리브 후보가 부품 자신의 두 외곽 면(= 얇은 slab)일 때 false-recognize 되지 않도록
+거르는 게이트.  단일 ratio 게이트(`dist > 0.5 * normal-extent`)만 쓰면 **얇은 body
+안의 얇은 리브**(예: 3 mm 벽 안의 1.6 mm 리브)를 slab 으로 오인해 false-reject 했다.
+
+- **현재**: ratio AND absolute 둘 다 만족할 때만 slab 으로 reject —
+  `dist > 0.5 * extN` **그리고** `dist > kSlabAbsMm`(`= 3.0` mm).
+- 결과: 얇은 리브는 살아남고, 진짜 slab(80×80×4 plate 의 4 mm gap — fpscan 생존
+  케이스)은 두 조건을 모두 넘겨 여전히 reject.
+
+> **원칙** — gate 는 true-defect(진짜 slab)만 거르고 유효한 structural 형상(얇은
+> 리브)을 silent 하게 죽이지 않는다.  ratio 단독은 thin-body 케이스에서 over-fire
+> 하므로 absolute floor 와 AND 결합.  같은 교훈:
+> [[engine/reverse-route#Recognizer]], [[engine/skills#param-clamp]],
+> [[engine/dfm-rules#DFM-018]].
+
 ---
 
 ## 참고
