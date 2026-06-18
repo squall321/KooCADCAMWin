@@ -199,33 +199,38 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double kOver   = 0.05;
 
     // Step 1: bore the centre hole.  Bore radius = rBore (just inside r_tip_inner).
-    // We need a base shape: assume incoming wp is a solid ring/cylinder
-    // matching ring_outer_dia.  First cut a central bore, then cut z gullets.
-    std::vector<TopoDS_Shape> tools;
-    tools.reserve(static_cast<size_t>(z + 1));
-
-    const gp_Ax2 boreAx(gp_Pnt(0, 0, -kOver), gp::DZ());
-    tools.push_back(pr::cylinder(boreAx, rBore, Z + 2.0 * kOver));
-
     // Step 2: z internal gullet cutters.
+    //
+    // The bore wall (rBore = rTipIn-0.5 = 17.5) and the gullet floors
+    // (rFloor = rTipIn-2.0 = 16.0) INTERPENETRATE over the annular band
+    // r in [16.0, 17.5]; bundling the bore + all gullets into ONE Boolean is the
+    // OCCT 8.0 overlapping-cutter trap (it yields a BRepCheck-invalid solid that
+    // ShapeFix cannot heal — measured).  Cut SEQUENTIALLY: bore first, then each
+    // gullet (project compound-cut rule: never one compound Boolean over
+    // overlapping cutters).  The gullets do not overlap each other, but the
+    // bore-vs-gullet overlap is what makes the single Boolean invalid.
+    const gp_Ax2 boreAx(gp_Pnt(0, 0, -kOver), gp::DZ());
+    TopoDS_Shape current =
+        pr::cut(wp.shape(), pr::cylinder(boreAx, rBore, Z + 2.0 * kOver));
+
     const TopoDS_Shape seedGullet =
         buildInternalGulletPrism(m, z, alpha, Z, kOver);
     const gp_Ax1 zAxis(gp_Pnt(0, 0, 0), gp::DZ());
     const double dTheta = 2.0 * M_PI / static_cast<double>(z);
     for (int i = 0; i < z; ++i) {
-        if (i == 0) {
-            tools.push_back(seedGullet);
-            continue;
+        TopoDS_Shape gullet = seedGullet;
+        if (i != 0) {
+            gp_Trsf rot;
+            rot.SetRotation(zAxis, static_cast<double>(i) * dTheta);
+            BRepBuilderAPI_Transform xf(seedGullet, rot, true);
+            if (!xf.IsDone())
+                throw SkillError("internal_gear: cutter rotation failed");
+            gullet = xf.Shape();
         }
-        gp_Trsf rot;
-        rot.SetRotation(zAxis, static_cast<double>(i) * dTheta);
-        BRepBuilderAPI_Transform xf(seedGullet, rot, true);
-        if (!xf.IsDone())
-            throw SkillError("internal_gear: cutter rotation failed");
-        tools.push_back(xf.Shape());
+        current = pr::cut(current, gullet);
     }
 
-    const TopoDS_Shape newShape = pr::cutMany(wp.shape(), tools);
+    const TopoDS_Shape newShape = current;
 
     const double gulletVol =
         0.5 * (rRootO * rRootO - rTipIn * rTipIn) * (dTheta * 0.5) * Z;

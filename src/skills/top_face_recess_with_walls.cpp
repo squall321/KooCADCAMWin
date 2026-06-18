@@ -9,7 +9,9 @@
 #include "engine/primitives/Tools.hpp"
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <Standard_Failure.hxx>
+#include <TopoDS_Edge.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pln.hxx>
@@ -207,16 +209,34 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
                          e.what());
     }
 
-    // ── Step 5: fillet the 4 outer-top corner edges (top-rim ring) ──────
+    // ── Step 5: fillet the 4 OUTER top-rim edges ────────────────────────
+    //
+    // edgesAtZ(topWallZ) over-selects: it grabs the inner-frame rim and the
+    // internal wall-fuse seam edges too (~32 edges), and filleting that whole
+    // set at R self-intersects — filletEdges returns IsDone but a BRepCheck-
+    // INVALID solid (so the old try/catch never fired, and the bad geometry
+    // silently propagated).  Select only the 4 outer-perimeter top edges
+    // (|x-cx| ~ IL/2+T  OR  |y-cy| ~ IW/2+T at z = topWallZ), and adopt the
+    // result only if it is actually valid.
     TopoDS_Shape finalShape = current;
     if (R > 0.0) {
-        const double topWallZ  = topZ + H;
+        const double topWallZ = topZ + H;
+        const double outerHX  = IL / 2.0 + T;
+        const double outerHY  = IW / 2.0 + T;
+        const pr::EdgePredicate outerTopRim =
+            [topWallZ, cx, cy, outerHX, outerHY](const TopoDS_Edge&, const gp_Pnt& mp) {
+                if (std::abs(mp.Z() - topWallZ) > 1e-2) return false;
+                return std::abs(std::abs(mp.X() - cx) - outerHX) < 1e-2 ||
+                       std::abs(std::abs(mp.Y() - cy) - outerHY) < 1e-2;
+            };
         try {
-            finalShape = pr::filletEdges(current, R, pr::edgesAtZ(topWallZ, 1e-2));
+            const TopoDS_Shape f = pr::filletEdges(current, R, outerTopRim);
+            // A self-intersecting fillet can report IsDone yet be BRepCheck-
+            // invalid — guard explicitly rather than trust IsDone alone.
+            if (!f.IsNull() && BRepCheck_Analyzer(f).IsValid())
+                finalShape = f;
         } catch (const Standard_Failure&) {
-            // Some OCCT builds can't fillet the full top rim; keep the
-            // un-filleted shape rather than aborting.
-            finalShape = current;
+            // keep the un-filleted (valid) shape rather than aborting
         }
     }
 

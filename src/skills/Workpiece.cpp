@@ -73,14 +73,18 @@ TopoDS_Shape validateOrHeal(const TopoDS_Shape& shape, const char* context)
 }
 
 Workpiece::Workpiece(const TopoDS_Shape& shape, const std::string& material)
-    : m_shape(shape), m_material(material)
+    : m_shape(validateOrHeal(shape, "Workpiece")), m_material(material)
 {
-    // Baseline invariant: a Workpiece is never built from a null shape.  This
-    // protects every construction site (incl. the ~750 not yet routed through
-    // finalizeOutput) against the worst silent-corruption case at near-zero
-    // cost.  Full BRepCheck + healing lives in validateOrHeal/finalizeOutput.
-    if (m_shape.IsNull())
-        throw SkillError("Workpiece: constructed from a null shape");
+    // Every Workpiece is valid by construction: validateOrHeal rejects null /
+    // empty shapes, runs BRepCheck, and ShapeFix-heals (or throws) an invalid
+    // BRep.  This single chokepoint hardens ALL ~757 construction sites + the
+    // RE import path + stock against silent geometric corruption, mirroring the
+    // engine-side StepGuard.  Standing up this gate surfaced two skills whose
+    // Boolean output was BRepCheck-invalid and unhealable (internal_gear's
+    // overlapping bore+gullet compound cut, top_face_recess_with_walls' over-
+    // broad self-intersecting top-rim fillet); both are now fixed at the root,
+    // so across the full suite no skill output hits the heal-or-throw path —
+    // the gate is a pure backstop against future regressions.
     enumerate();
 }
 
