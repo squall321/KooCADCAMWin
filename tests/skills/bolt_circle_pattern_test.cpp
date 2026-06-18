@@ -25,6 +25,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <string>
 
@@ -84,6 +85,66 @@ TEST(BoltCirclePattern, ValidateRejectsTooFewHoles)
     auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);
     EXPECT_FALSE(skill::bolt_circle_pattern::validate(*stock, ring(2)).passed);
     EXPECT_TRUE(skill::bolt_circle_pattern::validate(*stock, ring(4)).passed);
+}
+
+// A BLIND ring must round-trip as blind, not silently become a through ring
+// (the grammar now records depth_mm + through_hole).
+TEST(BoltCirclePattern, BlindRingRoundTripsAsBlind)
+{
+    namespace fs = std::filesystem;
+    auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);
+    auto in = ring(4);
+    in.through_hole = false;
+    in.depth_mm     = 8.0;
+    auto out = skill::bolt_circle_pattern::apply(*stock, in);
+
+    const fs::path p = fs::temp_directory_path() /
+                       ("koo_bcb_" + std::to_string(::rand()) + ".step");
+    std::string err;
+    io::StepIO::write(out.workpiece->shape(), p, err);
+    auto reim = io::StepIO::read(p, err);
+    std::error_code ec; fs::remove(p, ec);
+    ASSERT_TRUE(reim);
+    skill::Workpiece foreign(*reim);
+
+    const auto cands = re::analyze(foreign, /*applyCap=*/true);
+    const skill::RecognizedFeature* bc = nullptr;
+    for (const auto& c : cands)
+        if (c.skill_id == "bolt_circle_pattern") { bc = &c; break; }
+    ASSERT_NE(bc, nullptr);
+    EXPECT_FALSE(bc->recovered_params.value("through_hole", true))
+        << "a blind ring must NOT regenerate as a through ring";
+    EXPECT_NEAR(bc->recovered_params.value("depth_mm", 0.0), 8.0, 0.5);
+}
+
+// The angular phase survives: a ring drilled at start_angle=30° must recover a
+// start angle congruent to 30° (mod the hole pitch), not be forced to +X.
+TEST(BoltCirclePattern, PreservesAngularPhase)
+{
+    namespace fs = std::filesystem;
+    auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);
+    auto in = ring(4);
+    in.start_angle_deg = 30.0;     // holes at 30/120/210/300
+    auto out = skill::bolt_circle_pattern::apply(*stock, in);
+
+    const fs::path p = fs::temp_directory_path() /
+                       ("koo_bcp2_" + std::to_string(::rand()) + ".step");
+    std::string err;
+    io::StepIO::write(out.workpiece->shape(), p, err);
+    auto reim = io::StepIO::read(p, err);
+    std::error_code ec; fs::remove(p, ec);
+    ASSERT_TRUE(reim);
+    skill::Workpiece foreign(*reim);
+
+    const auto cands = re::analyze(foreign, /*applyCap=*/true);
+    const skill::RecognizedFeature* bc = nullptr;
+    for (const auto& c : cands)
+        if (c.skill_id == "bolt_circle_pattern") { bc = &c; break; }
+    ASSERT_NE(bc, nullptr);
+    double a = bc->recovered_params.value("start_angle_deg", 0.0);
+    a = std::fmod(std::fmod(a, 90.0) + 90.0, 90.0);   // mod the 4-hole pitch (90°)
+    EXPECT_NEAR(a, 30.0, 3.0)
+        << "recovered start angle lost the 30° phase (got " << a << "°)";
 }
 
 // 4. RECOGNISE: the generated ring round-trips through STEP and the grammar

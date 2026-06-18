@@ -35,6 +35,9 @@ DFMReport validate(const Workpiece& /*wp*/, const Input& in)
         r.add("DFM-INPUT", "error", "rectangular_hole_grid pitches must be > 0");
     if (std::hypot(in.u_dx, in.u_dy) < 1e-9 || std::hypot(in.v_dx, in.v_dy) < 1e-9)
         r.add("DFM-INPUT", "error", "rectangular_hole_grid basis must be non-zero");
+    if (std::abs(in.axis_dir.Z()) < 0.99)
+        r.add("DFM-INPUT", "error",
+              "rectangular_hole_grid supports a vertical (±Z) hole axis only");
     // DFM-003-style minimum web between adjacent holes along each axis.
     const double gapU = in.pitch_u_mm - in.hole_dia_mm;
     const double gapV = in.pitch_v_mm - in.hole_dia_mm;

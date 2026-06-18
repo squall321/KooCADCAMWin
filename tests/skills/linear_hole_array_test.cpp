@@ -80,6 +80,35 @@ TEST(LinearHoleArray, ValidateRejectsTooFewHoles)
     EXPECT_TRUE(skill::linear_hole_array::validate(*stock, row(5)).passed);
 }
 
+// A BLIND row must round-trip as blind, not silently become through.
+TEST(LinearHoleArray, BlindRowRoundTripsAsBlind)
+{
+    namespace fs = std::filesystem;
+    auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);
+    auto in = row(5);
+    in.through_hole = false;
+    in.depth_mm     = 8.0;
+    auto out = skill::linear_hole_array::apply(*stock, in);
+
+    const fs::path p = fs::temp_directory_path() /
+                       ("koo_lhab_" + std::to_string(::rand()) + ".step");
+    std::string err;
+    io::StepIO::write(out.workpiece->shape(), p, err);
+    auto reim = io::StepIO::read(p, err);
+    std::error_code ec; fs::remove(p, ec);
+    ASSERT_TRUE(reim);
+    skill::Workpiece foreign(*reim);
+
+    const auto cands = re::analyze(foreign, /*applyCap=*/true);
+    const skill::RecognizedFeature* la = nullptr;
+    for (const auto& c : cands)
+        if (c.skill_id == "linear_hole_array") { la = &c; break; }
+    ASSERT_NE(la, nullptr);
+    EXPECT_FALSE(la->recovered_params.value("through_hole", true))
+        << "a blind row must NOT regenerate as a through row";
+    EXPECT_NEAR(la->recovered_params.value("depth_mm", 0.0), 8.0, 0.5);
+}
+
 TEST(LinearHoleArray, RoundTripIsRecognised)
 {
     namespace fs = std::filesystem;

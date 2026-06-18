@@ -262,6 +262,10 @@ void matchHolePatterns(const std::vector<Hole>& holes,
         const double dia = holes[i].dia;
         const int    n   = static_cast<int>(grp.size());
         const json   axis = { holes[i].ax, holes[i].ay, holes[i].az };
+        // Carry the holes' depth/through so a BLIND pattern does not regenerate
+        // as a through one (the holes in a group are uniform; use the seed).
+        const double depthRep   = holes[i].depth;
+        const bool   throughRep = holes[i].through;
         // Centres of the consumed holes, so inferProcessPlan can SUBSUME the
         // individual drill steps once the compound replaces them.
         json holeCenters = json::array();
@@ -272,6 +276,10 @@ void matchHolePatterns(const std::vector<Hole>& holes,
         if (fitCircleXY(pts, cx, cy, r, cresid) && cresid <= 0.3 && r >= dia) {
             for (std::size_t j : grp) used[j] = true;
             skill::RecognizedFeature rf;
+            // Phase: the seed hole's angle on the circle, so regeneration places
+            // the holes at the SAME angular positions (not forced to +X).
+            const double startDeg =
+                std::atan2(holes[i].y - cy, holes[i].x - cx) * 180.0 / M_PI;
             rf.skill_id         = "bolt_circle_pattern";
             rf.recovered_params = {
                 { "hole_count",         n },
@@ -280,6 +288,9 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                 { "center_x_mm",        cx },
                 { "center_y_mm",        cy },
                 { "axis_dir",           axis },
+                { "start_angle_deg",    startDeg },
+                { "depth_mm",           depthRep },
+                { "through_hole",       throughRep },
                 { "hole_centers",       holeCenters },
             };
             rf.confidence       = std::min(0.95, 0.9 + (0.3 - cresid) * 0.1);
@@ -324,6 +335,8 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                         { "start_y_mm",   lcy + dy * t0 },
                         { "direction",    { dx, dy, 0.0 } },
                         { "axis_dir",     axis },
+                        { "depth_mm",     depthRep },
+                        { "through_hole", throughRep },
                         { "hole_centers", holeCenters },
                     };
                     rf.confidence       = std::min(0.95, 0.88 + (0.3 - lresid) * 0.1);
@@ -358,6 +371,8 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                     { "u_dir",       { udx, udy, 0.0 } },
                     { "v_dir",       { vdx, vdy, 0.0 } },
                     { "axis_dir",    axis },
+                    { "depth_mm",     depthRep },
+                    { "through_hole", throughRep },
                     { "hole_centers", holeCenters },
                 };
                 rf.confidence       = std::min(0.95, 0.88 + (0.3 - gresid) * 0.1);
@@ -408,11 +423,13 @@ void matchCoaxialStepBores(const std::vector<Hole>& sections,
         for (double d : dias) diaArr.push_back(d);
 
         // Per-step geometry, so the step bore can be REGENERATED: each step's
-        // diameter + its depth measured from the part-top entry (= the deepest
-        // section top), or a through flag.  Take the first section per distinct
-        // diameter (sections of equal dia were merged in assembly).
-        double topZ = -1e300;
-        for (std::size_t j : grp) topZ = std::max(topZ, sections[j].z);
+        // diameter + its depth measured ALONG THE AXIS from the part-top entry,
+        // or a through flag.  Project along axis_dir so a non-Z step bore is
+        // recovered correctly (world-Z would only be right for a ±Z axis).
+        const double aX = sections[i].ax, aY = sections[i].ay, aZ = sections[i].az;
+        auto entryProj = [&](const Hole& h) { return h.x * aX + h.y * aY + h.z * aZ; };
+        double minProj = 1e300;   // the part-top entry has the smallest axis projection
+        for (std::size_t j : grp) minProj = std::min(minProj, entryProj(sections[j]));
         std::vector<std::size_t> repBy;            // one section index per dia
         for (double d : dias)
             for (std::size_t j : grp)
@@ -421,8 +438,8 @@ void matchCoaxialStepBores(const std::vector<Hole>& sections,
         for (std::size_t j : repBy) {
             const Hole& s = sections[j];
             json st = { { "diameter_mm", s.dia }, { "through", s.through } };
-            // Cumulative depth from the part top down to this section's bottom.
-            st["depth_mm"] = s.through ? 0.0 : (topZ - s.z + s.depth);
+            // Cumulative depth (along axis) from the top entry to this bottom.
+            st["depth_mm"] = s.through ? 0.0 : (entryProj(s) + s.depth - minProj);
             steps.push_back(st);
         }
 

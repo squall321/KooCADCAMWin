@@ -34,6 +34,9 @@ DFMReport validate(const Workpiece& /*wp*/, const Input& in)
     if (in.bolt_circle_dia_mm <= in.hole_dia_mm)
         r.add("DFM-INPUT", "error",
               "bolt_circle_dia_mm must exceed hole_dia_mm");
+    if (std::abs(in.axis_dir.Z()) < 0.99)
+        r.add("DFM-INPUT", "error",
+              "bolt_circle_pattern supports a vertical (±Z) hole axis only");
 
     // Hole-to-hole edge clearance along the pitch circle (mirrors DFM-003's
     // 1.5 mm structural minimum): chord between adjacent holes minus both radii.

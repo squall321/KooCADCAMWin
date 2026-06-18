@@ -788,31 +788,52 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
         static const std::unordered_set<std::string> kHolePatternCompounds = {
             "bolt_circle_pattern", "linear_hole_array", "rectangular_hole_grid",
         };
-        std::vector<std::pair<double, double>> consumed;
+        // A consumed centre carries its compound's hole diameter and whether
+        // bores (not just drills) belong to it — so we DON'T over-subsume an
+        // unrelated hole that merely sits near a centre (different diameter), or
+        // a counterbore SEAT bore at a bolt-hole centre (a step bore alone owns
+        // coaxial bores).
+        struct Consumed { double x, y, dia; bool dropBores; };
+        std::vector<Consumed> consumed;
         for (const auto& c : buckets[static_cast<int>(Group::Unknown)]) {
-            if (!kHolePatternCompounds.count(c.skill_id)) continue;
             const auto& rp = c.recovered_params;
-            if (rp.is_object() && rp.contains("hole_centers") &&
-                rp["hole_centers"].is_array()) {
-                for (const auto& p : rp["hole_centers"]) {
-                    if (p.is_array() && p.size() >= 2 &&
-                        p[0].is_number() && p[1].is_number())
-                        consumed.emplace_back(p[0].get<double>(), p[1].get<double>());
+            if (!rp.is_object()) continue;
+            if (kHolePatternCompounds.count(c.skill_id)) {
+                const double hd = rp.value("hole_dia_mm", 0.0);
+                if (rp.contains("hole_centers") && rp["hole_centers"].is_array()) {
+                    for (const auto& p : rp["hole_centers"]) {
+                        if (p.is_array() && p.size() >= 2 &&
+                            p[0].is_number() && p[1].is_number())
+                            consumed.push_back({ p[0].get<double>(), p[1].get<double>(),
+                                                 hd, /*dropBores=*/false });
+                    }
                 }
+            } else if (c.skill_id == "coaxial_step_bore") {
+                consumed.push_back({ rp.value("position_x_mm", 1e9),
+                                     rp.value("position_y_mm", 1e9),
+                                     0.0, /*dropBores=*/true });
             }
         }
         if (!consumed.empty()) {
             auto& holes = buckets[static_cast<int>(Group::B_Hole)];
             holes.erase(std::remove_if(holes.begin(), holes.end(),
                 [&consumed](const skill::RecognizedFeature& c) {
-                    if (c.skill_id != "drill_hole" &&
-                        c.skill_id != "drill_through_hole") return false;
+                    const bool isDrill = c.skill_id == "drill_hole" ||
+                                         c.skill_id == "drill_through_hole";
+                    const bool isBore  = c.skill_id == "bore_cylindrical";
+                    if (!isDrill && !isBore) return false;
                     const auto& p = c.recovered_params;
                     if (!p.is_object()) return false;
                     const double x = p.value("position_x_mm", 1e9);
                     const double y = p.value("position_y_mm", 1e9);
-                    for (const auto& cc : consumed)
-                        if (std::hypot(x - cc.first, y - cc.second) < 0.5) return true;
+                    const double d = p.value("diameter_mm", -1.0);
+                    for (const auto& cc : consumed) {
+                        if (std::hypot(x - cc.x, y - cc.y) >= 0.5) continue;
+                        if (cc.dropBores) return true;            // step-bore axis: any drill/bore
+                        // Hole pattern: only the matching-diameter drills.
+                        if (isDrill && (cc.dia <= 0.0 || std::abs(d - cc.dia) < 0.2))
+                            return true;
+                    }
                     return false;
                 }), holes.end());
         }

@@ -107,6 +107,35 @@ TEST(CoaxialStepBore, RoundTripIsRecognised)
     EXPECT_NEAR(sb->recovered_params.value("max_dia_mm", 0.0), 16.0, 0.5);
 }
 
+// inferProcessPlan replaces the coaxial drills/bores with the single step-bore
+// step, so the recovered plan is a clean editable unit.
+TEST(CoaxialStepBore, SubsumesConstituentBoresInPlan)
+{
+    namespace fs = std::filesystem;
+    auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);
+    auto out = skill::coaxial_step_bore::apply(*stock, stepBore());
+
+    const fs::path p = fs::temp_directory_path() /
+                       ("koo_csbs_" + std::to_string(::rand()) + ".step");
+    std::string err;
+    io::StepIO::write(out.workpiece->shape(), p, err);
+    auto reim = io::StepIO::read(p, err);
+    std::error_code ec; fs::remove(p, ec);
+    ASSERT_TRUE(reim);
+    skill::Workpiece foreign(*reim);
+
+    const process::ProcessPlan plan = re::inferProcessPlan(foreign, 0.7);
+    bool hasStep = false;
+    int  atoms   = 0;
+    for (const auto& s : plan.steps()) {
+        if (s.skill_id == "coaxial_step_bore") hasStep = true;
+        if (s.skill_id == "drill_hole" || s.skill_id == "drill_through_hole" ||
+            s.skill_id == "bore_cylindrical") ++atoms;
+    }
+    EXPECT_TRUE(hasStep) << "recovered plan must carry the step bore";
+    EXPECT_EQ(atoms, 0) << "coaxial drills/bores must be subsumed by the step bore";
+}
+
 TEST(CoaxialStepBore, DispatchableViaExecutor)
 {
     auto stock = skill::createCuboidStock(80.0, 80.0, 15.0);

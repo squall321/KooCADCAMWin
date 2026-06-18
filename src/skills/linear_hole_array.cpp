@@ -35,6 +35,9 @@ DFMReport validate(const Workpiece& /*wp*/, const Input& in)
         r.add("DFM-INPUT", "error", "linear_hole_array pitch_mm must be > 0");
     if (std::hypot(in.dir_x, in.dir_y) < 1e-9)
         r.add("DFM-INPUT", "error", "linear_hole_array direction must be non-zero");
+    if (std::abs(in.axis_dir.Z()) < 0.99)
+        r.add("DFM-INPUT", "error",
+              "linear_hole_array supports a vertical (±Z) hole axis only");
     // Hole-to-hole edge clearance (mirrors DFM-003's 1.5 mm structural minimum).
     if (in.pitch_mm > 0.0) {
         const double gap = in.pitch_mm - in.hole_dia_mm;
