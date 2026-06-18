@@ -3,15 +3,19 @@
 스마트폰 전면 메탈 케이스의 파라메트릭 모델. Master Spec §6.3 구조를 보존하되
 `ProductFrontModel` CRTP 기반([[engine/parametric-templates]])으로 재구성한다.
 
-> **M2-phase-1 (SHIPPED, 2026-05-26)** — 4-step rectangular slab builder
-> (buildBase / applyCornerRadius / buildDisplayPocket / addCameraHoles).
-> Composes only `koocadcam::engine::prim` 헬퍼 — OCCT 직접 호출 0회. 캡슐화
-> 가설 검증의 첫 실증.  나머지 스텝(side buttons, port, deco rings, DFM)은
-> M2-phase-2/M7+에서 점진 추가.
+> **M2 (SHIPPED) — 7-step rectangular slab builder.** Steps 1–4 (phase-1,
+> 2026-05-26): base, rim fillets, display pocket, rear camera holes.  Steps 5–7
+> + `runDFM` (phase-2, this session): side buttons, USB-C port, camera deco
+> rings, DFM gate.  Composes only `koocadcam::engine::prim` 헬퍼 — OCCT 직접 호출
+> 4개 헤더뿐. 캡슐화 가설 검증의 첫 실증.
 
 ---
 
-## Build Sequence (M2-phase-1, shipped)
+## Build Sequence
+
+7-step `ProductFrontModel<PhoneFrontModel>` CRTP 빌더.  각 스텝은 `prim::runStep`
+으로 래핑되어 try/catch → `E_OCCT`, BRepCheck → `W_BREPCHECK` 일관 처리.  Steps
+3–7 은 해당 spec 섹션이 없으면 pass-through.  `buildAll` 이 1→7 순서로 실행.
 
 | # | 메서드 | 도메인 책임 | 사용 프리미티브 |
 |---|---|---|---|
@@ -19,13 +23,59 @@
 | 2 | `applyCornerRadius` | 상면(rTop) + 저면(rSide) 리브 필렛 단일 패스 | `prim::optimalBbox`, `prim::filletEdgesMulti` + `edgesAtZ` |
 | 3 | `buildDisplayPocket` | 상면 대형 라운드 직사각 포켓 컷 | `prim::roundedRectPocketTool`, `prim::cut` |
 | 4 | `addCameraHoles` | 하면 카메라 렌즈 원홀 배열 (compound + 1-pass Boolean) | `prim::cylinder`, `prim::cutMany` |
-
-각 스텝은 `prim::runStep` 으로 래핑되어 try/catch → `E_OCCT`, BRepCheck →
-`W_BREPCHECK` 일관 처리.  본체는 5–15 줄로 도메인 어휘만 남는다.
+| 5 | `addSideButtons` | ±X 측면 평면에 직사각 버튼 포켓 (전원·볼륨) | `prim::box`, `prim::cutMany` |
+| 6 | `addPortHole` | 하단 −Y 면 USB-C obround(스타디움) 컷 | `prim::box`, `prim::cylinder`, `prim::fuseMany`, `prim::cut` |
+| 7 | `addCameraDecoRings` | 후면 렌즈 둘레 함몰 환형 그루브 (tube 툴) | `prim::cylinder`, `prim::cutMany` |
 
 소스: [[src/engine/PhoneFrontModel.hpp]] · [[src/engine/PhoneFrontModel.cpp]]
-회귀 테스트: `tests/phone/phone_test.cpp` — 5 케이스 (BRepCheck valid, 결정론,
-포켓 볼륨 감소, 카메라 개수 단조성, optional 섹션 pass-through).
+회귀 테스트: `tests/phone/phone_test.cpp`.
+
+### 스텝 1 — `buildBase`
+
+직사각형 슬랩 박스를 XY 중심에 세우고 4개 수직 코너 엣지를 필렛.
+`spec["base"] = { width_mm, height_mm, thickness_mm, initial_corner_r_mm }`.
+
+### 스텝 2 — `applyCornerRadius`
+
+상면 엣지 → `r_top_mm`, 저면 엣지 → `r_side_mm` 를 `filletEdgesMulti` 단일 패스로
+처리(OCCT 솔버가 두 리브를 함께 해결).  로직은 [[engine/feature-watch#스텝 2 — applyCornerRadius]] 와 동일.
+
+### 스텝 3 — `buildDisplayPocket`
+
+전면에 대형 라운드 직사각 디스플레이 포켓을 컷.  `prim::roundedRectPocketTool`
++ `prim::cut`.  `spec["display_pocket"]` 누락 시 pass-through.
+
+### 스텝 4 — `addCameraHoles`
+
+후면(−Z)에서 본체로 들어가는 카메라 렌즈 원홀 배열.  카메라마다
+`{ offset_x_mm, offset_y_mm, hole_dia_mm, depth_mm }`; compound 툴 + `prim::cutMany`
+단일 Boolean.
+
+### 스텝 5 — `addSideButtons`
+
+평평한 ±X 측면에 직사각 버튼 포켓(볼륨·전원).  워치와 달리 사이드가 평면이므로
+박스 커터를 측면에 직접 배치(레이디얼 프레임 불필요).  버튼마다
+`{ side, center_y_mm, center_z_mm, length_mm, height_mm, depth_mm }`; `prim::cutMany`
+단일 Boolean.  depth 가 본체 폭의 절반 이상이면 `W_BUTTON_DEPTH` 경고.
+
+### 스텝 6 — `addPortHole`
+
+하단(−Y) 면의 USB-C obround(스타디움) 컷, +Y 로 압출.  중앙 박스 + 양끝 반원
+실린더를 `fuseMany` 로 합성한 뒤 단일 `prim::cut`("compound tool, one cut" 관용구).
+`width <= height` 면 단일 실린더로 폴백.  `spec["port_hole"]` 누락 시 pass-through.
+
+### 스텝 7 — `addCameraDecoRings`
+
+후면 렌즈 둘레의 함몰 환형 그루브.  링 툴 = 외경 실린더 − 내경 실린더(tube);
+컷하면 렌즈 주변이 돌출되고 장식 그루브가 남는다.  링마다
+`{ offset_x_mm, offset_y_mm, outer_dia_mm, inner_dia_mm, depth_mm }`.
+`inner_dia >= outer_dia` 면 `W_DECO_RING` 경고 후 해당 링 skip.
+
+### `runDFM`
+
+`dfm::runProductDFM(shape, spec, dfm::phoneProfile())` 한 줄 위임 — 워치와 같은
+DFM-001..DFM-023 카탈로그를 phone 프로파일(minWall 0.40 mm, DFM-013 디스플레이
+평탄도, DFM-018 멀티 카메라 평행도)로 실행.  카탈로그: [[engine/dfm-rules]].
 
 ### 캡슐화 검증
 
@@ -227,9 +277,13 @@ public:
 
 ---
 
-## 빌드 시퀀스 개요
+## 빌드 시퀀스 개요 (계획 등급 스케치 — 구현은 위 [[engine/feature-phone#Build Sequence]] 참조)
 
-### 스텝 1 — `buildBase` (라운드 직사각형)
+> 아래 OCCT 호출 스케치는 M2-phase-1 이전의 계획 등급 메모다. 실제 구현된
+> 7-step 빌더는 위 **Build Sequence** 섹션이 단일 사실원천이며, 메서드 명칭도
+> 그쪽(`addSideButtons`/`addPortHole`/`addCameraDecoRings`)을 따른다.
+
+### (계획) 스텝 1 — `buildBase` (라운드 직사각형)
 
 ```cpp
 // 기본 박스 생성
@@ -242,7 +296,7 @@ BRepFilletAPI_MakeFillet fillet(box.Shape());
 시계 `buildBase`와 달리 높이/폭 비율이 약 2:1이며 세로 방향이 지배적이다.
 원점은 `gp::Origin()`, 높이 방향 Y축 (`gp::DY()`)으로 고정하여 결정론 보장.
 
-### 스텝 3 — `buildDisplayPocket` (시계와의 핵심 차이)
+### (계획) 스텝 3 — `buildDisplayPocket` (시계와의 핵심 차이)
 
 스마트폰 디스플레이 포켓은 케이스 폭의 90% 이상을 차지하는 대형 직사각형이다.
 `BRepBuilderAPI_MakeWire`로 라운드렉트 단면 와이어를 구성하고
@@ -256,7 +310,7 @@ BRepAdaptor_Surface adaptor(bottom_face);
 // 편차 > flatness_tol_mm 이면 DFM-013 실패
 ```
 
-### 스텝 4 — `addCameraHoles` (멀티 카메라)
+### (계획) 스텝 4 — `addCameraHoles` (멀티 카메라)
 
 카메라 홀 간격 패턴은 제조사 모듈 레이아웃을 반영한다.
 평행도 검증(DFM-018): 각 카메라 홀 축 벡터(`gp_Dir`) 간 각도 편차가 기준치 이내인지 확인.
@@ -274,7 +328,7 @@ for (size_t i = 1; i < cameras.size(); ++i) {
 }
 ```
 
-### 스텝 6 — `addPortFeatures` (하단 종방향 포트)
+### (계획) 스텝 6 — `addPortFeatures` (하단 종방향 포트)
 
 USB-C 구멍은 단순 원형이 아닌 **라운드렉트** 단면이다.
 `BRepBuilderAPI_MakeWire`로 직선 2개 + 반원 2개를 조합한 단면 와이어 생성:

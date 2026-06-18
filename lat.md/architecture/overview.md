@@ -54,13 +54,28 @@ Studio 2022 + MSVC, Linux는 CMake CLI + GCC/Clang으로 네이티브 빌드한�
 
 ### `src/gui/` — Qt UI 레이어
 
+**Shipped** (실장 완료):
+
 | 파일 | 역할 |
 |---|---|
-| [[src/gui/MainWindow.hpp]] | 최상위 QMainWindow, DocManager 보유 |
+| [[src/gui/MainWindow.hpp]] | 최상위 QMainWindow; 패널 호스트, product-aware build (watch/phone) |
+| [[src/gui/AppMenus.hpp]] | 메뉴/액션 구성 (New Watch / New Phone, Full Demo 등) |
+| [[src/gui/ParameterPanel.hpp]] | 워치 spec 파라미터 폼 (FieldSchema 기반, B6.2) |
+| [[src/gui/PhonePanel.hpp]] | 폰 spec 파라미터 폼 — **완전 schema-driven** (GroupSchema + ArrayTableSchema), B6.4 |
+| [[src/gui/FieldSchema.hpp]] | schema-driven 위젯 팩토리 — GroupSchema → QFormLayout 스핀박스, read/write 헬퍼 (B6.2) |
+| [[src/gui/ProcessPlanEditor.hpp]] | 현재 ProcessPlan 을 편집 가능한 QListWidget 으로; Execute / NL Submit 시그널 → MainWindow 재빌드 |
+
+**Reserved** (계획 등급):
+
+| 파일 | 역할 |
+|---|---|
 | [[src/gui/ViewGrid.hpp]] | 2×2 QOpenGLWidget 컨테이너, V3d_View 바인딩 |
-| [[src/gui/ParameterPanel.hpp]] | 파라메트릭 입력 폼, 실시간 preview 요청 |
 | [[src/gui/DFMReportPanel.hpp]] | DFM 검사 결과 트리, 위반 항목 하이라이트 |
 | [[src/gui/FeatureTreeModel.hpp]] | Qt 모델/뷰, Doc feature graph 반영 |
+
+PhonePanel 은 ParameterPanel 과 달리 UI 를 손으로 짜지 않고 schema 리스트에서
+빌드하므로 `currentSpec()/setSpec()` 가 제네릭 루프다.  string-enum 필드
+(side_buttons 의 "side")는 numeric 팩토리가 다루지 않아 base spec pass-through 로 보존.
 
 ### `src/engine/` — 비즈니스 로직
 

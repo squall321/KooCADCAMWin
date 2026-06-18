@@ -199,6 +199,50 @@ BRepCheck_Analyzer checker(fixed);
 
 ---
 
+## compound-grammar
+
+**B1.2 선언적 합성 인식.**  flat foreign-CAD cap 은 ~750 개 도메인 compound recognizer 를 추론 임계(0.7)
+아래로 묶어 둔다 (느슨한 기하 fallback 이 아무 데서나 발화하기 때문).  generic
+"wraps an atom" subsumption 으로 un-cap 하려는 시도는 측정으로 **반증**됨
+([[engine/reverse-route#fpscan]]).  정통 해법은 **specific** 하다: 인식된 정밀
+atom 들이 선언된 패턴으로 올바른 배치를 이룰 때만 compound 를 인식.
+
+`re::recognizeCompounds(candidates)` 가 `re::analyze` 가 이미 복원한 정밀 atom 위에
+grammar 룰을 평가(순수 함수, Workpiece 접근 없음).  현재 패턴:
+
+| 패턴 | 조건 | 생성형 짝 |
+|---|---|---|
+| `bolt_circle_pattern` | 중심이 한 원 위에 있는 동일 홀 >=3 | [[engine/skills#bolt_circle_pattern]] |
+| `linear_hole_array` | 공선·등피치 동일 홀 >=3 | [[engine/skills#linear_hole_array]] |
+| `rectangular_hole_grid` | 채워진 cols×rows 격자의 동일 홀 >=6 | [[engine/skills#rectangular_hole_grid]] |
+| `coaxial_step_bore` | 서로 다른 직경의 동심 full bore >=3 | [[engine/skills#coaxial_step_bore]] |
+
+홀 패턴은 **equal-diameter · parallel-axis · REVOLUTION-COMPLETE** 드릴 홀에만
+grounding (완전 회전 게이트가 부분 호/장식 절단을 배제).  인식된 compound 가
+confidence >= 0.7 이고 그 face 집합이 구성 정밀 드릴의 face 를 strictly contain 하면,
+[[engine/reverse-route#Recognizer]] 가 그 구성 드릴들을 **subsume** (kept 목록에서
+제거)해 dispatchable 한 단일 편집 step 으로 만든다.  소스:
+[[src/re/CompoundGrammar.hpp]] · [[src/re/CompoundGrammar.cpp]].
+회귀: `tests/re/compound_grammar_test.cpp`.
+
+---
+
+## fpscan
+
+**Un-cap 안전 스캔.**  B1.x 측정 도구.  ~750 개 도메인 compound recognizer 를 foreign CAD 에서 안전하게
+un-cap 하려면, recognizer 별로 **해당 피처가 없는** 부품에서 높은 RAW confidence 로
+오발화(spurious fire)하는지 알아야 한다 — 오발화하는 것은 un-cap 불가.
+
+이 테스트는 foreign-equivalent 부품 패널(정밀 피처 합성 → STEP 라운드트립으로
+메타데이터 제거)을 만들고, cap **OFF**(raw)와 **ON**(production)으로 `re::analyze`
+를 돌려: (1) cap 이 비-정밀 후보를 모두 <= 0.5 로 강등함을 증명(load-bearing
+invariant — cap 삭제 방지 가드), (2) skill 별 오발화 표를 출력 — 패널 전역에서
+raw>=0.7 오발화 0건인 compound 가 grounded un-cap 후보.  이 측정이 generic
+subsumption un-cap 을 반증하고 [[engine/reverse-route#compound-grammar]] 의 specific
+grounding 으로 방향을 정했다.  회귀: `tests/re/fpscan_test.cpp`.
+
+---
+
 ## 참고 링크
 
 - [[engine/parametric-templates]] — FeatureGraph 구조

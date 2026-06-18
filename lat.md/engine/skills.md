@@ -159,6 +159,58 @@ slice 1 에서 확립된 검증 패턴:
 
 ---
 
+## 생성형 grammar-compound skills (B1.2)
+
+[[engine/reverse-route#compound-grammar]] 의 선언적 grammar 가 정밀 atom 들에서
+RING/ROW/GRID/STACK 패턴을 **인식(recognize)** 한다면, 아래 4개 skill 은 그 반대
+방향 — 같은 패턴을 **생성(synthesize)** 한다.  공통 구현 idiom: `drill_hole::apply`
+를 hole 마다 합성(entry/through 해석과 chain 계약을 검증된 atom 으로부터 상속),
+그 위에 compound `FeatureSignature` 를 stamp.  recognition 은 koo_re grammar 에만
+있으므로 각 skill 의 `recognize()` 는 빈 vector 반환(레지스트리 중복 카운트 방지).
+이로써 인식된 패턴이 **편집 가능한 replayable step** 이 된다 — hole_count·pitch·
+diameter 를 바꿔 재실행하면 패턴 전체가 재생성.
+
+### bolt_circle_pattern
+
+지름 `bolt_circle_dia_mm` 의 피치원 위에 `hole_count`(>=3) 개의 동일 홀을 등각
+배치해 드릴.  `validate` 는 hole_count/직경 sanity + 인접 홀 chord 간극 1.5 mm
+(DFM-003 미러) 검사.  recovered_params: `{hole_count, bolt_circle_dia_mm,
+hole_dia_mm, center_x/y, axis_dir, start_angle_deg}`.
+소스: [[src/skills/bolt_circle_pattern.hpp]] · [[src/skills/bolt_circle_pattern.cpp]].
+
+### linear_hole_array
+
+방향 `(dir_x, dir_y)` 로 `pitch_mm` 등간격, `hole_count`(>=3) 개의 동일 홀 한 줄을
+드릴.  recovered_params: `{hole_count, hole_dia_mm, pitch_mm, start_x/y, direction,
+axis_dir}`.  소스: [[src/skills/linear_hole_array.hpp]].
+
+### rectangular_hole_grid
+
+origin 코너 + 두 축 방향(u/v) 으로 채워진 `cols×rows`(>=6) 동일 홀 격자를 드릴
+(예: 워치 스피커 그릴).  recovered_params: `{cols, rows, hole_dia_mm, origin_x/y,
+u/v basis, pitch_u/v_mm}`.  소스: [[src/skills/rectangular_hole_grid.hpp]].
+
+### coaxial_step_bore
+
+동심 full bore `steps`(>=3, 서로 다른 직경)를 entry face 에서 각 step 의 누적
+depth 까지 보어(최심 step 은 through 가능).  step 마다 `{diameter_mm, depth_mm,
+through}`.  소스: [[src/skills/coaxial_step_bore.hpp]].
+
+---
+
+## param-clamp
+
+Layer 3 — recovered-parameter clamp (B3.4).  RE 로 복원한 ProcessPlan 을 새
+stock 에 재실행할 때, 일부 recovered param 이 over-specify 되어 skill 의 `apply()`
+를 crash 시킨다(예: hollow_cavity 의 wall_thickness 가 stock 보다 커서 잔여 cavity
+가 non-positive).  `Executor` 가 매 step 의 params 를 이 clamp 에 먼저 통과시켜,
+live stock extent 로 물리적으로 불가능한 값을 가장 가까운 valid 값으로 rewrite.
+`skill_id` 별 순수 함수 레지스트리(`clampTable()`)이며 entry 없는 skill 은 no-op,
+clamp 는 절대 throw 하지 않음.  소스: [[src/process/ParamClamp.hpp]] ·
+[[src/process/ParamClamp.cpp]].  회귀: `tests/process/param_clamp_test.cpp`.
+
+---
+
 ## 참고
 
 - [[engine/dfm-rules]] — 25개 DFM 규칙 카탈로그 (skill validate() 가 호출)
