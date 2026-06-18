@@ -24,7 +24,12 @@ heal→volume-sanity→BRepCheck→reject를 구현하는 등 견고함. 반면 
 
 ## 검증된 작업 (7갭 확정 / 1갭 기각, 우선순위순)
 
-### #1 — 스킬 합성 출력 경로에 heal+validate 게이트 (START FIRST) — HIGH / M
+### #1 — 스킬 합성 출력 경로에 heal+validate 게이트 ✅ **완료 (d7624f0 + b374e24)** — HIGH / M
+**Phase A (d7624f0)**: `validateOrHeal`(BRepCheck→ShapeFix heal→throw) + `finalizeOutput` 경유 + ctor null 가드 + drill_hole 증명 + workpiece_validate_test(5케이스).
+**Phase B (b374e24)**: 756사이트 대량 diff 대신 **Workpiece ctor가 validateOrHeal 호출** → 전 757사이트+RE+stock이 construction-by-validation. non-fatal probe로 측정한 blast radius = 정확히 2개 스킬(778 중)이 ShapeFix-unhealable invalid 출력. 적대적 진단 워크플로우(standalone probe가 1차 가설을 반증)로 근본 수정: **internal_gear**(bore+gullet 침투 단일 cutMany→순차 cut), **top_face_recess_with_walls**(over-broad edgesAtZ fillet 자기교차→외곽 4모서리 술어+validity-guard). authoritative 812 ctest 100% pass, 무회귀. 이제 어떤 스킬도 heal/throw 경로 미진입 — 게이트는 순수 회귀 backstop.
+
+<details><summary>원래 진단(보존)</summary>
+
 **메인 컨텍스트 grep 재검증 완료**: `finalizeOutput` 채택자 **0**, 인라인 `make_shared<Workpiece>` **757개소**,
 Workpiece ctor([Workpiece.cpp:26-30](../src/skills/Workpiece.cpp#L26))는 `enumerate()`만 — BRepCheck/null/empty/ShapeFix 전무.
 무효·빈 BRep이 무음으로 "유효한" Workpiece가 되어 피처체인+STEP export로 전파.
@@ -34,6 +39,8 @@ Workpiece ctor([Workpiece.cpp:26-30](../src/skills/Workpiece.cpp#L26))는 `enume
 - heal-성공 분기에 spdlog::warn (telemetry)
 - 유닛테스트: 무효/빈 BRep → SkillError 또는 healed-valid (절대 무음 "valid" 아님) + 정상 출력 round-trip 불변
 - **코어 lib 변경 → full rebuild 필수**(incremental ctest는 false-green, project memory)
+
+</details>
 
 ### #2 — CAM 정확 BRep 충돌 검증 (BRepExtrema_DistShapeShape + SolidClassifier) — HIGH / M
 CollisionCheck가 workpiece를 단일 AABB로 축약([CollisionCheck.cpp:98-99](../src/cam/CollisionCheck.cpp#L98)) → 모든 오목 피처(포켓/베젤 캐비티/카운터보어)가 기하학적으로 소거됨(포켓 진입=false negative, 개방 포켓 위 클리어런스=false positive). AABB broad-phase 유지 + 정확 테스트 추가.

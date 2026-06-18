@@ -109,6 +109,36 @@ Stock factory (`src/skills/Stock.hpp`):
 - `createSTEPStock(path)` — 임의 STEP 입력
 - `createExtrudedProfile(wire, length)` — 사용자 정의 단면
 
+### validateOrHeal — 생성자 chokepoint (모델링 견고성)
+
+`Workpiece` **생성자**가 shape 을 `validateOrHeal(shape, ctx)`(free function, `Workpiece.hpp`
+선언; `Workpiece.cpp` 구현) 로 통과시킨다.  이 게이트는 (1) null/empty shape 을 reject,
+(2) `BRepCheck_Analyzer` 로 검사, (3) invalid 면 `ShapeFix_Shape` 로 **단 한 번** heal 시도
+(`TKShHealing` 이미 링크됨), (4) 복구 불가면 `SkillError` throw.  생성자가 유일 통로이므로
+**모든 Workpiece 는 construction 만으로 valid** 가 보장된다 — 단일 chokepoint 가 ~757 skill
+construction site + RE import 경로 + stock 을 한꺼번에 단단하게 만든다.  `finalizeOutput`
+도 같은 게이트를 거친다.  이는 엔진 측 `prim::runStep`(StepGuard) 의 `checkValidity`/
+`W_BREPCHECK`([[engine/parametric-templates]]) 를 skill 레이어에 미러링한 것 — 차이는 runStep
+은 invalid 를 **경고**로 흘려보내지만 여기선 **heal-or-throw** 로 강제한다는 점.
+
+이 게이트를 세우자 778 skill 중 2개가 `faceCount`/`volume` 테스트는 통과하면서도
+BRepCheck-invalid·ShapeFix-unhealable 솔리드를 내보내던 것이 드러났고, 둘 다 root-fix:
+
+- **internal_gear** — bore(r17.5) + 20개 gullet cutter(r16.0) 가 서로 관통하는데 이들을
+  한 번의 `pr::cutMany` 로 잘라 OCCT 8.0 overlapping-cutter trap 에 빠졌다(IsDone 인데
+  invalid 솔리드).  → **순차 `pr::cut`** 로 변경(bore 먼저, 그다음 gullet 각각).  프로젝트
+  compound-cut 규칙([[process/occt8-migration-cookbook]]; 소스 [[src/skills/internal_gear.cpp]])
+  의 정확한 사례.
+- **top_face_recess_with_walls** — top-rim 필렛이 `edgesAtZ` 로 inner-rim + wall-fuse-seam
+  엣지(~32개)까지 과선택해 self-intersect(필렛이 IsDone 을 반환했으나 invalid 솔리드).
+  → outer-perimeter top 엣지 **4개만** 선택하고, 필렛 결과를 **BRepCheck-valid 일 때만 채택**
+  ([[src/skills/top_face_recess_with_walls.cpp]]).
+
+> **원칙** — 게이트는 silent corruption 을 caught/healed/rejected 결과로 바꿔야 한다.
+> 그리고 OCCT 빌더의 **`IsDone` 는 BRepCheck-valid 를 의미하지 않는다** — validity 는
+> 항상 명시적으로 검사해야 한다.  같은 교훈: [[engine/skills#param-clamp]],
+> [[engine/skills#auto_rib_between_two_walls]], [[engine/dfm-rules#DFM-021]].
+
 ---
 
 ## Skill 카탈로그 (slice 별)
