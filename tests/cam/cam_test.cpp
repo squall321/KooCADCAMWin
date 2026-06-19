@@ -18,6 +18,13 @@
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
 
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <gp.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Pnt.hxx>
+
+#include <memory>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -206,6 +213,68 @@ TEST(CamCollision, CollisionDetectedForRapidIntoStock)
         if (e.segment_index == 1) { foundOnDive = true; break; }
     }
     EXPECT_TRUE(foundOnDive);
+}
+
+// ─── 6/7. Exact narrow phase on a POCKETED workpiece ──────────────────────
+//
+// The single-AABB broad phase treats a pocket interior as solid.  These two
+// cases — impossible to get right with the bbox alone — prove the narrow phase
+// (DistShapeShape + SolidClassifier) distinguishes air from material.
+namespace {
+// Cuboid (0,0,0)-(50,50,10) with a Ø20 open pocket (z 4..10) at the centre.
+std::shared_ptr<skill::Workpiece> makePocketedStock()
+{
+    auto stock = skill::createCuboidStock(50.0, 50.0, 10.0);
+    const TopoDS_Shape pocket = BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(25.0, 25.0, 4.0), gp::DZ()), 10.0, 10.0).Shape();  // z 4..14, capped at top
+    BRepAlgoAPI_Cut cut(stock->shape(), pocket);
+    cut.Build();
+    return std::make_shared<skill::Workpiece>(cut.Shape());
+}
+}  // namespace
+
+// A clearance move whose tip sits in the OPEN pocket air (below the stock top,
+// above the pocket floor, clear of the walls) must NOT be flagged — yet the
+// legacy bbox-only path DOES flag it (false positive), so the same path proves
+// both that the narrow phase clears it and that it was a real bbox defect.
+TEST(CamCollision, ClearanceOverOpenPocketNotFlagged)
+{
+    auto stock = makePocketedStock();
+    ASSERT_FALSE(stock->shape().IsNull());
+
+    cam::Toolpath tp;
+    tp.tool_dia_mm    = 3.0;     // R 1.5, pocket R 10 → 8.5 mm clearance
+    tp.tool_length_mm = 20.0;
+    tp.segments.push_back({cam::PathSegment::Move::Rapid,
+                           gp_Pnt(25.0, 25.0, 30.0), 0.0, 0, 0, 0});
+    tp.segments.push_back({cam::PathSegment::Move::Linear,
+                           gp_Pnt(25.0, 25.0,  7.0), 200.0, 0, 0, 0});  // tip inside pocket air
+
+    auto exact  = cam::checkPath(tp, *stock, 0.5, 0.1, /*exact*/true);
+    auto legacy = cam::checkPath(tp, *stock, 0.5, 0.1, /*exact*/false);
+    EXPECT_TRUE(exact.empty())
+        << "tool clearing an OPEN pocket must not be flagged (narrow phase)";
+    EXPECT_GE(legacy.size(), 1u)
+        << "the legacy bbox-only path false-positives this — the defect being fixed";
+}
+
+// A plunge whose tip is embedded in solid material IS a real gouge and must be
+// flagged by the narrow phase.
+TEST(CamCollision, PlungeIntoSolidWallFlagged)
+{
+    auto stock = makePocketedStock();
+    ASSERT_FALSE(stock->shape().IsNull());
+
+    cam::Toolpath tp;
+    tp.tool_dia_mm    = 3.0;
+    tp.tool_length_mm = 20.0;
+    tp.segments.push_back({cam::PathSegment::Move::Rapid,
+                           gp_Pnt(5.0, 5.0, 30.0), 0.0, 0, 0, 0});
+    tp.segments.push_back({cam::PathSegment::Move::Linear,
+                           gp_Pnt(5.0, 5.0,  5.0), 200.0, 0, 0, 0});   // tip inside solid corner
+
+    auto events = cam::checkPath(tp, *stock, 0.5, 0.1, /*exact*/true);
+    EXPECT_GE(events.size(), 1u) << "plunge into solid material must be flagged";
 }
 
 // ─── Bonus: generateAllToolpaths dispatch sanity ──────────────────────────

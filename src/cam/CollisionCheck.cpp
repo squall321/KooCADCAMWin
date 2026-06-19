@@ -4,6 +4,16 @@
 
 #include "CollisionCheck.hpp"
 
+#include "skills/Workpiece.hpp"
+
+#include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <Standard_Failure.hxx>
+#include <TopoDS_Shape.hxx>
+#include <gp.hxx>
+#include <gp_Ax2.hxx>
+
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -78,12 +88,41 @@ int stepsFor(double length_mm, double step_mm)
     return std::max(1, static_cast<int>(std::ceil(length_mm / step_mm)));
 }
 
+// NARROW phase: confirm a broad-phase "maybe" against the real BRep.  Only
+// called for samples the bbox could not clear, so it stays off the hot path.
+//   (a) tip INSIDE the solid → a real gouge (this is what tells a plunge into a
+//       concave wall apart from clearing the air inside an OPEN pocket, whose
+//       interior is OUTSIDE the solid).
+//   (b) the tool column (a cylinder grown +Z from the tip, matching the broad
+//       phase's tip→tip+toolLen convention) within safe_z_margin of any real
+//       face → grazing/interfering with a wall.
+// Returns false (clear) on any OCCT failure — never invent a collision.
+bool narrowPhaseHit(const gp_Pnt& tip, double toolR, double toolLen,
+                    const TopoDS_Shape& stock, double safe_z_margin)
+{
+    try {
+        BRepClass3d_SolidClassifier cls(stock);
+        cls.Perform(tip, 1.0e-6);
+        if (cls.State() == TopAbs_IN) return true;                  // (a)
+
+        const TopoDS_Shape tool =
+            BRepPrimAPI_MakeCylinder(gp_Ax2(tip, gp::DZ()), toolR, toolLen).Shape();
+        BRepExtrema_DistShapeShape dss(tool, stock);
+        if (dss.IsDone() && dss.NbSolution() > 0 && dss.Value() < safe_z_margin)
+            return true;                                            // (b)
+    } catch (const Standard_Failure& e) {
+        spdlog::warn("cam::narrowPhaseHit: OCCT failure ({}); treating as clear", e.what());
+    }
+    return false;
+}
+
 }  // namespace
 
 std::vector<CollisionEvent> checkPath(const Toolpath&         path,
                                        const skill::Workpiece& wp,
                                        double                  sample_step_mm,
-                                       double                  safe_z_margin)
+                                       double                  safe_z_margin,
+                                       bool                    exact_narrow_phase)
 {
     std::vector<CollisionEvent> out;
     if (path.segments.empty()) return out;
@@ -112,7 +151,9 @@ std::vector<CollisionEvent> checkPath(const Toolpath&         path,
         if (first) {
             // Sample only the end-point of segment 0.
             if (collidesAt(seg.end_point, toolR, toolLen,
-                           xMin, yMin, zMin, xMax, yMax, zMax, safe_z_margin)) {
+                           xMin, yMin, zMin, xMax, yMax, zMax, safe_z_margin) &&
+                (!exact_narrow_phase ||
+                 narrowPhaseHit(seg.end_point, toolR, toolLen, wp.shape(), safe_z_margin))) {
                 std::ostringstream desc;
                 desc << "segment " << i << " (initial) tip at "
                      << seg.end_point.X() << "," << seg.end_point.Y()
@@ -132,7 +173,9 @@ std::vector<CollisionEvent> checkPath(const Toolpath&         path,
             const double t = static_cast<double>(k) / static_cast<double>(nSteps);
             const gp_Pnt sample = lerp(prevEnd, seg.end_point, t);
             if (collidesAt(sample, toolR, toolLen,
-                           xMin, yMin, zMin, xMax, yMax, zMax, safe_z_margin)) {
+                           xMin, yMin, zMin, xMax, yMax, zMax, safe_z_margin) &&
+                (!exact_narrow_phase ||
+                 narrowPhaseHit(sample, toolR, toolLen, wp.shape(), safe_z_margin))) {
                 std::ostringstream desc;
                 desc << "segment " << i
                      << " (" << (seg.move == PathSegment::Move::Rapid ? "Rapid" : "Cut")

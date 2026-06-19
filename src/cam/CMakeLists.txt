@@ -24,6 +24,8 @@ target_link_libraries(koo_cam
     PUBLIC
         koo_skills          # FeatureSignature, ToolingMeta, Workpiece
         TKernel TKMath TKBRep
+        TKTopAlgo           # BRepExtrema_DistShapeShape, BRepClass3d_SolidClassifier
+        TKPrim              # BRepPrimAPI_MakeCylinder (tool sample solid)
         nlohmann_json::nlohmann_json
     PRIVATE
         spdlog::spdlog
