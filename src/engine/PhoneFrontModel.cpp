@@ -107,6 +107,26 @@ StepResult PhoneFrontModel::addCameraHoles(const TopoDS_Shape& in,
             const auto bb = pr::optimalBbox(in);
             const auto& cams = spec["cameras"];
 
+            // Opt-in: a raised camera ISLAND (the signature modern-phone bump).
+            // Fuse a platform on the rear face (protruding -Z) BEFORE boring the
+            // lenses (fuse-before-cut), so the holes pierce island + body.
+            // Default (no camera_island) is unchanged: holes from the flat rear.
+            TopoDS_Shape current = in;
+            double bump = 0.0;
+            if (spec.contains("camera_island")) {
+                const auto&  isl  = spec["camera_island"];
+                const double cx   = isl["center_x_mm"].get<double>();
+                const double cy   = isl["center_y_mm"].get<double>();
+                const double w    = isl["width_mm"].get<double>();
+                const double h    = isl["height_mm"].get<double>();
+                bump              = isl.value("bump_mm", 1.0);
+                const double embed = 0.2;   // interpenetrate the body for a clean fuse
+                const gp_Pnt origin(cx - w / 2.0, cy - h / 2.0, bb.zMin - bump);
+                const TopoDS_Shape island =
+                    pr::box(gp_Ax2(origin, gp::DZ()), w, h, bump + embed);
+                current = pr::fuse(in, island);
+            }
+
             std::vector<TopoDS_Shape> tools;
             tools.reserve(cams.size());
             for (const auto& c : cams) {
@@ -115,13 +135,14 @@ StepResult PhoneFrontModel::addCameraHoles(const TopoDS_Shape& in,
                 const double dia = c["hole_dia_mm"].get<double>();
                 const double dep = c["depth_mm"].get<double>();
 
-                // Hole axis = +Z; start 0.05 mm below the rear face so the
-                // cut clears the surface cleanly, height = depth + overhang.
+                // Hole axis = +Z; start just below the (possibly raised) rear
+                // face so the cut clears the surface; pierce the island + depth.
                 const double kOverhang = 0.05;
-                const gp_Ax2 ax(gp_Pnt(x, y, bb.zMin - kOverhang), gp::DZ());
-                tools.push_back(pr::cylinder(ax, dia / 2.0, dep + kOverhang));
+                const double startZ = bb.zMin - bump - kOverhang;
+                const gp_Ax2 ax(gp_Pnt(x, y, startZ), gp::DZ());
+                tools.push_back(pr::cylinder(ax, dia / 2.0, dep + bump + kOverhang));
             }
-            return pr::cutMany(in, tools);
+            return pr::cutMany(current, tools);
         });
 }
 

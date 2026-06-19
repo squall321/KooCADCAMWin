@@ -131,6 +131,41 @@ TEST(PhoneFrontModel, MoreCamerasRemoveMoreMaterial)
         << "3 cameras should remove more material than 1";
 }
 
+// 4b. Raised camera island (opt-in) — the signature modern-phone bump.  ADDS
+// material (fused platform > the lens holes through it) and protrudes -Z past
+// the rear face.  Default (no camera_island) is unchanged.
+TEST(PhoneFrontModel, CameraIslandAddsMaterialAndProtrudes)
+{
+    using namespace koocadcam;
+    nlohmann::json plain = engine::PhoneFrontModel::defaultSpec();
+    ASSERT_TRUE(plain.contains("cameras"));
+    ASSERT_FALSE(plain["cameras"].empty());
+
+    // Place the island around the first camera, sized to cover the cluster.
+    nlohmann::json island = plain;
+    const double cx = plain["cameras"][0]["offset_x_mm"].get<double>();
+    const double cy = plain["cameras"][0]["offset_y_mm"].get<double>();
+    island["camera_island"] = {
+        { "center_x_mm", cx }, { "center_y_mm", cy },
+        { "width_mm", 18.0 }, { "height_mm", 18.0 }, { "bump_mm", 1.2 } };
+
+    std::vector<engine::BuildWarning> wp, wi;
+    TopoDS_Shape sPlain  = engine::PhoneFrontModel::buildAll(plain,  wp);
+    TopoDS_Shape sIsland = engine::PhoneFrontModel::buildAll(island, wi);
+    ASSERT_FALSE(sPlain.IsNull());
+    ASSERT_FALSE(sIsland.IsNull());
+    EXPECT_TRUE(BRepCheck_Analyzer(sIsland).IsValid())
+        << "camera island must yield a valid solid";
+
+    EXPECT_GT(volumeOf(sIsland), volumeOf(sPlain))
+        << "camera island should ADD material (platform > lens holes)";
+
+    const double dzPlain  = engine::prim::optimalBbox(sPlain).dz();
+    const double dzIsland = engine::prim::optimalBbox(sIsland).dz();
+    EXPECT_GT(dzIsland, dzPlain + 0.5)
+        << "camera island should protrude past the rear face (thicker -Z)";
+}
+
 // 5. Missing optional sections pass through (engine should not crash)
 TEST(PhoneFrontModel, OptionalSectionsArePassThrough)
 {
