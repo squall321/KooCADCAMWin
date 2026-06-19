@@ -10,6 +10,12 @@
 
 > **M1.5 SHIPPED (2026-05-27)** — 10/10 build steps + runDFM 게이트, 모두 `koocadcam::engine::prim` 헬퍼만 조합.
 > ctest `watch` + `watch_features` 14 sub-test PASS (M1.2 7 + M1.5 7).  KooCADCAM.exe 시각 검증 통과.
+>
+> **제품 리얼리즘 (commit a993001, opt-in)** — 돔 사파이어 글래스(스텝 4), 돌출
+> 용두 노브 + knurl(스텝 5), 후면 센서 돔(스텝 8).  돌출 피처는 fuse-before-cut,
+> 곡면은 `prim::domeSolid` freeform 솔리드.  driven-dimension `=expr` pre-pass
+> (commit 68a2813) + 제품-정체성 레지스트리/DFM 브리지(3aab310·6d9b8d1·b3cd194)는
+> 아래 [[engine/feature-watch#Driven-dimension pre-pass (`=expr` 필드, commit 68a2813)|전용 섹션]] 참조.
 
 ---
 
@@ -264,6 +270,14 @@ fillet.Build();
 `BRepPrimAPI_MakeCylinder(pocket_radius, depth_pocket + glass_offset)` →
 케이스 상면 기준 좌표 배치 → `BRepAlgoAPI_Cut`. `glass_offset < 0`이면 함몰(recessed).
 
+**돔 사파이어 글래스 (opt-in, commit a993001).**  `display_pocket.glass_profile`
+가 `"domed"` 면 포켓 컷 후, 림 반경의 `prim::domeSolid`
+([[engine/parametric-templates#`domeSolid` — 첫 재사용 freeform 솔리드 블록 (commit a993001)]]) 을
+케이스 상면 위로 `glass_dome_height_mm`(기본 1.5) 만큼 띄워 **fuse** 한다 (embed
+0.2 mm 로 interpenetrate 후 clean fuse).  돔은 watertight ThruSections 솔리드(곡면
+BSpline 옆면)로, 워치 첫 freeform 제품 피처다.  기본값(`glass_profile` 없음/`"flat"`)
+은 종전과 동일해 기존 스펙/테스트 불변.  소스: [[src/engine/WatchFrontModel.cpp]].
+
 ### 스텝 5 — `addCrownCavity`
 
 ```cpp
@@ -274,6 +288,16 @@ BRepPrimAPI_MakeCylinder cavity(ax, diameter_mm / 2.0, depth_mm);
 BRepAlgoAPI_Cut cut(current_shape, cavity.Shape());
 // 샤프트 홀: 더 작은 직경으로 동일 축 관통 절삭
 ```
+
+**돌출 용두 노브 + knurl (opt-in, commit a993001).**  `crown_cavity` 에
+`body_protrusion_mm` 와 `body_dia_mm` 가 주어지면 종전의 함몰 캐비티 대신 **돌출
+노브**를 만든다 —
+바깥으로 테이퍼진 `prim::coneFrustum`(rBody → rBody×0.85)을 측면에 **fuse-BEFORE-cut**
+으로 붙인 뒤, `knurl_count`(>=3) 가 있으면 노브 림에 N 개 방사 노치를 **순차
+`pr::cut`** 으로 새기고(겹치는 cutter 를 단일 compound Boolean 으로 자르지 않음 —
+[[process/occt8-migration-cookbook]] overlapping-cutter 규칙), 마지막에 샤프트를 관통
+보어한다.  원칙: 돌출 피처는 fuse 먼저, cut 나중.  body 파라미터가 없으면 종전의
+subtractive cavity+shaft 라 기존 스펙/테스트 불변.  소스: [[src/engine/WatchFrontModel.cpp]].
 
 ### 스텝 6 — `addSideButtons`
 
@@ -304,12 +328,20 @@ BRepAlgoAPI_Cut grilleCut(current_shape, pinCompound);
 
 DFM 게이트: DFM-008 (핀 직경 ≥ 0.8 mm), DFM-010 (핀 간 최소 거리 ≥ 1.5 mm).
 
-### 스텝 8 — `addRearSensorHoles`
+### 스텝 8 — `addRearSensors`
 
 후면 기준 좌표계 (Z축 반전): `gp_Ax2(rear_center, -gp::DZ())`.
 관통홀(`through=true`): 전체 두께를 깊이로 설정.
 맹홀(`through=false`): `depth_mm` 지정. `BRepExtrema_DistShapeShape`로 후면까지
 최소 잔류 살두께 DFM-009 검증.
+
+**후면 센서 돔 (opt-in, commit a993001).**  센서에 `dome_height_mm > 0` 이 있으면
+HR/PPG 식 **돌출 돔**(`prim::domeSolid`,
+[[engine/parametric-templates#`domeSolid` — 첫 재사용 freeform 솔리드 블록 (commit a993001)]])을 후면(-Z
+바깥)으로 띄워 광학 창을 뚫기 **전에** `pr::fuseMany` 로 합산한다(fuse-before-cut).
+돔이 있으면 후면이 `dome_height_mm` 만큼 바깥으로 이동하므로 홀 컷의 시작 Z·깊이를
+그만큼 보정한다.  `dome_height_mm` 없으면 종전의 평평한 후면 광학홀 그대로.  소스:
+[[src/engine/WatchFrontModel.cpp]].
 
 ### 스텝 9 — `addLug`
 
@@ -372,6 +404,75 @@ struct LugSpec {
     double fillet_r_mm;     // [0.3, 1.5]
 };
 ```
+
+---
+
+## Driven-dimension pre-pass (`=expr` 필드, commit 68a2813)
+
+스펙 JSON 의 수치 필드는 본래 서로 독립값이라 "베젤 외경 = 케이스 직경 − 2" 같은
+구동 치수를 표현할 수 없었다.  `io/SpecExpr.hpp`(헤더-온리, 소스
+[[src/io/SpecExpr.hpp]]) 의 `resolveExpressions(spec, err)` 가 이를 더한다 — opt-in,
+non-invasive:
+
+- **`'='` 로 시작하는 STRING leaf 만** 표현식으로 평가한다.  그 외 — 평범한 문자열
+  (`form_factor="round"`)·기존 숫자 — 는 **그대로 보존**되어 현존 스펙에 무영향.
+- 표현식은 다른 수치 필드를 **dotted path** 로 참조하고
+  (`"= base.diameter_mm - 2 * bezel.width_mm"`), `+ - * /`·괄호·단항 마이너스를
+  정상 우선순위로 지원한다 (recursive-descent `Evaluator`).
+- 연쇄 참조(`a="=b"`, `b="=c"`)는 **fixpoint** 로 해소.  미해소 참조·참조 사이클은
+  `err` 로 보고하고 `false` 반환(0 나눗셈·non-numeric 참조도 에러).
+
+`WatchFrontModel::buildAll`(과 [[engine/feature-phone#runDFM|PhoneFrontModel::buildAll]])
+이 스텝이 값을 읽기 **전에** 투명한 pre-pass 로 실행한다.  표현식이 없는 스펙은
+변경 없이 반환되어 완전 transparent.  헤더-온리·`nlohmann::json` 의존만 있어 koo_io /
+koo_engine 양쪽에서 링크 의존 없이 호출된다.
+
+---
+
+## 제품-정체성 브리지 + ProductRegistry (commits 3aab310 · 6d9b8d1 · b3cd194)
+
+> **멀티 제품 프런티어 작업.**  워치·폰은 본래 dispatch 를 공유하지 않는 두 독립
+> 빌더였고, 모든 caller 가 `WatchFrontModel::` / `PhoneFrontModel::` 를 하드코딩
+> (GUI 는 `phone ? … : …` bool 분기)했다.  복원/적응된 디자인은 spec 은 있어도 C++
+> 제품 타입이 없어 **빌드될 길이 없었다**.  아래 두 조각이 그 간극을 닫는다 —
+> 제품 정체성(product identity)이 파이프라인을 관통해 흐르게 한다.
+
+### DFM 측 브리지 — `profileForProduct` + `runDFMForSpec`
+
+`dfm::profileForProduct(tag)` 가 제품 태그(`"watch"`/`"phone"`)를 canonical
+`DFMProfile`(minWall, DFM-013/DFM-018 토글)로 매핑한다(미지/빈 태그 → watch fallback).
+`dfm::runDFMForSpec(shape, spec)` 는 **컴파일-타임 제품 지식 없이** `spec["product"]`
+(없으면 discriminating 키 `cameras`/`port_hole` → phone, `bezel`/`crown_cavity` →
+watch 추론)로 프로파일을 골라 `runProductDFM` 으로 디스패치한다.  `WatchFrontModel::runDFM`
+과 [[engine/feature-phone#runDFM|PhoneFrontModel::runDFM]] 는 이제 모두 이 한 줄에
+위임한다 — 복원/적응 디자인이 per-class 메서드와 같은 규칙셋을 받는다.  카탈로그
+연결: [[engine/dfm-rules#ProductDFM]].  소스: [[src/engine/dfm/ProductDFM.hpp]].
+
+### 빌드 측 — `engine/ProductRegistry.hpp` (헤더-온리)
+
+DFM 브리지의 build-side 짝.  통합 product-tag 구동 build/validate 진입점:
+
+| 함수 | 역할 |
+|---|---|
+| `productList()` | 이 빌드가 만들 수 있는 제품 (`{"watch","phone"}`) |
+| `productFromSpec(spec)` | 명시 `"product"` 태그 → 없으면 키 추론 (DFM 브리지와 동기) |
+| `productFromGeometry(shape)` | **recognize-side** — 복원된 shape 의 optimal bbox 종횡비/크기로 제품 추론 (elongated+large → phone, squarish+modest → watch, 모호 → watch). spec 없는 RE 산물에 시작 정체성을 부여 |
+| `defaultSpecForProduct(tag)` | 태그별 canonical default spec |
+| `buildProduct(spec, warnings)` | 태그/추론으로 빌더 선택 후 `buildAll` |
+| `runDFMForProduct(shape, spec)` | DFM 브리지로 위임 |
+
+`productFromSpec` 의 build-side 와 `productFromGeometry` 의 recognize-side 가
+[[engine/reverse-route]] 복원 → adapt → 재빌드 루프에 제품 정체성을 공급한다.
+GUI [[architecture/overview#src/gui/|MainWindow]] 의 live 루프는 build+DFM 에서
+`phone ? … : …` bool 분기를 버리고 `buildProduct`/`runDFMForProduct` 를 호출한다
+(레지스트리가 앱에서 live).  `defaultSpec` 은 명시 `"product"` 태그를 갖는다(watch/phone).
+소스: [[src/engine/ProductRegistry.hpp]].
+
+> **유의 (실측 결론)** — 실제 cross-product **피처 전이**는 깨끗한 연산이 아니다.
+> 워치(round, `d_pocket_mm`)와 폰(rect, `width`/`height_mm`) 피처는 대체로
+> 제품-특정이라 literal 복사가 성립하지 않는다.  멀티 제품의 가치는 **공유 인프라와
+> 정체성**(recognize→adapt→DFM 가 한 흐름으로 흐름)이지, 피처를 그대로 베끼는 것이
+> 아니다.
 
 ---
 

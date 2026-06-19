@@ -8,6 +8,13 @@
 > + `runDFM` (phase-2, this session): side buttons, USB-C port, camera deco
 > rings, DFM gate.  Composes only `koocadcam::engine::prim` 헬퍼 — OCCT 직접 호출
 > 4개 헤더뿐. 캡슐화 가설 검증의 첫 실증.
+>
+> **제품 리얼리즘 (commit ffb08e5, opt-in)** — 돌출 카메라 아일랜드(범프,
+> fuse-before-cut; 스텝 4 참조).  `buildAll` 은 워치와 동일하게 driven-dimension
+> `=expr` pre-pass([[engine/feature-watch#Driven-dimension pre-pass (`=expr` 필드, commit 68a2813)]])
+> 를 먼저 돌리고, `runDFM` 은 제품-정체성 DFM 브리지
+> ([[engine/feature-watch#제품-정체성 브리지 + ProductRegistry (commits 3aab310 · 6d9b8d1 · b3cd194)]])
+> 에 위임한다.  레지스트리가 두 제품을 한 진입점으로 빌드/검증한다.
 
 ---
 
@@ -51,6 +58,14 @@
 `{ offset_x_mm, offset_y_mm, hole_dia_mm, depth_mm }`; compound 툴 + `prim::cutMany`
 단일 Boolean.
 
+**돌출 카메라 아일랜드 (opt-in, commit ffb08e5).**  `spec["camera_island"]`
+(`{ center_x_mm, center_y_mm, width_mm, height_mm, bump_mm }`) 가 있으면 모던 폰의
+시그니처 **카메라 범프**를 만든다 — 후면(-Z 돌출)에 박스 플랫폼을 **fuse-before-cut**
+으로 붙인 뒤 렌즈를 뚫어 홀이 아일랜드+본체를 관통한다.  범프만큼 후면이 바깥으로
+이동하므로 홀 시작 Z·깊이를 보정.  `camera_island` 없으면 종전의 평평한 후면 홀
+그대로(기존 스펙/테스트 불변).  돌출 피처 = fuse 먼저, cut 나중 — 워치 용두/센서 돔과
+동일 원칙.  소스: [[src/engine/PhoneFrontModel.cpp]].
+
 ### 스텝 5 — `addSideButtons`
 
 평평한 ±X 측면에 직사각 버튼 포켓(볼륨·전원).  워치와 달리 사이드가 평면이므로
@@ -73,9 +88,12 @@
 
 ### `runDFM`
 
-`dfm::runProductDFM(shape, spec, dfm::phoneProfile())` 한 줄 위임 — 워치와 같은
-DFM-001..DFM-023 카탈로그를 phone 프로파일(minWall 0.40 mm, DFM-013 디스플레이
-평탄도, DFM-018 멀티 카메라 평행도)로 실행.  카탈로그: [[engine/dfm-rules]].
+`dfm::runDFMForSpec(shape, spec)` 한 줄 위임 (commit 3aab310) — 제품-정체성 DFM
+브리지가 `spec["product"]`/추론으로 phone 프로파일(minWall 0.40 mm, DFM-013 디스플레이
+평탄도, DFM-018 멀티 카메라 평행도)을 골라 워치와 같은 DFM-001..DFM-023 카탈로그를
+실행한다.  워치 `runDFM` 도 같은 브리지에 위임 — 브리지 상세:
+[[engine/feature-watch#제품-정체성 브리지 + ProductRegistry (commits 3aab310 · 6d9b8d1 · b3cd194)]].
+카탈로그: [[engine/dfm-rules#ProductDFM]].
 
 ### 캡슐화 검증
 

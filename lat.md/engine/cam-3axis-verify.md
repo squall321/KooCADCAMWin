@@ -127,6 +127,27 @@ Standard_Real d = distCalc.Value();
 - `distCalc.IsDone() == false` → 해당 샘플 점 건너뜀, 누락 카운트 별도 집계.
 - 공구 엔벨로프 생성 실패 (반경 ≤ 0) → 공구 목록 입력 오류로 사용자에게 반환.
 
+#### `CollisionCheck` — broad + exact narrow phase (commit 11b6276)
+
+소스 [[src/cam/CollisionCheck.hpp]] · [[src/cam/CollisionCheck.cpp]].
+`checkPath(path, wp, sample_step_mm, safe_z_margin, exact_narrow_phase=true)` 가
+경로를 `sample_step_mm` 간격으로 순회하며 두 단계로 판정한다.
+
+| Phase | 방법 | 비용 |
+|---|---|---|
+| **BROAD** | 단일 AABB reject — tip 이 stock top(+margin) 위 또는 XY footprint(+toolR) 밖이면 확실히 clear, skip (종전 bbox-only 동작) | O(1)/샘플 |
+| **NARROW** | broad 가 못 거른 샘플을 **실제 BRep**(`wp.shape()`)으로 확인: tip 이 솔리드 내부(`BRepClass3d_SolidClassifier`)거나 공구 컬럼이 실제 face 와 `safe_z_margin` 이내(`BRepExtrema_DistShapeShape`)일 때만 hit | per-샘플 BRep |
+
+narrow phase 가 bbox 의 두 오류를 제거한다 — **열린 포켓** 위 clearance 이동을
+bbox 가 포켓 내부를 솔리드로 봐 내던 false-positive, 그리고 **오목 벽**에서의
+false-negative.  `exact_narrow_phase=false` 로 legacy bbox-only 폴백.
+
+> **CAVEAT (dead code)** — `koo_cam` 은 현재 production caller 가 없다 (자체 유닛
+> 테스트만 구동).  `checkPath`/`generateAllToolpaths` 가 process Executor / GUI 에
+> 배선되기 전까지 이 정확도 개선은 dark ship 이다 (추적 중인 follow-up).  M6
+> `BRepExtrema_DistShapeShape` 파이프라인을 앞당겨 유닛 테스트를 유의미하게 만들고
+> 체커를 correct-by-design 으로 둔 것이 현재 가치.
+
 ---
 
 ### Stage 5 — 보고서 생성

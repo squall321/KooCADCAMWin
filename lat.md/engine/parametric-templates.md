@@ -30,6 +30,8 @@ src/engine/primitives/
  │                  annularRing(ax, outerR, innerR, h)
  │                  annularConeRing(ax, r1bottom, r2top, innerR, h)  ← 베젤 taper
  │                  sidePocketBox(frame, depth, length, width)       ← 측면 버튼/SIM 트레이
+ │                  roundedRectPocketTool(...)                       ← 폰/태블릿 화면 포켓
+ │                  domeSolid(ax, baseR, h, nSections)               ← freeform 돔 솔리드
  ├─ Cuts.hpp        cut(base, tool)
  │                  cutMany(base, [tool…])  ← compound + 단일 Boolean (배열 피처용)
  ├─ Fillets.hpp     EdgePredicate / FilletSpec
@@ -92,6 +94,39 @@ return pr::runStep("WatchFrontModel::addSideButtons",
 - DFM hook injection — M1.5 step 11 runDFM 도입 시.
 - 멀티 제품 — `PhoneFrontModel`이 같은 프리미티브로 첫 스텝을 작성하는
   시점 ([[engine/feature-phone]]) 까지는 워치 한 제품만 사용한다.
+
+---
+
+## primitives — Tool shapes
+
+`Tools.hpp` (소스 [[src/engine/primitives/Tools.hpp]]) 가 워크피스에 Boolean
+"tool" 로 쓰이는 표준 프리미티브를 모은다.  각 함수는 빌드 실패 시
+`Standard_Failure` 를 던지고 `prim::runStep` 이 `BuildWarning` 으로 변환한다.
+
+| 팩토리 | 형상 | 비고 |
+|---|---|---|
+| `cylinder / coneFrustum / box` | 직선 원통/원뿔대/박스 | `gp_Ax2` 기반 |
+| `annularRing(outerR, innerR, h)` | 직선 환형 링 | 외경−내경 cut |
+| `annularConeRing(r1, r2, innerR, h)` | 테이퍼 외벽 환형 | 베젤 taper |
+| `sidePocketBox(frame, depth, length, width)` | 측면 직사각 포켓 | 사이드 버튼/SIM |
+| `roundedRectPocketTool(center, sx, sy, depth, cornerR)` | 라운드 직사각 포켓 | 폰/태블릿 화면 |
+| `domeSolid(ax, baseR, h, nSections)` | **freeform 돔 솔리드** | 아래 참조 |
+
+### `domeSolid` — 첫 재사용 freeform 솔리드 블록 (commit a993001)
+
+`BRepOffsetAPI_ThruSections(isSolid=true, ruled=false)` 로 구면 캡(spherical-cap)
+프로파일을 따르는 원형 단면 stack 을 로프트해 **watertight 솔리드**(자유-서있는
+face 가 아님)를 만든다.  옆면은 곡면(BSpline) 이므로 출력이 진짜 freeform 지오메트리를
+담는다.  `baseR` 에서 시작해 apex 는 작은 양수 반경(`max(0.3, baseR*0.04)`)으로 클램프
+하여 ThruSections 가 degenerate top wire 없이 닫힌 캡을 만든다.  `nSections>=3` 가
+프로파일 충실도를 결정하고, `axis` Z 가 돔 축·`axis` location 이 base-circle 중심이다.
+
+이는 머시닝 스킬 라이브러리([[engine/skills]])의 freeform 트랙과 동일 OCCT 패밀리
+(`BRepOffsetAPI_ThruSections` 로프트)를 공유하는 **첫 product-side 소비자**다 — 곡면
+엔진이 비로소 실제 제품 피처(돔 글래스/센서 돔/카메라 범프 등 protruding 피처의
+fuse-before-cut 재료)로 쓰인다.  소비처:
+[[engine/feature-watch#스텝 4 — buildDisplayPocket]] (돔 사파이어 글래스),
+[[engine/feature-watch#스텝 8 — addRearSensors]] (후면 센서 돔).
 
 ---
 

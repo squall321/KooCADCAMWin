@@ -24,6 +24,38 @@
 
 ---
 
+## ProductDFM — 제품-무관 룰 엔진 + 정체성 브리지
+
+`src/engine/dfm/ProductDFM`(소스 [[src/engine/dfm/ProductDFM.hpp]]) 가 DFM-001..DFM-023
+카탈로그를 **단일 구현**으로 갖고, 제품별로 다른 임계값만 `DFMProfile` 로 분리한다 —
+워치/폰/향후 제품이 제품마다 ~370줄을 복붙하는 대신 한 룰 엔진을 공유한다(예전
+WatchFrontModel TODO "PhoneFrontModel will get its own copy" 를 대체).
+
+```cpp
+struct DFMProfile {
+  std::string product;                  // "watch" | "phone"
+  double      minWallMm = 0.40;         // DFM-001 한계
+  bool        displayPocketFlatnessRule = false;   // DFM-013 (phone)
+  bool        decoRingRule = false;                // DFM-018 (phone)
+};
+```
+
+| 함수 | 역할 |
+|---|---|
+| `watchProfile()` / `phoneProfile()` | canonical 프로파일 |
+| `profileForProduct(tag)` | 제품 태그 → 프로파일 (미지/빈 태그 → watch fallback) |
+| `runProductDFM(shape, spec, profile)` | 공유 카탈로그 실행 |
+| `runDFMForSpec(shape, spec)` | **컴파일-타임 제품 지식 없이** `spec["product"]`(없으면 키 추론: `cameras`/`port_hole` → phone, `bezel`/`crown_cavity` → watch)로 프로파일 선택 후 디스패치 |
+
+`runDFMForSpec` 이 product-identity 가 파이프라인을 관통하는 **첫 조각**이다 — 복원/
+적응된 디자인(spec 은 있어도 C++ 제품 타입이 없음)이 올바른 룰셋을 받는다.
+[[engine/feature-watch#스텝 11 — `runDFM`|WatchFrontModel::runDFM]] 과
+[[engine/feature-phone#runDFM|PhoneFrontModel::runDFM]] 이 이제 모두 이 한 줄에 위임하고,
+빌드-측 짝은 [[engine/feature-watch#제품-정체성 브리지 + ProductRegistry (commits 3aab310 · 6d9b8d1 · b3cd194)|ProductRegistry]] 다.
+DFM-018 데코링 surround 검사 구현은 [[engine/dfm-rules#DFM-018]] §구현 노트 참조.
+
+---
+
 ## 요약 테이블 (Summary Table)
 
 | ID | 이름 | 스코프 | 심각도 | 기준값 |
