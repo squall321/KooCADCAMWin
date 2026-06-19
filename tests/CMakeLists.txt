@@ -1334,6 +1334,14 @@ koo_apply_compiler_flags(extrude_roundtrip_test)
 add_test(NAME extrude_roundtrip COMMAND extrude_roundtrip_test)
 set_tests_properties(extrude_roundtrip PROPERTIES TIMEOUT 60 LABELS "re")
 
+add_executable(revolve_roundtrip_test re/revolve_roundtrip_test.cpp)
+target_link_libraries(revolve_roundtrip_test PRIVATE
+    GTest::gtest GTest::gtest_main koo_re koo_process koo_skills koo_engine)
+target_include_directories(revolve_roundtrip_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(revolve_roundtrip_test)
+add_test(NAME revolve_roundtrip COMMAND revolve_roundtrip_test)
+set_tests_properties(revolve_roundtrip PROPERTIES TIMEOUT 60 LABELS "re")
+
 # ── Layer 4 RE / Recognizer tests ─────────────────────────────
 add_executable(recognizer_test re/recognizer_test.cpp)
 target_link_libraries(recognizer_test PRIVATE

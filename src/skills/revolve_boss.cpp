@@ -258,7 +258,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         r.skill_id         = kSkillId;
         r.recovered_params = f.params;
         r.confidence       = 1.0;
-        r.matched_geometry = { { "source", "feature_history" } };
+        // "metadata_replay" is the cap-exempt source (see analyze()): a
+        // same-session revolve replay keeps full confidence and round-trips.
+        // "feature_history" was capped to 0.5 and dropped below 0.7.
+        r.matched_geometry = { { "source", "metadata_replay" } };
         out.push_back(r);
     }
     if (!out.empty()) return out;

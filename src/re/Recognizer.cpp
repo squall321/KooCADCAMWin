@@ -178,6 +178,7 @@
 #include "skills/set_screw_anti_rotation_pocket.hpp"
 #include "skills/eccentric_bushing_seat.hpp"
 #include "skills/extrude_boss_from_sketch.hpp"
+#include "skills/revolve_boss.hpp"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -398,6 +399,11 @@ std::vector<RecognizeFn> buildRegistry()
     // the recognizer knows.  Its metadata path round-trips an extrusion
     // (recognize -> regenerate); the geometric profile recovery is a follow-up.
     reg.emplace_back(&skill::extrude_boss_from_sketch::recognize);
+
+    // Sketch REVOLVE (the second sketch feature): metadata path round-trips a
+    // solid of revolution.  Its geometric path stays a weak sub-threshold signal
+    // until Workpiece exposes surface-of-revolution detection (follow-up).
+    reg.emplace_back(&skill::revolve_boss::recognize);
 
     return reg;
 }
