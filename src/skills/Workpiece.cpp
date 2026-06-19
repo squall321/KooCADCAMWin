@@ -17,8 +17,11 @@
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Torus.hxx>
 
 #include <spdlog/spdlog.h>
 
@@ -176,6 +179,25 @@ bool Workpiece::isFaceCylinder(int face_id) const
 {
     BRepAdaptor_Surface surf(m_faces.at(face_id));
     return surf.GetType() == GeomAbs_Cylinder;
+}
+
+bool Workpiece::isFaceRevolution(int face_id) const
+{
+    const GeomAbs_SurfaceType t = BRepAdaptor_Surface(m_faces.at(face_id)).GetType();
+    return t == GeomAbs_Cylinder || t == GeomAbs_Cone || t == GeomAbs_Torus ||
+           t == GeomAbs_Sphere   || t == GeomAbs_SurfaceOfRevolution;
+}
+
+std::optional<gp_Ax1> Workpiece::faceRevolutionAxis(int face_id) const
+{
+    BRepAdaptor_Surface surf(m_faces.at(face_id));
+    switch (surf.GetType()) {
+        case GeomAbs_Cylinder:             return surf.Cylinder().Axis();
+        case GeomAbs_Cone:                 return surf.Cone().Axis();
+        case GeomAbs_Torus:                return surf.Torus().Axis();
+        case GeomAbs_SurfaceOfRevolution:  return surf.AxeOfRevolution();
+        default:                           return std::nullopt;   // sphere / planar / other
+    }
 }
 
 // ── Edge geometry ────────────────────────────────────────────────────────
