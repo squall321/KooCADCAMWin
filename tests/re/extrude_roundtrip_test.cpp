@@ -15,10 +15,17 @@
 #include "skills/Workpiece.hpp"
 #include "skills/extrude_boss_from_sketch.hpp"
 
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 
+#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -74,4 +81,55 @@ TEST(ExtrudeRoundTrip, RecogniseThenRegenerateMatchesGeometry)
     ASSERT_FALSE(out2.workpiece->shape().IsNull());
     EXPECT_NEAR(volumeOf(out2.workpiece->shape()), vOrig, 1e-3)
         << "recovered params must regenerate the same extrusion";
+}
+
+namespace {
+// Shoelace area of a closed polygon given as {x,y} json points.
+double polyArea(const nlohmann::json& poly)
+{
+    double a = 0.0;
+    const std::size_t n = poly.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& p = poly[i];
+        const auto& q = poly[(i + 1) % n];
+        a += p["x"].get<double>() * q["y"].get<double>()
+           - q["x"].get<double>() * p["y"].get<double>();
+    }
+    return std::abs(a) * 0.5;
+}
+}  // namespace
+
+// PATH B (foreign geometry, NO feature history): a standalone hexagonal prism
+// is recognised as an extrusion by the congruent-cap-pair detector, recovering
+// the 6-vertex profile and the height from geometry alone.
+TEST(ExtrudeRoundTrip, RecognisesForeignPrismFromGeometry)
+{
+    const double R = 10.0, height = 5.0;
+    std::vector<gp_Pnt> v;
+    for (int k = 0; k < 6; ++k) {
+        const double a = k * M_PI / 3.0;
+        v.emplace_back(R * std::cos(a), R * std::sin(a), 0.0);
+    }
+    BRepBuilderAPI_MakeWire wireMk;
+    for (int k = 0; k < 6; ++k)
+        wireMk.Add(BRepBuilderAPI_MakeEdge(v[k], v[(k + 1) % 6]).Edge());
+    const TopoDS_Face face = BRepBuilderAPI_MakeFace(wireMk.Wire(), true).Face();
+    const TopoDS_Shape prism =
+        BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, height)).Shape();
+
+    // A fresh Workpiece carries NO feature history — only the geometric path can fire.
+    skill::Workpiece wp(prism);
+    const auto cands = skill::extrude_boss_from_sketch::recognize(wp);
+
+    const skill::RecognizedFeature* g = nullptr;
+    for (const auto& c : cands)
+        if (c.matched_geometry.value("source", std::string{}) == "geometry") { g = &c; break; }
+    ASSERT_NE(g, nullptr) << "a foreign hex prism must be recognised geometrically";
+    EXPECT_NEAR(g->recovered_params.value("height_mm", 0.0), height, 1e-3);
+    ASSERT_TRUE(g->recovered_params.contains("polygon"));
+    EXPECT_EQ(g->recovered_params["polygon"].size(), 6u) << "6-vertex profile recovered";
+    // Regular hexagon area = (3*sqrt(3)/2) R^2 ≈ 259.8.
+    const double expectArea = 1.5 * std::sqrt(3.0) * R * R;
+    EXPECT_NEAR(polyArea(g->recovered_params["polygon"]), expectArea, expectArea * 0.02)
+        << "recovered profile area must match the hexagon";
 }

@@ -11,7 +11,11 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepTools.hxx>
+#include <BRepTools_WireExplorer.hxx>
+#include <BRep_Tool.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
@@ -269,44 +273,80 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Geometric: a boss appears as a cluster of N vertical planar faces
-    // ALL sharing the same +Z (or face normal) cap face.  Approximate by
-    // counting all planar faces whose normal is perpendicular to the bbox
-    // dominant axis.
-    int verticalPlanarCount = 0;
-    double zMin = 1e30, zMax = -1e30;
+    // Geometric (path B): recognise an extrusion in FOREIGN geometry (no
+    // feature history).  An extrusion has two CONGRUENT, ANTI-PARALLEL planar
+    // cap faces separated by the extrude height, joined by side walls.  Recover
+    // the profile from one cap's outer wire and the height from the cap
+    // separation, so an imported STEP extrusion round-trips like a replayed one.
+    struct PlanarFace { int id; gp_Dir n; gp_Pnt c; double area; };
+    std::vector<PlanarFace> planar;
+    int verticalPlanar = 0;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFacePlanar(i)) continue;
-        gp_Dir n;
-        try { n = wp.faceNormal(i); }
-        catch (...) { continue; }
-        if (std::abs(n.Z()) < 0.05) ++verticalPlanarCount;
-        const gp_Pnt c = wp.faceCenter(i);
-        if (c.Z() < zMin) zMin = c.Z();
-        if (c.Z() > zMax) zMax = c.Z();
+        try {
+            const gp_Dir n = wp.faceNormal(i);
+            planar.push_back({ i, n, wp.faceCenter(i), wp.faceArea(i) });
+            if (std::abs(n.Z()) < 0.05) ++verticalPlanar;
+        } catch (...) { continue; }
     }
     // A pristine rectangular box has exactly 4 vertical planar faces and is NOT
     // a boss (project convention: bare stock recognises as nothing).  A real
-    // boss adds its own walls on top of the base outline (>= 4 + 4), so require
-    // MORE than a plain box's 4.  (This geometric path still can't recover the
-    // profile — empty polygon — so it stays a weak, sub-threshold signal until
-    // the foreign-profile recovery follow-up; the metadata path is the live one.)
-    if (verticalPlanarCount <= 4) return out;
+    // polygonal prism / boss has more side walls, so require > 4.
+    if (verticalPlanar <= 4) return out;
 
-    const double height = (zMax > zMin) ? (zMax - zMin) : 0.0;
+    // Best congruent anti-parallel cap pair (largest matching area).
+    int capA = -1, capB = -1;
+    double bestArea = 0.0, height = 0.0;
+    for (std::size_t i = 0; i < planar.size(); ++i) {
+        for (std::size_t j = i + 1; j < planar.size(); ++j) {
+            if (gp_Vec(planar[i].n).Dot(gp_Vec(planar[j].n)) > -0.98) continue;  // anti-parallel
+            const double r = planar[i].area / std::max(1e-9, planar[j].area);
+            if (r < 0.97 || r > 1.03) continue;                                   // congruent
+            const double d = std::abs(gp_Vec(planar[i].c, planar[j].c).Dot(gp_Vec(planar[i].n)));
+            if (d < 0.2) continue;                                                // not coincident
+            if (planar[i].area > bestArea) {
+                bestArea = planar[i].area; capA = planar[i].id; capB = planar[j].id; height = d;
+            }
+        }
+    }
+    if (capA < 0) return out;
+
+    // Recover capA's outer-wire profile in capA's local frame — the SAME frame
+    // apply() uses (origin=center, normal, xDir=orthogonalised global X), so the
+    // recovered (u,v) regenerate the identical profile.
+    const gp_Pnt origin = wp.faceCenter(capA);
+    const gp_Dir normal = wp.faceNormal(capA);
+    gp_Vec vx(gp::DX());
+    if (std::abs(vx.Dot(gp_Vec(normal))) > 0.99) vx = gp_Vec(gp::DY());
+    vx = vx - gp_Vec(normal) * vx.Dot(gp_Vec(normal));
+    if (vx.Magnitude() < 1e-9) return out;
+    vx.Normalize();
+    const gp_Vec vy = gp_Vec(normal).Crossed(vx);
+
+    json polyJson = json::array();
+    try {
+        const TopoDS_Wire ow = BRepTools::OuterWire(wp.face(capA));
+        for (BRepTools_WireExplorer wexp(ow); wexp.More(); wexp.Next()) {
+            const gp_Pnt p = BRep_Tool::Pnt(wexp.CurrentVertex());
+            const gp_Vec rel(origin, p);
+            polyJson.push_back({ { "x", rel.Dot(vx) }, { "y", rel.Dot(vy) } });
+        }
+    } catch (...) { return out; }
+    if (polyJson.size() < 3) return out;
+
     json recovered = {
-        { "entry_face_id",   -1 },
-        { "polygon",         json::array() },     // can't recover exact verts
+        { "entry_face_id",   capA },
+        { "polygon",         polyJson },
         { "height_mm",       height },
         { "draft_angle_deg", 0.0 },
     };
     json matched = {
-        { "vertical_planar_face_count", verticalPlanarCount },
-        { "z_min",                      zMin },
-        { "z_max",                      zMax },
+        { "source",       "geometry" },
+        { "cap_face_a",   capA },
+        { "cap_face_b",   capB },
+        { "vertex_count", static_cast<int>(polyJson.size()) },
     };
-    const double conf = std::clamp(0.40 + 0.02 * verticalPlanarCount, 0.40, 0.80);
-    out.push_back(RecognizedFeature{ kSkillId, recovered, conf, matched });
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.9, matched });
     return out;
 }
 

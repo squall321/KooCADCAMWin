@@ -478,6 +478,15 @@ const std::unordered_set<std::string>& preciseRecognizers()
         "chamfer_edge", "fillet_edge", "bore_cylindrical", "bore_with_shelf",
         "ream", "spot_drill", "spot_face", "mill_circular_pocket",
         "mill_rect_pocket", "mill_slot", "bolt_hole_metric_spec",
+        // NOTE: extrude_boss_from_sketch is deliberately NOT cap-exempt.  Its
+        // geometric path B recovers a correct profile+height (proven by
+        // recognize() round-trip tests), but at full confidence it false-positives
+        // on machining parts that happen to have a congruent planar cap pair
+        // (fpscan CapDemotesAllDomainCompoundCandidates).  It therefore stays
+        // capped to 0.5 in analyze(); surfacing it at >= 0.7 needs a more
+        // specific extrusion gate (distinguish a real prism from a pocketed
+        // block) — a tracked follow-up.  The metadata replay path is cap-exempt
+        // via source="metadata_replay" and remains the live round-trip path.
     };
     return kPrecise;
 }
