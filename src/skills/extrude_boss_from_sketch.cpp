@@ -10,10 +10,12 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Tool.hxx>
+#include <GProp_GProps.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp.hxx>
@@ -333,6 +335,38 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         }
     } catch (...) { return out; }
     if (polyJson.size() < 3) return out;
+
+    // SPECIFICITY gate 1 (topology, exact): a TRUE straight-walled N-gon prism
+    // has EXACTLY N side walls + 2 caps = N+2 faces.  A pocketed/drilled/slotted
+    // block has the same congruent cap pair but EXTRA faces (the feature's walls
+    // + floor), so faceCount > N+2.  This catches even a SMALL machined feature
+    // that volume tolerance alone would miss (fpscan rect_pocket / slot).
+    if (wp.faceCount() != static_cast<int>(polyJson.size()) + 2) return out;
+
+    // SPECIFICITY gate 2 (volume): a TRUE prism has volume == profile_area *
+    // height — belt-and-braces against a degenerate same-face-count case (a
+    // boss-on-stock has more volume, a through-feature less).
+    double profArea = 0.0;
+    {
+        const std::size_t n = polyJson.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto& p = polyJson[i];
+            const auto& q = polyJson[(i + 1) % n];
+            profArea += p["x"].get<double>() * q["y"].get<double>()
+                      - q["x"].get<double>() * p["y"].get<double>();
+        }
+        profArea = std::abs(profArea) * 0.5;
+    }
+    const double expectedVol = profArea * height;
+    double actualVol = 0.0;
+    try {
+        GProp_GProps gp;
+        BRepGProp::VolumeProperties(wp.shape(), gp);
+        actualVol = gp.Mass();
+    } catch (...) { return out; }
+    if (actualVol <= 1e-6 ||
+        std::abs(expectedVol - actualVol) > 0.03 * actualVol)
+        return out;   // not a pure prism (material added or removed)
 
     json recovered = {
         { "entry_face_id",   capA },
