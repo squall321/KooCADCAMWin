@@ -11,6 +11,7 @@
 #include <adapt/NaturalLanguageStub.hpp>
 #include <adapt/PlanEditor.hpp>
 #include <engine/PhoneFrontModel.hpp>
+#include <cam/ToolpathPlan.hpp>
 #include <engine/ProductRegistry.hpp>
 #include <engine/WatchFrontModel.hpp>
 #include <process/Executor.hpp>
@@ -178,10 +179,22 @@ void MainWindow::onExecutePlan(const koocadcam::process::ProcessPlan& plan)
         }
 
         if (result.ok()) {
-            statusBar()->showMessage(
-                tr("Plan executed: %1 step(s) OK")
-                    .arg(static_cast<int>(result.signatures.size())),
-                4000);
+            QString msg = tr("Plan executed: %1 step(s) OK")
+                              .arg(static_cast<int>(result.signatures.size()));
+            // CAM: generate + collision-verify toolpaths for the machined
+            // features of the executed (e.g. reverse-engineered) plan.
+            if (result.workpiece) {
+                const auto cam = koocadcam::cam::planAndVerify(*result.workpiece);
+                if (!cam.toolpaths.empty()) {
+                    msg += tr(" — CAM: %1 toolpath(s), %2")
+                               .arg(static_cast<int>(cam.toolpaths.size()))
+                               .arg(cam.ok
+                                        ? tr("collision-free")
+                                        : tr("%1 collision(s)!")
+                                              .arg(static_cast<int>(cam.collisions.size())));
+                }
+            }
+            statusBar()->showMessage(msg, 5000);
         } else {
             QString msg = tr("Plan failed at step %1").arg(result.failedAtStep);
             if (!result.errors.empty()) {

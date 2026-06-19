@@ -1316,6 +1316,15 @@ koo_apply_compiler_flags(cam_test)
 add_test(NAME cam COMMAND cam_test)
 set_tests_properties(cam PROPERTIES TIMEOUT 60 LABELS "cam")
 
+# CAM integration glue (planAndVerify: generate toolpaths + collision-check).
+add_executable(toolpath_plan_test cam/toolpath_plan_test.cpp)
+target_link_libraries(toolpath_plan_test PRIVATE
+    GTest::gtest GTest::gtest_main koo_cam koo_skills koo_engine)
+target_include_directories(toolpath_plan_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(toolpath_plan_test)
+add_test(NAME toolpath_plan COMMAND toolpath_plan_test)
+set_tests_properties(toolpath_plan PROPERTIES TIMEOUT 60 LABELS "cam")
+
 # ── Layer 4 RE / Recognizer tests ─────────────────────────────
 add_executable(recognizer_test re/recognizer_test.cpp)
 target_link_libraries(recognizer_test PRIVATE

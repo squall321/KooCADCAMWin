@@ -25,6 +25,7 @@ target_link_libraries(koo_gui
         koo_process
         koo_re
         koo_adapt
+        koo_cam        # MainWindow's onExecutePlan calls cam::planAndVerify
         spdlog::spdlog
 )
 
