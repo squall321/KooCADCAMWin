@@ -35,6 +35,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -785,6 +787,30 @@ DFMProfile phoneProfile()
     p.displayPocketFlatnessRule = true;
     p.decoRingRule              = true;
     return p;
+}
+
+DFMProfile profileForProduct(const std::string& product)
+{
+    if (product == "phone") return phoneProfile();
+    if (product == "watch") return watchProfile();
+    spdlog::warn("profileForProduct: unknown product '{}' — using watch profile", product);
+    return watchProfile();
+}
+
+DFMReport runDFMForSpec(const TopoDS_Shape& shape, const nlohmann::json& spec)
+{
+    // Prefer an explicit product tag; otherwise infer from discriminating keys.
+    std::string product = spec.value("product", std::string{});
+    if (product.empty()) {
+        if (spec.contains("cameras") || spec.contains("port_hole") ||
+            spec.contains("camera_deco_rings"))
+            product = "phone";
+        else if (spec.contains("bezel") || spec.contains("crown_cavity") ||
+                 spec.contains("lugs"))
+            product = "watch";
+        // else: profileForProduct falls back to watch
+    }
+    return runProductDFM(shape, spec, profileForProduct(product));
 }
 
 }  // namespace koocadcam::engine::dfm

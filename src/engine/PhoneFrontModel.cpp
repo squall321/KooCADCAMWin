@@ -320,6 +320,7 @@ nlohmann::json PhoneFrontModel::defaultSpec()
 {
     return nlohmann::json{
         { "schema_version", "0.1.0" },
+        { "product",        "phone" },
         { "product_name",   "Default Phone 76x160" },
         { "base", {
             { "width_mm",            76.0 },
@@ -390,7 +391,8 @@ nlohmann::json PhoneFrontModel::defaultSpec()
 DFMReport PhoneFrontModel::runDFM(const TopoDS_Shape& shape,
                                    const nlohmann::json& spec)
 {
-    return dfm::runProductDFM(shape, spec, dfm::phoneProfile());
+    // Delegate to the product-tag/inference dispatcher (see ProductDFM.hpp).
+    return dfm::runDFMForSpec(shape, spec);
 }
 
 }  // namespace koocadcam::engine

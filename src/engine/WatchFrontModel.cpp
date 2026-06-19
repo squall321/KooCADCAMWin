@@ -538,7 +538,9 @@ TopoDS_Shape WatchFrontModel::buildAll(const nlohmann::json& specIn,
 DFMReport WatchFrontModel::runDFM(const TopoDS_Shape& shape,
                                    const nlohmann::json& spec)
 {
-    return dfm::runProductDFM(shape, spec, dfm::watchProfile());
+    // Delegate to the product-tag/inference dispatcher so a watch design gets
+    // its rule set through the same bridge a recovered/adapted design uses.
+    return dfm::runDFMForSpec(shape, spec);
 }
 
 
@@ -547,6 +549,7 @@ nlohmann::json WatchFrontModel::defaultSpec()
 {
     return nlohmann::json{
         { "schema_version", "1.0.0" },
+        { "product",        "watch" },
         { "product_name",   "Default Round Watch 44mm" },
         { "form_factor",    "round" },
         { "base", {
