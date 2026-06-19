@@ -7,10 +7,16 @@
 #include "engine/WatchFrontModel.hpp"
 #include "io/JsonSpec.hpp"
 
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAbs_SurfaceType.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 
 #include <nlohmann/json.hpp>
@@ -301,6 +307,108 @@ TEST(WatchFeaturesM15, LugBboxSymmetric)
     // Y extent must exceed case diameter (44) by some lug projection.
     EXPECT_GT(yMax - yMin, 50.0)
         << "Y extent should grow past 50mm with 6mm lugs on both sides";
+}
+
+// 11b. Domed sapphire glass (opt-in) — the first product feature to exercise
+// the freeform engine.  glass_profile="domed" fuses a watertight ThruSections
+// dome solid over the display; "flat"/absent (the default) is unchanged.
+TEST(WatchFeaturesM15, DomedGlassIsValidFreeformSolidAndRaisesTop)
+{
+    using namespace koocadcam;
+    nlohmann::json flat = engine::WatchFrontModel::defaultSpec();
+    ASSERT_TRUE(flat.contains("display_pocket"));
+
+    nlohmann::json domed = flat;
+    domed["display_pocket"]["glass_profile"]         = "domed";
+    domed["display_pocket"]["glass_dome_height_mm"]  = 1.5;
+
+    std::vector<engine::BuildWarning> wf, wd;
+    TopoDS_Shape sFlat  = engine::WatchFrontModel::buildAll(flat,  wf);
+    TopoDS_Shape sDomed = engine::WatchFrontModel::buildAll(domed, wd);
+    ASSERT_FALSE(sFlat.IsNull());
+    ASSERT_FALSE(sDomed.IsNull());
+    EXPECT_TRUE(BRepCheck_Analyzer(sDomed).IsValid())
+        << "domed glass must be a valid (watertight) solid";
+
+    // The dome adds material and raises the top by ~the dome height.
+    EXPECT_GT(volumeOf(sDomed), volumeOf(sFlat)) << "domed glass should add material";
+    Bnd_Box bf, bd;
+    BRepBndLib::AddOptimal(sFlat, bf);
+    BRepBndLib::AddOptimal(sDomed, bd);
+    double xf, yf, zf, Xf, Yf, Zf, xd, yd, zd, Xd, Yd, Zd;
+    bf.Get(xf, yf, zf, Xf, Yf, Zf);
+    bd.Get(xd, yd, zd, Xd, Yd, Zd);
+    EXPECT_GT(Zd, Zf + 0.5) << "dome should raise the top by ~dome height";
+
+    // The lofted dome sides are curved (BSpline/Bezier) — proof the freeform
+    // engine actually ran (a flat watch has only planar/cylindrical/toroidal faces).
+    int curved = 0;
+    for (TopExp_Explorer ex(sDomed, TopAbs_FACE); ex.More(); ex.Next()) {
+        BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+        const GeomAbs_SurfaceType t = surf.GetType();
+        if (t == GeomAbs_BSplineSurface || t == GeomAbs_BezierSurface) ++curved;
+    }
+    EXPECT_GT(curved, 0) << "domed glass must introduce a curved (freeform) face";
+}
+
+// 11c. Protruding crown knob (opt-in) — ADDS material (fused knob) and
+// protrudes past the case at 3 o'clock.  Default (no body params) is the
+// original subtractive cavity, unchanged.
+TEST(WatchFeaturesM15, CrownBodyAddsMaterialAndProtrudes)
+{
+    using namespace koocadcam;
+    nlohmann::json plain = engine::WatchFrontModel::defaultSpec();
+    ASSERT_TRUE(plain.contains("crown_cavity"));
+
+    nlohmann::json knob = plain;
+    knob["crown_cavity"]["body_dia_mm"]        = 3.5;
+    knob["crown_cavity"]["body_protrusion_mm"] = 1.5;
+    knob["crown_cavity"]["knurl_count"]        = 8;
+
+    std::vector<engine::BuildWarning> wp, wk;
+    TopoDS_Shape sPlain = engine::WatchFrontModel::buildAll(plain, wp);
+    TopoDS_Shape sKnob  = engine::WatchFrontModel::buildAll(knob,  wk);
+    ASSERT_FALSE(sPlain.IsNull());
+    ASSERT_FALSE(sKnob.IsNull());
+    EXPECT_TRUE(BRepCheck_Analyzer(sKnob).IsValid())
+        << "knurled crown knob must be a valid solid";
+
+    // Knob (minus 8 small knurl notches + the shaft) still nets material added.
+    EXPECT_GT(volumeOf(sKnob), volumeOf(sPlain)) << "crown knob should add material";
+
+    // The knob protrudes past the case at 3 o'clock (+X, side_angle_deg=0).
+    Bnd_Box bp, bk;
+    BRepBndLib::AddOptimal(sPlain, bp);
+    BRepBndLib::AddOptimal(sKnob, bk);
+    double xp, yp, zp, Xp, Yp, Zp, xk, yk, zk, Xk, Yk, Zk;
+    bp.Get(xp, yp, zp, Xp, Yp, Zp);
+    bk.Get(xk, yk, zk, Xk, Yk, Zk);
+    EXPECT_GT(Xk, Xp + 0.5) << "crown knob should protrude past the case in +X";
+}
+
+// 11d. Rear sensor dome (opt-in) — ADDS a raised dome on the back.
+TEST(WatchFeaturesM15, RearSensorDomeAddsMaterial)
+{
+    using namespace koocadcam;
+    nlohmann::json flatSensors = engine::WatchFrontModel::defaultSpec();
+    ASSERT_TRUE(flatSensors.contains("rear_sensors"));
+    ASSERT_FALSE(flatSensors["rear_sensors"].empty());
+
+    nlohmann::json domed = flatSensors;
+    for (auto& s : domed["rear_sensors"]) {
+        s["dome_height_mm"] = 1.0;
+        s["dome_dia_mm"]    = s.value("dia_mm", 3.0) + 2.0;
+    }
+
+    std::vector<engine::BuildWarning> wf, wd;
+    TopoDS_Shape sFlat  = engine::WatchFrontModel::buildAll(flatSensors, wf);
+    TopoDS_Shape sDomed = engine::WatchFrontModel::buildAll(domed,       wd);
+    ASSERT_FALSE(sFlat.IsNull());
+    ASSERT_FALSE(sDomed.IsNull());
+    EXPECT_TRUE(BRepCheck_Analyzer(sDomed).IsValid())
+        << "rear sensor domes must yield a valid solid";
+    EXPECT_GT(volumeOf(sDomed), volumeOf(sFlat))
+        << "rear sensor domes should add material (raised dome > window cut)";
 }
 
 // 12. runDFM passes on the default sample — the product we ship must clear

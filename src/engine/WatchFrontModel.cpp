@@ -168,7 +168,23 @@ StepResult WatchFrontModel::buildDisplayPocket(const TopoDS_Shape& in,
 
             const TopoDS_Shape pocket = pr::cylinder(
                 pr::axisAtZ(gp_Pnt(0.0, 0.0, zBottom)), dPocket / 2.0, height);
-            return pr::cut(in, pocket);
+            TopoDS_Shape result = pr::cut(in, pocket);
+
+            // Opt-in: a domed sapphire glass fused over the display.  Default
+            // (absent / "flat") is unchanged, so existing specs/tests are not
+            // affected.  The dome is a watertight ThruSections SOLID (curved
+            // BSpline sides), the first product feature to use the freeform
+            // engine; it rises `glass_dome_height_mm` above the case top.
+            if (dp.value("glass_profile", std::string("flat")) == "domed") {
+                const double domeH = dp.value("glass_dome_height_mm", 1.5);
+                const double rimR  = dPocket / 2.0;
+                const double embed = 0.2;   // interpenetrate the case for a clean fuse
+                const gp_Ax2 domeAx =
+                    pr::axisAtZ(gp_Pnt(0.0, 0.0, bb.zMax - embed));
+                const TopoDS_Shape dome = pr::domeSolid(domeAx, rimR, domeH + embed);
+                result = pr::fuse(result, dome);
+            }
+            return result;
         });
 }
 
@@ -190,6 +206,54 @@ StepResult WatchFrontModel::addCrownCavity(const TopoDS_Shape& in,
             const double R       = pr::optimalBbox(in).outerRadiusXY();
             const auto   frame   = pr::sideFrameAt(R, angleDeg, heightZ);
             const gp_Ax2 ax      = frame.ax2InwardRadial();
+
+            // Opt-in: a PROTRUDING crown knob (the realism feature).  When
+            // body_protrusion_mm/body_dia_mm are given, fuse an outward tapered
+            // knob (fuse-BEFORE-cut), optionally knurl it with sequential radial
+            // notch cuts (never one compound Boolean over overlapping cutters),
+            // then bore the shaft through.  Default (no body params) keeps the
+            // original subtractive cavity+shaft so existing specs/tests are
+            // unchanged.
+            const double bodyProt = cc.value("body_protrusion_mm", 0.0);
+            const double bodyDia  = cc.value("body_dia_mm", 0.0);
+            if (bodyProt > 0.0 && bodyDia > 0.0) {
+                const gp_Dir outward = frame.inwardRadial.Reversed();
+                const double embed   = 0.3;   // interpenetrate the case for a clean fuse
+                const gp_Pnt base(frame.center.X() + frame.inwardRadial.X() * embed,
+                                  frame.center.Y() + frame.inwardRadial.Y() * embed,
+                                  frame.center.Z() + frame.inwardRadial.Z() * embed);
+                const gp_Ax2 knobAx(base, outward);
+                const double rBody = bodyDia / 2.0;
+                const TopoDS_Shape knob =
+                    pr::coneFrustum(knobAx, rBody, rBody * 0.85, embed + bodyProt);
+                TopoDS_Shape current = pr::fuse(in, knob);
+
+                // Knurl: N radial notches around the knob rim, cut SEQUENTIALLY.
+                const int knurl = cc.value("knurl_count", 0);
+                if (knurl >= 3) {
+                    const gp_Dir kx = knobAx.XDirection();
+                    const gp_Dir ky = knobAx.YDirection();
+                    const double rNotch = std::max(0.15, rBody * 0.12);
+                    const double zMid   = embed + bodyProt * 0.5;
+                    for (int i = 0; i < knurl; ++i) {
+                        const double phi = 2.0 * M_PI * i / knurl;
+                        const double ux = std::cos(phi), uy = std::sin(phi);
+                        // notch centre on the knob rim, cutter axis pointing inward
+                        const gp_Pnt c(base.X() + outward.X() * zMid + (kx.X() * ux + ky.X() * uy) * rBody,
+                                       base.Y() + outward.Y() * zMid + (kx.Y() * ux + ky.Y() * uy) * rBody,
+                                       base.Z() + outward.Z() * zMid + (kx.Z() * ux + ky.Z() * uy) * rBody);
+                        const gp_Dir inDir(-(kx.X() * ux + ky.X() * uy),
+                                           -(kx.Y() * ux + ky.Y() * uy),
+                                           -(kx.Z() * ux + ky.Z() * uy));
+                        const TopoDS_Shape notch =
+                            pr::cylinder(gp_Ax2(c, inDir), rNotch, rNotch * 2.0);
+                        current = pr::cut(current, notch);
+                    }
+                }
+
+                const TopoDS_Shape shaft = pr::cylinder(ax, shaftDia / 2.0, R + 1.0);
+                return pr::cut(current, shaft);
+            }
 
             const TopoDS_Shape cavity = pr::cylinder(ax, diameter / 2.0, depth);
             const TopoDS_Shape shaft  = pr::cylinder(ax, shaftDia / 2.0, R + 1.0);
@@ -278,6 +342,27 @@ StepResult WatchFrontModel::addRearSensors(const TopoDS_Shape& in,
         [&](std::vector<BuildWarning>&) {
             const auto bb = pr::optimalBbox(in);
 
+            // Opt-in: a raised sensor dome (PPG/heart-rate style) on the rear
+            // face for any sensor with dome_height_mm > 0.  Fuse the domes
+            // (material ADDED, watertight ThruSections solids pointing -Z out of
+            // the back) BEFORE cutting the optical windows.  Default (no
+            // dome_height_mm) is unchanged.
+            TopoDS_Shape current = in;
+            std::vector<TopoDS_Shape> domes;
+            for (const auto& s : spec["rear_sensors"]) {
+                const double domeH = s.value("dome_height_mm", 0.0);
+                if (domeH <= 0.0) continue;
+                const double x       = s["offset_x_mm"].get<double>();
+                const double y       = s["offset_y_mm"].get<double>();
+                const double dia     = s["dia_mm"].get<double>();
+                const double domeDia = s.value("dome_dia_mm", dia + 2.0);
+                const double embed   = 0.2;
+                // base just inside the rear face, dome grows in -Z (outward).
+                const gp_Ax2 ax(gp_Pnt(x, y, bb.zMin + embed), gp_Dir(0, 0, -1));
+                domes.push_back(pr::domeSolid(ax, domeDia / 2.0, domeH + embed));
+            }
+            if (!domes.empty()) current = pr::fuseMany(in, domes);
+
             std::vector<TopoDS_Shape> tools;
             tools.reserve(spec["rear_sensors"].size());
             for (const auto& s : spec["rear_sensors"]) {
@@ -285,12 +370,15 @@ StepResult WatchFrontModel::addRearSensors(const TopoDS_Shape& in,
                 const double y   = s["offset_y_mm"].get<double>();
                 const double dia = s["dia_mm"].get<double>();
                 const double dep = s["depth_mm"].get<double>();
-                // Hole axis +Z, starts 0.05 mm below rear face for clean cut.
+                const double domeH = s.value("dome_height_mm", 0.0);
+                // Hole axis +Z (window bored from rear).  When a dome is present
+                // the rear face moved out by domeH, so start the cut below it.
                 const double kOverhang = 0.05;
-                const gp_Ax2 ax(gp_Pnt(x, y, bb.zMin - kOverhang), gp::DZ());
-                tools.push_back(pr::cylinder(ax, dia / 2.0, dep + kOverhang));
+                const double startZ = bb.zMin - domeH - kOverhang;
+                const gp_Ax2 ax(gp_Pnt(x, y, startZ), gp::DZ());
+                tools.push_back(pr::cylinder(ax, dia / 2.0, dep + domeH + kOverhang));
             }
-            return pr::cutMany(in, tools);
+            return pr::cutMany(current, tools);
         });
 }
 
