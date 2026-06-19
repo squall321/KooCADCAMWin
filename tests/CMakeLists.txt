@@ -1370,6 +1370,16 @@ set_tests_properties(phone PROPERTIES
     LABELS "phone"
 )
 
+# ── Driven-dimension pre-pass test (modeling roadmap #3a) ─────
+add_executable(spec_expr_test io/spec_expr_test.cpp)
+target_link_libraries(spec_expr_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_io koo_engine)
+target_include_directories(spec_expr_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(spec_expr_test)
+add_test(NAME spec_expr COMMAND spec_expr_test)
+set_tests_properties(spec_expr PROPERTIES TIMEOUT 60 LABELS "io")
+
 # ── JsonSpec validate/roundtrip test (M1.1) ───────────────────
 add_executable(json_spec_test json_spec/json_spec_test.cpp)
 target_link_libraries(json_spec_test PRIVATE

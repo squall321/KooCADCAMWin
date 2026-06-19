@@ -18,6 +18,8 @@
 #include "probe/GeometryProbe.hpp"
 #include "dfm/ProductDFM.hpp"
 
+#include "io/SpecExpr.hpp"
+
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
@@ -491,9 +493,19 @@ StepResult WatchFrontModel::addSecondaryFillets(const TopoDS_Shape& in,
 }
 
 // ── Convenience: chain all M1.5 steps (1–10) ───────────────────────────────
-TopoDS_Shape WatchFrontModel::buildAll(const nlohmann::json& spec,
+TopoDS_Shape WatchFrontModel::buildAll(const nlohmann::json& specIn,
                                         std::vector<BuildWarning>& warnings)
 {
+    // Driven-dimension pre-pass: resolve any "=expr" fields (e.g.
+    // "= base.diameter_mm - 2") into numbers before the steps read them.  A
+    // spec with no expressions is returned unchanged, so this is transparent.
+    nlohmann::json spec = specIn;
+    std::string exErr;
+    if (!io::resolveExpressions(spec, exErr)) {
+        warnings.push_back(BuildWarning{ "E_SPEC_EXPR", exErr });
+        return {};
+    }
+
     WatchFrontModel m;
 
     auto absorb = [&warnings](StepResult&& r, const char* tag) -> TopoDS_Shape {

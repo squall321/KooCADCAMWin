@@ -15,6 +15,8 @@
 #include "primitives/StepGuard.hpp"
 #include "primitives/Tools.hpp"
 
+#include "io/SpecExpr.hpp"
+
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pnt.hxx>
@@ -258,9 +260,18 @@ StepResult PhoneFrontModel::addCameraDecoRings(const TopoDS_Shape& in,
 }
 
 // ── Convenience: chain all steps (1–7) ─────────────────────────────────────
-TopoDS_Shape PhoneFrontModel::buildAll(const nlohmann::json& spec,
+TopoDS_Shape PhoneFrontModel::buildAll(const nlohmann::json& specIn,
                                         std::vector<BuildWarning>& warnings)
 {
+    // Driven-dimension pre-pass (see io/SpecExpr.hpp): resolve "=expr" fields to
+    // numbers before the steps read them; a spec with none is unchanged.
+    nlohmann::json spec = specIn;
+    std::string exErr;
+    if (!io::resolveExpressions(spec, exErr)) {
+        warnings.push_back(BuildWarning{ "E_SPEC_EXPR", exErr });
+        return {};
+    }
+
     PhoneFrontModel m;
 
     auto absorb = [&warnings](StepResult&& r, const char* tag) -> TopoDS_Shape {
