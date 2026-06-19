@@ -42,20 +42,26 @@ Workpiece ctor([Workpiece.cpp:26-30](../src/skills/Workpiece.cpp#L26))는 `enume
 
 </details>
 
-### #2 — CAM 정확 BRep 충돌 검증 (BRepExtrema_DistShapeShape + SolidClassifier) — HIGH / M
-CollisionCheck가 workpiece를 단일 AABB로 축약([CollisionCheck.cpp:98-99](../src/cam/CollisionCheck.cpp#L98)) → 모든 오목 피처(포켓/베젤 캐비티/카운터보어)가 기하학적으로 소거됨(포켓 진입=false negative, 개방 포켓 위 클리어런스=false positive). AABB broad-phase 유지 + 정확 테스트 추가.
+### #2 — CAM 정확 BRep 충돌 검증 (BRepExtrema_DistShapeShape + SolidClassifier) ✅ **완료 (11b6276)** — HIGH / M
+broad(단일 AABB reject 유지) + narrow(tip-IN SolidClassifier / 툴기둥 DistShapeShape) 2단계. 개방포켓 위 클리어런스 false-positive + 벽 진입 false-negative 제거. `exact_narrow_phase=true` 기본, 포켓 회귀 테스트 2건. **CAVEAT: koo_cam은 production 호출처 0(dead code) — checkPath를 Executor/GUI에 연결하기 전엔 dark ship(추적 follow-up).**
 
-### #3 — 구동 치수 pre-pass (JSON spec 위 선택적 per-field expr) — MED / M
-치수 간 관계가 독립 JSON 값 + 하드코딩 커플링 (구동/구속 없음). 빌더 실행 전 spec 위 expr 해석 pre-pass.
+### #3 — 구동 치수 pre-pass (JSON spec 위 선택적 per-field expr) ✅ **완료 (68a2813, 3a)** — MED / M
+`io/SpecExpr.hpp`: `=expr` 문자열 leaf를 숫자로 해석(dotted-path 참조, `+ - * /`, 괄호, precedence, 단항, chained-ref fixpoint). plain string/숫자 불변. Watch/Phone buildAll의 transparent pre-pass(header-only). watch→phone 멀티제품 파라메트릭 직결. (3b XCAF는 #4-doc 참조 — 소비자 없어 보류)
 
-### #4 — XCAF 어셈블리 import (named instance + placement) — MED / L
-멀티솔리드를 named instance + per-instance placement로 (현재 단일 익명 compound 반환). 폰=다부품.
+### #4-doc — XCAF 어셈블리 import (named instance + placement) ⏸ **보류 (소비자 없음)** — MED / L
+스코핑 결과 named instance에 현재 소비자 없음(PartsLayout가 flatten). 폰 다부품 어셈블리가 실제 필요해질 때 진행.
 
-### #5 — 워치 돌출 크라운(널링)+후면 센서 돔 (첫 제품 충실도 패스) — MED / M
-크라운이 순수 차감([WatchFrontModel.cpp:194-196](../src/engine/WatchFrontModel.cpp#L194)) — 돌출 노브/널링 없음. coneFrustum/fuseMany 기존 활용. fuse-before-cut, 순차 cut(OCCT compound-cut rule).
+### #5 — 워치 돌출 크라운(널링)+후면 센서 돔 (첫 제품 충실도 패스) ✅ **완료 (a993001)** — MED / M
+크라운 순수 차감→돌출 knob(coneFrustum, fuse-before-cut)+널링(순차 cut)+샤프트. 후면 센서 평면홀→융기 돔. 전부 opt-in. 재료 추가+돌출 검증 테스트.
 
-### #6 — freeform 스킬 1개를 제품에 watertight solid로 연결: 돔 사파이어 글래스(solid loft) — MED / L
-9개 freeform 스킬(real OCCT apply: ThruSections/PointsToBSpline/MakePipe/MakeOffsetShape)이 두 제품 어디에도 미사용(grep ZERO). 평면 글래스→돔. `solid=true` ThruSections(loft_surface는 face를 compound에 fuse→non-manifold 위험, 이 슬라이스는 watertight solid 필수). `glass_profile: flat|domed` opt-in.
+### #6 — freeform 스킬 1개를 제품에 watertight solid로 연결: 돔 사파이어 글래스(solid loft) ✅ **완료 (a993001)** — MED / L
+`pr::domeSolid`(ThruSections solid=true watertight) 신규 엔진 primitive. `display_pocket.glass_profile="domed"`로 돔 글래스 fuse. **freeform 엔진을 처음으로 제품에 연결**(곡면 BSpline face 검증). opt-in, 기본 flat 불변.
 
-## 별개 프론티어 (이 로드맵 밖)
+### 입력공간 감사 (사용자 옵션 #4) ✅ **완료 (영구 가드)**
+게이트(validateOrHeal)가 어떤 입력이든 무효 출력을 런타임 영구 차단. 측정: 전 778 스킬@test입력=2 invalid(수정됨), precise-tier@극단스케일(0.1×~20×)=0 invalid. `corpus_scale_small/large` ctest로 극값 geometric 유효성 영구 회귀 가드 추가. (전 778 bespoke-input fuzz는 per-skill 생성기 필요 — 별도 follow-up)
+
+## 별개 프론티어 / Follow-ups (이 로드맵 밖)
+- **CAM wiring**: koo_cam(#2)을 Executor/GUI 파이프라인에 연결 — 그래야 충돌 검증이 실제로 실림
+- **전 778 입력-fuzz**: per-skill 입력 생성기 → 전수 입력공간 감사
+- **XCAF 어셈블리**(#4-doc): 폰 다부품 소비자 생길 때
 - watch→phone 제품 간 전이 ([[project_multiproduct_transfer_gap]]) — product-identity 다리. 모델링 깊이가 아니라 제품 간 일반화.

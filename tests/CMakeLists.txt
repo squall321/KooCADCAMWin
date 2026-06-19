@@ -183,6 +183,19 @@ add_test(NAME corpus_basic
             --exempt ream,spot_face,bolt_hole_metric_spec)
 set_tests_properties(corpus_basic PROPERTIES TIMEOUT 600 LABELS "corpus;re")
 
+# ── Geometry scale-robustness guard (modeling roadmap #4) ─────────────
+# The Workpiece-ctor validate/heal gate throws on a BRepCheck-invalid or
+# ShapeFix-unhealable output, so synthesising the precise-tier corpus at extreme
+# scales (a generic input-space sweep) without the recall gate must still exit
+# cleanly — any skill that produces invalid geometry at a parameter extreme
+# makes apply() throw and fails this test.  No --gate: recall is allowed to drop
+# at extreme scale (DFM windows are absolute, by design); we only assert that
+# the geometry itself stays valid.  Measured robust over 0.1x..20x.
+add_test(NAME corpus_scale_small COMMAND koo_corpus 2 --scale 0.1)
+add_test(NAME corpus_scale_large COMMAND koo_corpus 2 --scale 20)
+set_tests_properties(corpus_scale_small corpus_scale_large
+    PROPERTIES TIMEOUT 600 LABELS "corpus;re")
+
 # ── Product-spec JSON Schema conformance test (breakthrough plan B6.1) ──
 add_executable(spec_schema_test schema/spec_schema_test.cpp)
 target_link_libraries(spec_schema_test PRIVATE
