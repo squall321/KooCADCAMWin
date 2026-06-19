@@ -177,6 +177,7 @@
 #include "skills/tab_lock_anti_rotation.hpp"
 #include "skills/set_screw_anti_rotation_pocket.hpp"
 #include "skills/eccentric_bushing_seat.hpp"
+#include "skills/extrude_boss_from_sketch.hpp"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -392,6 +393,11 @@ std::vector<RecognizeFn> buildRegistry()
     reg.emplace_back(&skill::tab_lock_anti_rotation::recognize);
     reg.emplace_back(&skill::set_screw_anti_rotation_pocket::recognize);
     reg.emplace_back(&skill::eccentric_bushing_seat::recognize);
+
+    // Sketch-based ADDITIVE feature (extrude): the first non-machining feature
+    // the recognizer knows.  Its metadata path round-trips an extrusion
+    // (recognize -> regenerate); the geometric profile recovery is a follow-up.
+    reg.emplace_back(&skill::extrude_boss_from_sketch::recognize);
 
     return reg;
 }

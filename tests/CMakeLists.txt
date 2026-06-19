@@ -1325,6 +1325,15 @@ koo_apply_compiler_flags(toolpath_plan_test)
 add_test(NAME toolpath_plan COMMAND toolpath_plan_test)
 set_tests_properties(toolpath_plan PROPERTIES TIMEOUT 60 LABELS "cam")
 
+# ── Sketch-extrusion RE round-trip (recognize -> regenerate) ──
+add_executable(extrude_roundtrip_test re/extrude_roundtrip_test.cpp)
+target_link_libraries(extrude_roundtrip_test PRIVATE
+    GTest::gtest GTest::gtest_main koo_re koo_process koo_skills koo_engine)
+target_include_directories(extrude_roundtrip_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(extrude_roundtrip_test)
+add_test(NAME extrude_roundtrip COMMAND extrude_roundtrip_test)
+set_tests_properties(extrude_roundtrip PROPERTIES TIMEOUT 60 LABELS "re")
+
 # ── Layer 4 RE / Recognizer tests ─────────────────────────────
 add_executable(recognizer_test re/recognizer_test.cpp)
 target_link_libraries(recognizer_test PRIVATE

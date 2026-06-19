@@ -260,7 +260,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         r.skill_id         = kSkillId;
         r.recovered_params = f.params;
         r.confidence       = 1.0;
-        r.matched_geometry = { { "source", "feature_history" } };
+        // "metadata_replay" is the cap-exempt source (Recognizer analyze():
+        // a same-session replay keeps full confidence); "feature_history" was
+        // NOT exempt, so the round-trip candidate was silently capped to 0.5
+        // and dropped below the 0.7 threshold.
+        r.matched_geometry = { { "source", "metadata_replay" } };
         out.push_back(r);
     }
     if (!out.empty()) return out;
@@ -281,7 +285,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         if (c.Z() < zMin) zMin = c.Z();
         if (c.Z() > zMax) zMax = c.Z();
     }
-    if (verticalPlanarCount < 3) return out;  // need at least a triangle
+    // A pristine rectangular box has exactly 4 vertical planar faces and is NOT
+    // a boss (project convention: bare stock recognises as nothing).  A real
+    // boss adds its own walls on top of the base outline (>= 4 + 4), so require
+    // MORE than a plain box's 4.  (This geometric path still can't recover the
+    // profile — empty polygon — so it stays a weak, sub-threshold signal until
+    // the foreign-profile recovery follow-up; the metadata path is the live one.)
+    if (verticalPlanarCount <= 4) return out;
 
     const double height = (zMax > zMin) ? (zMax - zMin) : 0.0;
     json recovered = {
