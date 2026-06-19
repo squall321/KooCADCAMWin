@@ -54,6 +54,24 @@ TEST(ProductRegistry, ProductFromSpecTagAndInference)
     EXPECT_EQ(productFromSpec(nlohmann::json::object()), "watch");
 }
 
+// productFromGeometry gives a RECOVERED design (a shape with no spec) a product
+// identity from its bounding-box shape alone.
+TEST(ProductRegistry, ProductFromGeometryInfersFromShape)
+{
+    std::vector<BuildWarning> w1, w2;
+    TopoDS_Shape watch = WatchFrontModel::buildAll(WatchFrontModel::defaultSpec(), w1);
+    TopoDS_Shape phone = PhoneFrontModel::buildAll(PhoneFrontModel::defaultSpec(), w2);
+    ASSERT_FALSE(watch.IsNull());
+    ASSERT_FALSE(phone.IsNull());
+
+    EXPECT_EQ(productFromGeometry(watch), "watch")
+        << "a squarish thin disc must be recognised as a watch";
+    EXPECT_EQ(productFromGeometry(phone), "phone")
+        << "an elongated thin slab must be recognised as a phone";
+    // A null shape does not throw.
+    EXPECT_EQ(productFromGeometry(TopoDS_Shape{}), "watch");
+}
+
 // buildProduct dispatches to the right builder and yields the same geometry as
 // the per-class buildAll for that product.
 TEST(ProductRegistry, BuildProductMatchesPerClassBuilder)
