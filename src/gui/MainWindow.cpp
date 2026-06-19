@@ -11,6 +11,7 @@
 #include <adapt/NaturalLanguageStub.hpp>
 #include <adapt/PlanEditor.hpp>
 #include <engine/PhoneFrontModel.hpp>
+#include <engine/ProductRegistry.hpp>
 #include <engine/WatchFrontModel.hpp>
 #include <process/Executor.hpp>
 #include <skills/Skill.hpp>
@@ -107,8 +108,10 @@ void MainWindow::onSpecChanged()
         nlohmann::json spec = phone ? m_phonePanel->currentSpec()
                                     : m_paramPanel->currentSpec();
         std::vector<BuildWarning> warnings;
-        TopoDS_Shape shape = phone ? PhoneFrontModel::buildAll(spec, warnings)
-                                   : WatchFrontModel::buildAll(spec, warnings);
+        // Dispatch through the product registry: the spec's "product" tag (set
+        // by each panel's default, else inferred) selects the builder, so the
+        // GUI no longer hard-codes the watch-vs-phone branch for the build.
+        TopoDS_Shape shape = koocadcam::engine::buildProduct(spec, warnings);
         if (shape.IsNull()) {
             QString msg = QString("%1 build failed").arg(product);
             if (!warnings.empty())
@@ -120,8 +123,7 @@ void MainWindow::onSpecChanged()
 
         // Run the manufacturability gate and surface the verdict (B6.4: the
         // live loop now reports DFM for both products, not just the demo menu).
-        auto report = phone ? PhoneFrontModel::runDFM(shape, spec)
-                            : WatchFrontModel::runDFM(shape, spec);
+        auto report = koocadcam::engine::runDFMForProduct(shape, spec);
         QString status = QString("%1 rebuilt — DFM %2 (%3 finding(s))")
             .arg(product)
             .arg(report.passed ? "PASS" : "FAIL")

@@ -223,6 +223,15 @@ koo_apply_compiler_flags(product_identity_test)
 add_test(NAME product_identity COMMAND product_identity_test)
 set_tests_properties(product_identity PROPERTIES TIMEOUT 120 LABELS "engine;dfm")
 
+# ── Product registry test (unified product-tag-driven build/validate) ─
+add_executable(product_registry_test engine/product_registry_test.cpp)
+target_link_libraries(product_registry_test PRIVATE
+    GTest::gtest GTest::gtest_main koo_engine)
+target_include_directories(product_registry_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(product_registry_test)
+add_test(NAME product_registry COMMAND product_registry_test)
+set_tests_properties(product_registry PROPERTIES TIMEOUT 120 LABELS "engine")
+
 # ── GeometryProbe unit test (breakthrough plan B5.2-B5.3) ───────────
 add_executable(geometry_probe_test engine/geometry_probe_test.cpp)
 target_link_libraries(geometry_probe_test PRIVATE
