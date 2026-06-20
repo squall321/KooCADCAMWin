@@ -93,6 +93,12 @@ Toolpath drillHoleToolpath(const skill::FeatureSignature& sig);
 // Result: ~10-30 segments depending on diameter / step parameters.
 Toolpath millCircularPocketToolpath(const skill::FeatureSignature& sig);
 
+// mill_rect_pocket → a finishing perimeter contour offset inward by the tool
+// radius; mill_slot → the centreline traverse (start → end at depth).  Both are
+// features the recognizer already produces but slice-1 CAM could not machine.
+Toolpath millRectPocketToolpath(const skill::FeatureSignature& sig);
+Toolpath millSlotToolpath(const skill::FeatureSignature& sig);
+
 // ── Multi-feature dispatcher ─────────────────────────────────────────────
 
 // Generate toolpaths for ALL features in a vector of signatures (e.g.,

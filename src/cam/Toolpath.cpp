@@ -300,6 +300,78 @@ Toolpath millCircularPocketToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── mill_rect_pocket toolpath ─────────────────────────────────────────────
+// A single finishing perimeter contour offset inward by the tool radius (a
+// real, collision-safe path; multi-pass roughing is a future refinement).
+Toolpath millRectPocketToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double cx    = sig.params.value("center_x_mm", 0.0);
+    const double cy    = sig.params.value("center_y_mm", 0.0);
+    const double L     = sig.params.value("length_mm", 10.0);
+    const double W     = sig.params.value("width_mm", 10.0);
+    const double depth = sig.params.value("depth_mm", 1.0);
+    const double toolD = (sig.tooling.tool_dia_mm > 0.0)
+                       ? sig.tooling.tool_dia_mm : std::min(L, W) * 0.4;
+    const double toolR = toolD * 0.5;
+
+    const double safe_z = kSafeZAboveStock_mm;
+    const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                 sig.tooling.feed_per_tooth_mm);
+    const double hx = std::max(0.1, L / 2.0 - toolR);
+    const double hy = std::max(0.1, W / 2.0 - toolR);
+    const double zc = -depth;
+
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // plunge
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy - hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy + hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy + hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // close
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── mill_slot toolpath ────────────────────────────────────────────────────
+// Traverse the slot centreline (start -> end) at depth — the slot is defined by
+// its two end points + width, so the centreline IS the cutting path.
+Toolpath millSlotToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double sx    = sig.params.value("start_x_mm", 0.0);
+    const double sy    = sig.params.value("start_y_mm", 0.0);
+    const double ex    = sig.params.value("end_x_mm", 10.0);
+    const double ey    = sig.params.value("end_y_mm", 0.0);
+    const double depth = sig.params.value("depth_mm", 1.0);
+
+    const double safe_z = kSafeZAboveStock_mm;
+    const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                 sig.tooling.feed_per_tooth_mm);
+    const double zc = -depth;
+
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(sx, sy, safe_z), 0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(sx, sy, zc),     feed, 0, 0, 0 }); // plunge
+    tp.segments.push_back({ M::Linear, gp_Pnt(ex, ey, zc),     feed, 0, 0, 0 }); // traverse
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(ex, ey, safe_z), 0.0,  0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── Dispatcher ───────────────────────────────────────────────────────────
 
 std::vector<Toolpath> generateAllToolpaths(
@@ -312,6 +384,10 @@ std::vector<Toolpath> generateAllToolpaths(
             out.push_back(drillHoleToolpath(sig));
         } else if (sig.skill_id == "mill_circular_pocket") {
             out.push_back(millCircularPocketToolpath(sig));
+        } else if (sig.skill_id == "mill_rect_pocket") {
+            out.push_back(millRectPocketToolpath(sig));
+        } else if (sig.skill_id == "mill_slot") {
+            out.push_back(millSlotToolpath(sig));
         } else {
             spdlog::warn("cam::generateAllToolpaths: no generator for skill_id '{}'; "
                          "emitting empty toolpath", sig.skill_id);
