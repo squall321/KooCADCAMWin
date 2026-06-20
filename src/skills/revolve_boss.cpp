@@ -5,11 +5,18 @@
 #include "Workpiece.hpp"
 #include "engine/primitives/Cuts.hpp"
 
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <Bnd_Box.hxx>
 #include <TopoDS.hxx>
+#include <gp_Cone.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Vec.hxx>
 #include <gp.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Pnt.hxx>
@@ -266,26 +273,86 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    // Geometric: a revolve produces axisymmetric cylindrical / toroidal faces.
-    // Count cylindrical faces whose axis is along +Z.
-    int axialCylCount = 0;
+    // Geometric path B: detect a SOLID OF REVOLUTION (a lathe/revolve part) by
+    // grouping COAXIAL revolution faces (cylinder/cone/torus/...) and confirming
+    // every planar face is a CAP (perpendicular to the axis).  Recovers the axis
+    // + radial/axial envelope.  The full meridian profile (for exact
+    // regeneration) is a follow-up — left empty here.
+    struct RevFace { int id; gp_Ax1 axis; };
+    std::vector<RevFace> revFaces;
     for (int i = 0; i < wp.faceCount(); ++i) {
-        if (!wp.isFaceCylinder(i)) continue;
-        ++axialCylCount;
+        if (!wp.isFaceRevolution(i)) continue;
+        if (auto ax = wp.faceRevolutionAxis(i)) revFaces.push_back({ i, *ax });
     }
-    if (axialCylCount < 1) return out;
+    if (revFaces.empty()) return out;
+
+    // Coaxial test (parallel directions + same axis line) — mirrors the helper
+    // in terminal_block_post.cpp.
+    auto coaxial = [](const gp_Ax1& a, const gp_Ax1& b) {
+        if (!a.Direction().IsParallel(b.Direction(), 1e-2)) return false;
+        const gp_Vec v(b.Location(), a.Location());
+        const gp_Vec d(b.Direction());
+        return (v - d * v.Dot(d)).Magnitude() < 0.5;
+    };
+    int bestCount = 0;
+    gp_Ax1 axis;
+    for (const auto& rf : revFaces) {
+        int cnt = 0;
+        for (const auto& o : revFaces) if (coaxial(rf.axis, o.axis)) ++cnt;
+        if (cnt > bestCount) { bestCount = cnt; axis = rf.axis; }
+    }
+    if (bestCount < 1) return out;
+    const gp_Dir aDir = axis.Direction();
+    const gp_Pnt aLoc = axis.Location();
+
+    // SPECIFICITY gate: a pure solid of revolution's planar faces are all CAPS
+    // (normal PARALLEL to the axis).  A drilled/pocketed block has WALLS (normal
+    // perpendicular to the axis), so reject any planar face that is not a cap —
+    // this keeps a machined part from being mis-read as a revolution.
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        if (!wp.isFacePlanar(i)) continue;
+        gp_Dir n;
+        try { n = wp.faceNormal(i); } catch (...) { return out; }
+        if (std::abs(gp_Vec(n).Dot(gp_Vec(aDir))) < 0.9) return out;  // a wall
+    }
+
+    // Envelope: max radius from the revolution faces' radii; axial span from the
+    // solid bbox projected onto the axis.
+    double maxR = 0.0;
+    for (const auto& rf : revFaces) {
+        BRepAdaptor_Surface s(wp.face(rf.id));
+        if (s.GetType() == GeomAbs_Cylinder)   maxR = std::max(maxR, s.Cylinder().Radius());
+        else if (s.GetType() == GeomAbs_Cone)  maxR = std::max(maxR, s.Cone().RefRadius());
+    }
+    double xMin, yMin, zMin, xMax, yMax, zMax;
+    wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
+    double aMin = 1e30, aMax = -1e30;
+    const double cx[2] = { xMin, xMax }, cy[2] = { yMin, yMax }, cz[2] = { zMin, zMax };
+    for (int ix = 0; ix < 2; ++ix)
+        for (int iy = 0; iy < 2; ++iy)
+            for (int iz = 0; iz < 2; ++iz) {
+                const double t = gp_Vec(aLoc, gp_Pnt(cx[ix], cy[iy], cz[iz])).Dot(gp_Vec(aDir));
+                aMin = std::min(aMin, t);
+                aMax = std::max(aMax, t);
+            }
+    const double axialSpan = aMax - aMin;
+    if (maxR < 0.1 || axialSpan < 0.1) return out;
 
     json recovered = {
-        { "profile_polyline",     json::array() },
-        { "axis_origin",          { 0.0, 0.0, 0.0 } },
-        { "axis_dir",             { 0.0, 0.0, 1.0 } },
+        { "profile_polyline",     json::array() },   // meridian recovery = follow-up
+        { "axis_origin",          { aLoc.X(), aLoc.Y(), aLoc.Z() } },
+        { "axis_dir",             { aDir.X(), aDir.Y(), aDir.Z() } },
         { "revolution_angle_deg", 360.0 },
+        { "max_radius_mm",        maxR },
+        { "axial_span_mm",        axialSpan },
     };
     json matched = {
-        { "axial_cyl_face_count", axialCylCount },
+        { "source",                "geometry" },
+        { "revolution_face_count", bestCount },
+        { "max_radius_mm",         maxR },
+        { "axial_span_mm",         axialSpan },
     };
-    const double conf = std::clamp(0.40 + 0.05 * axialCylCount, 0.40, 0.75);
-    out.push_back(RecognizedFeature{ kSkillId, recovered, conf, matched });
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.9, matched });
     return out;
 }
 

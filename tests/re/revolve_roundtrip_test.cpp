@@ -14,12 +14,19 @@
 #include "re/Recognizer.hpp"
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
+#include "skills/drill_hole.hpp"
 #include "skills/revolve_boss.hpp"
 
 #include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 
+#include <cmath>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -81,4 +88,46 @@ TEST(RevolveRoundTrip, RecogniseThenRegenerateMatchesGeometry)
     ASSERT_FALSE(out2.workpiece->shape().IsNull());
     EXPECT_NEAR(volumeOf(out2.workpiece->shape()), vOrig, 1e-3)
         << "recovered params must regenerate the same revolution";
+}
+
+// GEOMETRIC path B: a foreign solid of revolution (a plain cylinder, no feature
+// history) is detected by the coaxial-revolution-face grouping, recovering the
+// axis + radial/axial envelope.
+TEST(RevolveRoundTrip, RecognisesForeignCylinderAxisAndEnvelope)
+{
+    const double R = 5.0, H = 10.0;
+    const TopoDS_Shape cyl =
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), R, H).Shape();
+    skill::Workpiece wp(cyl);
+
+    const auto cands = skill::revolve_boss::recognize(wp);
+    const skill::RecognizedFeature* g = nullptr;
+    for (const auto& c : cands)
+        if (c.matched_geometry.value("source", std::string{}) == "geometry") { g = &c; break; }
+    ASSERT_NE(g, nullptr) << "a foreign solid of revolution must be detected";
+    EXPECT_NEAR(g->recovered_params.value("max_radius_mm", 0.0), R, 1e-3);
+    EXPECT_NEAR(g->recovered_params.value("axial_span_mm", 0.0), H, 1e-3);
+    // Axis is +Z.
+    ASSERT_TRUE(g->recovered_params.contains("axis_dir"));
+    EXPECT_NEAR(std::abs(g->recovered_params["axis_dir"][2].get<double>()), 1.0, 1e-6);
+}
+
+// SPECIFICITY: a drilled block has a cylinder (the hole) but also walls PARALLEL
+// to the axis, so it must NOT be mis-read as a solid of revolution.
+TEST(RevolveRoundTrip, DrilledBlockIsNotARevolution)
+{
+    auto stock = skill::createCuboidStock(40.0, 40.0, 20.0);
+    skill::drill_hole::Input in;
+    in.position_x_mm = 20.0; in.position_y_mm = 20.0;
+    in.diameter_mm = 8.0; in.depth_mm = 12.0;
+    const auto out = skill::drill_hole::apply(*stock, in);
+    ASSERT_NE(out.workpiece, nullptr);
+
+    // Rebuild a fresh Workpiece (no feature history) so only the geometric path
+    // can fire — the wall gate must reject it.
+    skill::Workpiece wp(out.workpiece->shape());
+    const auto cands = skill::revolve_boss::recognize(wp);
+    for (const auto& c : cands)
+        EXPECT_NE(c.matched_geometry.value("source", std::string{}), "geometry")
+            << "a drilled block (axis-parallel walls) must not read as a revolution";
 }
