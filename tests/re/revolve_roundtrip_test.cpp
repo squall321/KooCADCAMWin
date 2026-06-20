@@ -18,6 +18,7 @@
 #include "skills/revolve_boss.hpp"
 
 #include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
@@ -132,6 +133,30 @@ TEST(RevolveRoundTrip, RecognisesForeignCylinderAxisAndEnvelope)
     EXPECT_NEAR(zHi - zLo, H, 1e-3)   << "meridian z-span == cylinder height";
     EXPECT_NEAR(area, R * H, R * H * 0.01)
         << "meridian area == R*H (revolves to pi*R^2*H by Pappus)";
+}
+
+// A CONE solid of revolution is detected (axis/envelope) but its meridian can't
+// be recovered yet, so it must surface BELOW 0.7 — otherwise it would replay
+// into the Executor with an empty profile that apply() rejects.
+TEST(RevolveRoundTrip, ConeWithUnrecoverableMeridianStaysSubThreshold)
+{
+    const TopoDS_Shape cone =
+        BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 8.0, 3.0, 10.0).Shape();
+    skill::Workpiece wp(cone);
+    const auto cands = skill::revolve_boss::recognize(wp);
+    for (const auto& c : cands)
+        if (c.matched_geometry.value("source", std::string{}) == "geometry") {
+            EXPECT_FALSE(c.recovered_params["profile_polyline"].size() >= 3u)
+                << "cone meridian is not recovered yet";
+            EXPECT_LT(c.confidence, 0.7)
+                << "an empty-meridian revolve must not reach the Executor";
+        }
+    // And end-to-end: it must not appear as a >=0.7 candidate.
+    const auto filtered = re::analyzeFiltered(wp, 0.7);
+    for (const auto& c : filtered)
+        if (c.skill_id == "revolve_boss")
+            EXPECT_GE(c.recovered_params["profile_polyline"].size(), 3u)
+                << "any surfaced revolve must carry a regeneratable profile";
 }
 
 // SPECIFICITY: a drilled block has a cylinder (the hole) but also walls PARALLEL

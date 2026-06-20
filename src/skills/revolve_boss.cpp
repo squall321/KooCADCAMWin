@@ -375,8 +375,16 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         { "revolution_face_count", bestCount },
         { "max_radius_mm",         maxR },
         { "axial_span_mm",         axialSpan },
+        { "meridian_recovered",    !meridian.empty() },
     };
-    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.9, matched });
+    // Surface at full confidence ONLY when the meridian was recovered (a single
+    // cylinder), so a regeneratable revolve reaches the Executor.  A cone /
+    // stepped / hollow revolution has an EMPTY profile that apply() would reject
+    // (profile.size() < 3) — emit it as a weak, sub-threshold detection so it is
+    // NOT replayed into a failing Executor step.  (Full cone/stepped meridian
+    // recovery is a follow-up.)
+    const double conf = meridian.empty() ? 0.5 : 0.9;
+    out.push_back(RecognizedFeature{ kSkillId, recovered, conf, matched });
     return out;
 }
 
