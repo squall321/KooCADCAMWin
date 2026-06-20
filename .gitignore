@@ -61,3 +61,7 @@ _*/
 /DELETE_REPORT.txt
 /all_tests_run.log
 /*_commit_msg.txt
+
+# local build/verify helpers (not for repo)
+koo_targeted.ps1
+koo_fullverify.ps1
