@@ -1501,6 +1501,16 @@ koo_apply_compiler_flags(integration_sketch_re_executor)
 add_test(NAME integration_sketch_re_executor COMMAND integration_sketch_re_executor)
 set_tests_properties(integration_sketch_re_executor PROPERTIES TIMEOUT 120 LABELS "integration")
 
+# ── Integration: RE -> CAM end-to-end (recognize -> execute -> G-code) ──
+add_executable(integration_re_to_gcode_e2e integration/re_to_gcode_e2e_test.cpp)
+target_link_libraries(integration_re_to_gcode_e2e PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills koo_process koo_re koo_cam koo_io koo_adapt koo_engine)
+target_include_directories(integration_re_to_gcode_e2e SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(integration_re_to_gcode_e2e)
+add_test(NAME integration_re_to_gcode_e2e COMMAND integration_re_to_gcode_e2e)
+set_tests_properties(integration_re_to_gcode_e2e PROPERTIES TIMEOUT 120 LABELS "integration")
+
 # ── Integration: reframe loop — original vision proven with measured dims ──
 # synth frame -> STEP(strip metadata) -> geometric recognize -> part moves
 # +15mm -> adapt -> re-execute -> STEP -> recognize -> assert holes followed.
