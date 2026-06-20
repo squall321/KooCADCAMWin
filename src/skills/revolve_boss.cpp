@@ -338,10 +338,34 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     const double axialSpan = aMax - aMin;
     if (maxR < 0.1 || axialSpan < 0.1) return out;
 
+    // MERIDIAN recovery: for the simplest revolution — a SINGLE solid cylinder
+    // about ±Z (what apply() can regenerate) — the meridian is the rectangle
+    // {(0,zMin),(R,zMin),(R,zMax),(0,zMax)}, which revolves back to the same
+    // cylinder (a full (r,z) round-trip).  Stepped/coned/hollow meridians are a
+    // follow-up; leave the profile empty (envelope-only) for those.
+    json meridian = json::array();
+    int cylCount = 0;
+    int cylId = -1;
+    for (const auto& rf : revFaces)
+        if (BRepAdaptor_Surface(wp.face(rf.id)).GetType() == GeomAbs_Cylinder) {
+            ++cylCount; cylId = rf.id;
+        }
+    if (cylCount == 1 && std::abs(aDir.Z()) > 0.99) {
+        const double R = BRepAdaptor_Surface(wp.face(cylId)).Cylinder().Radius();
+        Bnd_Box fb;
+        BRepBndLib::AddOptimal(wp.face(cylId), fb);
+        double fx0, fy0, fz0, fx1, fy1, fz1;
+        fb.Get(fx0, fy0, fz0, fx1, fy1, fz1);
+        meridian = json::array({
+            { { "r", 0.0 }, { "z", fz0 } }, { { "r", R }, { "z", fz0 } },
+            { { "r", R   }, { "z", fz1 } }, { { "r", 0.0 }, { "z", fz1 } },
+        });
+    }
+
     json recovered = {
-        { "profile_polyline",     json::array() },   // meridian recovery = follow-up
-        { "axis_origin",          { aLoc.X(), aLoc.Y(), aLoc.Z() } },
-        { "axis_dir",             { aDir.X(), aDir.Y(), aDir.Z() } },
+        { "profile_polyline",     meridian },
+        { "axis_origin",          { 0.0, 0.0, 0.0 } },   // ±Z axis through origin (apply convention)
+        { "axis_dir",             { 0.0, 0.0, aDir.Z() > 0 ? 1.0 : -1.0 } },
         { "revolution_angle_deg", 360.0 },
         { "max_radius_mm",        maxR },
         { "axial_span_mm",        axialSpan },

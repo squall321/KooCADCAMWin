@@ -110,6 +110,28 @@ TEST(RevolveRoundTrip, RecognisesForeignCylinderAxisAndEnvelope)
     // Axis is +Z.
     ASSERT_TRUE(g->recovered_params.contains("axis_dir"));
     EXPECT_NEAR(std::abs(g->recovered_params["axis_dir"][2].get<double>()), 1.0, 1e-6);
+
+    // MERIDIAN: a single solid cylinder recovers the rectangle meridian
+    // {(0,0),(R,0),(R,H),(0,H)} which revolves back to the same cylinder.  Verify
+    // the recovered (r,z) profile directly (revolving it is exact by Pappus:
+    // 2*pi * r_centroid(R/2) * area(R*H) = pi*R^2*H).
+    ASSERT_TRUE(g->recovered_params.contains("profile_polyline"));
+    const auto& prof = g->recovered_params["profile_polyline"];
+    ASSERT_EQ(prof.size(), 4u) << "a solid cylinder's meridian is a 4-point rectangle";
+
+    double maxR = 0.0, zLo = 1e30, zHi = -1e30, area = 0.0;
+    for (std::size_t i = 0; i < prof.size(); ++i) {
+        const double r = prof[i]["r"].get<double>(), z = prof[i]["z"].get<double>();
+        maxR = std::max(maxR, r);
+        zLo = std::min(zLo, z); zHi = std::max(zHi, z);
+        const auto& q = prof[(i + 1) % prof.size()];
+        area += r * q["z"].get<double>() - q["r"].get<double>() * z;   // shoelace (r,z)
+    }
+    area = std::abs(area) * 0.5;
+    EXPECT_NEAR(maxR, R, 1e-3)        << "meridian max radius == cylinder radius";
+    EXPECT_NEAR(zHi - zLo, H, 1e-3)   << "meridian z-span == cylinder height";
+    EXPECT_NEAR(area, R * H, R * H * 0.01)
+        << "meridian area == R*H (revolves to pi*R^2*H by Pappus)";
 }
 
 // SPECIFICITY: a drilled block has a cylinder (the hole) but also walls PARALLEL
