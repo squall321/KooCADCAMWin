@@ -148,12 +148,17 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     const TopoDS_Shape newShape = pr::cut(wp.shape(), cutter);
 
-    // Build signature.
+    // Build signature.  Emit the resolved entry-plane Z so the CAM generator
+    // places the toolpath on the real surface (matches drill_hole; the
+    // generator falls back to 0 for ambiguous non-vertical axes).
+    const bool vertical = std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6;
+    const double entryZ = vertical ? (adir.Z() < 0 ? zMax : zMin) : 0.0;
     json params = {
         { "entry_face_kind",      "resolved_id" },
         { "entry_face_id",        *entryId },
         { "position_x_mm",        in.position_x_mm },
         { "position_y_mm",        in.position_y_mm },
+        { "position_z_mm",        entryZ },
         { "axis_dir",             { adir.X(), adir.Y(), adir.Z() } },
         { "diameter_mm",          in.diameter_mm },
         { "depth_mm",             in.depth_mm },

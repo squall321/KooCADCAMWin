@@ -59,6 +59,18 @@ TEST(ToolpathPlan, GeneratesToolpathForRectPocket)
     EXPECT_GE(report.toolpaths.front().segments.size(), 5u)
         << "a perimeter contour has plunge + 4 sides + retract";
     EXPECT_EQ(report.ok, report.collisions.empty());
+
+    // WORK OFFSET: the stock top is at Z=20, so the contour must be cut at
+    // Z ~ 20-depth = 16 and the rapid must clear Z=20 — not the old Z=0 frame.
+    // (mill_rect_pocket::apply must emit center_z_mm for the generator to see
+    // the offset; before that it silently fell back to 0.)
+    double zHi = -1e9, zLo = 1e9;
+    for (const auto& s : report.toolpaths.front().segments) {
+        zHi = std::max(zHi, s.end_point.Z());
+        zLo = std::min(zLo, s.end_point.Z());
+    }
+    EXPECT_GT(zHi, 20.0) << "rapid/retract must clear the real top surface (Z~20)";
+    EXPECT_GT(zLo, 10.0) << "cut depth must be near entryZ-depth (~16), not ~ -4";
 }
 
 // A milled slot gets a centreline-traverse toolpath.

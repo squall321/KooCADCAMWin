@@ -124,10 +124,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     const TopoDS_Shape newShape = pr::cut(wp.shape(), cutter);
 
+    // Emit the entry-plane Z (top face, since axis = -Z) so the CAM generator
+    // places the slot traverse on the real surface, not Z=0.
     json params = {
         { "entry_face_id",  *entryId },
         { "start_x_mm",     in.start_x_mm },
         { "start_y_mm",     in.start_y_mm },
+        { "start_z_mm",     zMax },
         { "end_x_mm",       in.end_x_mm },
         { "end_y_mm",       in.end_y_mm },
         { "axis_dir",       { in.axis_dir.X(), in.axis_dir.Y(), in.axis_dir.Z() } },

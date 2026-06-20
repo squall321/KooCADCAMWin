@@ -102,11 +102,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     const TopoDS_Shape newShape = pr::cut(wp.shape(), cutter);
 
-    // Build signature.
+    // Build signature.  Emit the entry-plane Z (top face, since axis = -Z) so
+    // the CAM generator places the toolpath on the real surface, not Z=0.
     json params = {
         { "entry_face_id", *entryId },
         { "center_x_mm",   in.center_x_mm },
         { "center_y_mm",   in.center_y_mm },
+        { "center_z_mm",   zMax },
         { "axis_dir",      { in.axis_dir.X(), in.axis_dir.Y(), in.axis_dir.Z() } },
         { "length_mm",     in.length_mm },
         { "width_mm",      in.width_mm },
