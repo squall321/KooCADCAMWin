@@ -872,6 +872,54 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
         }
     }
 
+    // REVOLVE subsumption: a HOLLOW solid of revolution's inner wall is part of
+    // its own profile, but that concave cylinder is also co-recognised as a
+    // coaxial bore/drill.  Drop that inner-wall hole so re-synthesis does not
+    // re-cut it and over-remove material (measured ring drift ~ -157 mm3).
+    {
+        struct Ring { double x, y, innerDia; };
+        std::vector<Ring> rings;
+        for (const auto& c : buckets[static_cast<int>(Group::Additive)]) {
+            if (c.skill_id != "revolve_boss") continue;
+            const auto& rp = c.recovered_params;
+            if (!rp.is_object() || !rp.contains("profile_polyline") ||
+                !rp["profile_polyline"].is_array())
+                continue;
+            double minR = 1e9;
+            for (const auto& p : rp["profile_polyline"])
+                if (p.is_object() && p.contains("r") && p["r"].is_number())
+                    minR = std::min(minR, p["r"].get<double>());
+            if (minR < 0.5 || minR > 1e8) continue;   // solid (no inner wall) / empty
+            double ax = 0.0, ay = 0.0;
+            if (rp.contains("axis_origin") && rp["axis_origin"].is_array() &&
+                rp["axis_origin"].size() == 3) {
+                ax = rp["axis_origin"][0].get<double>();
+                ay = rp["axis_origin"][1].get<double>();
+            }
+            rings.push_back({ ax, ay, 2.0 * minR });
+        }
+        if (!rings.empty()) {
+            auto& holes = buckets[static_cast<int>(Group::B_Hole)];
+            holes.erase(std::remove_if(holes.begin(), holes.end(),
+                [&rings](const skill::RecognizedFeature& c) {
+                    const bool isHole = c.skill_id == "drill_hole" ||
+                                        c.skill_id == "drill_through_hole" ||
+                                        c.skill_id == "bore_cylindrical";
+                    if (!isHole) return false;
+                    const auto& p = c.recovered_params;
+                    if (!p.is_object()) return false;
+                    const double x = p.value("position_x_mm", 1e9);
+                    const double y = p.value("position_y_mm", 1e9);
+                    const double d = p.value("diameter_mm", -1.0);
+                    for (const auto& r : rings)
+                        if (std::hypot(x - r.x, y - r.y) < 0.5 &&
+                            std::abs(d - r.innerDia) < 0.5)
+                            return true;   // the revolve's own inner wall
+                    return false;
+                }), holes.end());
+        }
+    }
+
     process::ProcessPlan plan;
 
     auto appendBucket = [&plan](const std::vector<skill::RecognizedFeature>& bucket,

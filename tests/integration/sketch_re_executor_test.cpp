@@ -84,19 +84,19 @@ TEST(SketchReExecutor, RevolveBossReplaysThroughExecutor)
     auto fresh = skill::createCuboidStock(60.0, 60.0, 10.0);
     const double vFresh = volumeOf(fresh->shape());
     const auto result = process::Executor::execute(plan, fresh);
-    // The point of this test: the Executor DISPATCHES the recovered revolve
-    // (before the dispatch-table fix it aborted at it==table.end()).  Exact
-    // volume parity is a separate RE-fidelity concern — a ring's coaxial
-    // cylinder faces are also picked up by hole recognizers, so the re-synth
-    // plan does more than the lone revolve.  Here we assert it ran cleanly and
-    // added material.
+    // The Executor DISPATCHES the recovered revolve (before the dispatch-table
+    // fix it aborted at it==table.end()), AND geometry parity holds: the ring's
+    // coaxial inner wall used to be co-recognised as a separate bore and re-cut
+    // (~ -157 mm3 drift), but the revolve subsumption now drops that inner-wall
+    // hole — so the re-synth is the lone revolve and reproduces the original.
     ASSERT_TRUE(result.ok())
         << "Executor must dispatch the recovered revolve boss (not abort): "
         << (result.errors.empty() ? "" : result.errors.front());
     ASSERT_NE(result.workpiece, nullptr);
     EXPECT_GT(volumeOf(result.workpiece->shape()), vFresh)
         << "the replayed revolve must add material (the revolve step ran)";
-    (void)vOrig;
+    EXPECT_NEAR(volumeOf(result.workpiece->shape()), vOrig, 1.0)
+        << "with inner-wall subsumption the re-synth reproduces the ring exactly";
 }
 
 // ORDERING: an additive boss must replay BEFORE subtractive machining — you
