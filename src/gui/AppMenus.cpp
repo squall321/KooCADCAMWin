@@ -16,6 +16,7 @@
 #include <io/StepIO.hpp>
 #include <io/JsonSpec.hpp>
 #include <cam/ToolpathPlan.hpp>
+#include <engine/ProductRegistry.hpp>
 #include <process/Executor.hpp>
 #include <process/ProcessPlan.hpp>
 #include <process/StepInvocation.hpp>
@@ -393,10 +394,15 @@ void AppMenus::onRecognizeCurrentShape()
             dock->raise();
         }
 
+        // Identify the product from the recovered geometry (does NOT switch the
+        // active panel — that would triggerRebuild() and clobber this shape).
+        const std::string product = koocadcam::engine::productFromGeometry(shape);
+
         QMessageBox::information(
             m_window,
             tr("Recognize Current Shape"),
-            tr("Recognized %1 candidate feature(s); inferred %2 plan step(s).")
+            tr("Recognized as a %1.\n%2 candidate feature(s); inferred %3 plan step(s).")
+                .arg(QString::fromStdString(product))
                 .arg(static_cast<int>(candidates.size()))
                 .arg(plan.size()));
     } catch (const skill::SkillError& e) {
