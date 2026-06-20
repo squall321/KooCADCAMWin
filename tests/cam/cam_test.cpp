@@ -298,3 +298,32 @@ TEST(CamToolpath, DispatcherHandlesMixedSignatures)
     EXPECT_TRUE (tps[2].segments.empty());
     EXPECT_EQ(tps[2].feature_skill_id, std::string("fancy_unimplemented_skill"));
 }
+
+// ─── Bore/drill family routes to a real (plunge) toolpath ─────────────────
+TEST(CamToolpath, BoreDrillFamilyGetsToolpaths)
+{
+    auto boreSig = [](const char* skill_id) {
+        skill::FeatureSignature sig;
+        sig.skill_id = skill_id;
+        sig.params = {
+            {"position_x_mm", 25.0}, {"position_y_mm", 25.0},
+            {"axis_dir", {0.0, 0.0, -1.0}},
+            {"diameter_mm", 6.0}, {"depth_mm", 8.0}, {"through_hole", false},
+        };
+        sig.tooling.tool_dia_mm = 6.0;
+        sig.tooling.tool_length_mm = 17.0;
+        sig.tooling.flute_count = 2;
+        sig.tooling.cutting_speed_sfm = 300.0;
+        sig.tooling.feed_per_tooth_mm = 0.05;
+        return sig;
+    };
+
+    for (const char* id : { "bore_cylindrical", "drill_through_hole", "spot_drill", "spot_face" }) {
+        std::vector<skill::FeatureSignature> sigs{ boreSig(id) };
+        const auto tps = cam::generateAllToolpaths(sigs);
+        ASSERT_EQ(tps.size(), 1u) << id;
+        EXPECT_FALSE(tps[0].segments.empty())
+            << id << " must get a real (non-empty) plunge toolpath";
+        EXPECT_EQ(tps[0].feature_skill_id, std::string(id));
+    }
+}

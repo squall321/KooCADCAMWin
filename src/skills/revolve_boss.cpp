@@ -97,8 +97,8 @@ double zRangeOfProfile(const std::vector<std::pair<double,double>>& poly)
 }
 
 // Build the closed wire of the profile polygon on the world XZ plane
-// (y = 0).  Caller is responsible for the orientation matching axis_dir =
-// +Z, which is the default; non-Z axes are not supported in slice-10.
+// (y = 0).  The caller revolves it about an axis parallel to Z (+Z or -Z);
+// off-axis revolves are a follow-up.
 TopoDS_Wire makeProfileWireXZ(const std::vector<std::pair<double,double>>& poly)
 {
     std::vector<gp_Pnt> verts;
@@ -171,10 +171,11 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         throw SkillError(msg);
     }
 
-    // For slice-10 we only support axis_dir = +Z about an arbitrary origin
-    // (the most common SolidWorks usage).  Non-Z axes are TODO.
+    // axis_dir must be parallel to Z (either +Z or -Z) about an arbitrary
+    // origin — the inner abs() below accepts both signs.  Off-axis revolves are
+    // a follow-up.
     if (std::abs(std::abs(in.axis_dir.Z()) - 1.0) > 1e-3) {
-        throw SkillError("revolve_boss: only axis_dir = +/-Z supported in slice-10");
+        throw SkillError("revolve_boss: only axis_dir parallel to Z (+Z or -Z) is supported");
     }
 
     const TopoDS_Wire wire = makeProfileWireXZ(in.profile_polyline);

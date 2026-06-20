@@ -388,6 +388,15 @@ std::vector<Toolpath> generateAllToolpaths(
             out.push_back(millRectPocketToolpath(sig));
         } else if (sig.skill_id == "mill_slot") {
             out.push_back(millSlotToolpath(sig));
+        } else if (sig.skill_id == "bore_cylindrical"   ||
+                   sig.skill_id == "drill_through_hole" ||
+                   sig.skill_id == "spot_drill"         ||
+                   sig.skill_id == "spot_face") {
+            // The plain-hole bore/drill family is a plunge at a position to a
+            // depth — the drill_hole toolpath shape covers them directly (they
+            // carry position_x/y + depth + diameter).  counterbore/countersink/
+            // ream (pilot+seat / no depth) need their own generators — follow-up.
+            out.push_back(drillHoleToolpath(sig));
         } else {
             spdlog::warn("cam::generateAllToolpaths: no generator for skill_id '{}'; "
                          "emitting empty toolpath", sig.skill_id);
