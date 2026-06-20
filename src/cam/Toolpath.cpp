@@ -126,6 +126,17 @@ double estimateCycleTime_s(const std::vector<PathSegment>& segs, double fallback
     return t_min * 60.0;
 }
 
+// Entry-plane Z (work offset) for a feature.  Slice-1 generators assumed the
+// entry face sits at Z=0, but recovered features carry their true axial entry
+// (bore/countersink/counterbore emit `position_z_mm` as the full 3-D entry
+// point; rect-pocket/slot a `center_z_mm`/`start_z_mm`).  Honouring it keeps
+// the toolpath on the real surface when the feature is not at Z=0 — otherwise
+// every re-synthesised part is machined as if its top were the origin.
+double entryZ(const nlohmann::json& params, const char* key = "position_z_mm")
+{
+    return params.value(key, 0.0);
+}
+
 }  // namespace
 
 // ── drill_hole toolpath ──────────────────────────────────────────────────
@@ -153,8 +164,9 @@ Toolpath drillHoleToolpath(const skill::FeatureSignature& sig)
     // For the slice-1 generator we work in WORKPIECE coords where Z=0 is
     // the entry face top, and depth is taken along -Z.  This matches the
     // drill_hole skill's `position_*_mm` convention when the entry face is
-    // the top of a cuboid stock.
-    const double work_z_top = 0.0;        // entry face Z
+    // the top of a cuboid stock.  When the feature carries its own axial entry
+    // (recovered bore/countersink/counterbore), honour it instead of Z=0.
+    const double work_z_top = entryZ(sig.params);   // entry face Z (work offset)
     const double safe_z     = work_z_top + kSafeZAboveStock_mm;
     const double cut_z      = work_z_top - (thru ? depth + 2.0 : depth);
 
@@ -209,7 +221,7 @@ Toolpath millCircularPocketToolpath(const skill::FeatureSignature& sig)
     const double toolR   = toolD * 0.5;
     const double pocketR = pocketD * 0.5;
 
-    const double work_z_top = 0.0;
+    const double work_z_top = entryZ(sig.params);   // entry face Z (work offset)
     const double safe_z     = work_z_top + kSafeZAboveStock_mm;
 
     const double rpm  = tp.spindle_rpm;
@@ -321,12 +333,13 @@ Toolpath millRectPocketToolpath(const skill::FeatureSignature& sig)
                        ? sig.tooling.tool_dia_mm : std::min(L, W) * 0.4;
     const double toolR = toolD * 0.5;
 
-    const double safe_z = kSafeZAboveStock_mm;
+    const double work_z_top = entryZ(sig.params, "center_z_mm");  // entry face Z
+    const double safe_z = work_z_top + kSafeZAboveStock_mm;
     const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
                                                  sig.tooling.feed_per_tooth_mm);
     const double hx = std::max(0.1, L / 2.0 - toolR);
     const double hy = std::max(0.1, W / 2.0 - toolR);
-    const double zc = -depth;
+    const double zc = work_z_top - depth;
 
     using M = PathSegment::Move;
     tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 });
@@ -358,10 +371,11 @@ Toolpath millSlotToolpath(const skill::FeatureSignature& sig)
     const double ey    = sig.params.value("end_y_mm", 0.0);
     const double depth = sig.params.value("depth_mm", 1.0);
 
-    const double safe_z = kSafeZAboveStock_mm;
+    const double work_z_top = entryZ(sig.params, "start_z_mm");   // entry face Z
+    const double safe_z = work_z_top + kSafeZAboveStock_mm;
     const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
                                                  sig.tooling.feed_per_tooth_mm);
-    const double zc = -depth;
+    const double zc = work_z_top - depth;
 
     using M = PathSegment::Move;
     tp.segments.push_back({ M::Rapid,  gp_Pnt(sx, sy, safe_z), 0.0,  0, 0, 0 });

@@ -151,12 +151,20 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // 5) Cut
     const TopoDS_Shape newShape = pr::cut(wp.shape(), cutter);
 
-    // 6) Build signature
+    // 6) Build signature.  Emit the resolved axial entry plane Z so the CAM
+    //    generator can place the toolpath on the real surface instead of
+    //    assuming Z=0 (matches recognize()'s `position_z_mm` 3-D entry).  Only
+    //    the straight-vertical case has an unambiguous scalar entry Z; for
+    //    arbitrary axes we leave it unset (generator falls back to 0, the
+    //    prior behaviour).
+    const bool vertical = std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6;
+    const double entryZ = vertical ? (adir.Z() < 0 ? zMax : zMin) : 0.0;
     json params = {
         { "entry_face_kind", "resolved_id" },
         { "entry_face_id",   *entryId },
         { "position_x_mm",   in.position_x_mm },
         { "position_y_mm",   in.position_y_mm },
+        { "position_z_mm",   entryZ },
         { "axis_dir",        { adir.X(), adir.Y(), adir.Z() } },
         { "diameter_mm",     in.diameter_mm },
         { "depth_mm",        in.depth_mm },

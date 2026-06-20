@@ -15,6 +15,8 @@
 #include "skills/mill_rect_pocket.hpp"
 #include "skills/mill_slot.hpp"
 
+#include <algorithm>
+
 using namespace koocadcam;
 
 // A drilled workpiece carries a drill_hole feature → one drill toolpath, with
@@ -97,6 +99,41 @@ TEST(ToolpathPlan, EmitsRunnableGCodeProgram)
     EXPECT_NE(gcode.find("G1"),  std::string::npos)  << "a feed move";
     EXPECT_NE(gcode.find("M30"), std::string::npos)  << "program end";
     EXPECT_NE(gcode.find("mill_rect_pocket"), std::string::npos) << "feature comment";
+}
+
+// WORK OFFSET: a hole drilled into a stock whose top is NOT at Z=0 must get a
+// toolpath that plunges from that real surface — not the old hard-coded Z=0.
+// The drill skill now emits the resolved entry-plane Z (zMax for a top-down
+// hole) and the generator honours it.
+TEST(ToolpathPlan, ToolpathFollowsEntrySurfaceZ)
+{
+    // Stock spans Z in [0, 20]; the top face (drill entry) is at Z=20.
+    auto stock = skill::createCuboidStock(50.0, 50.0, 20.0);
+    skill::drill_hole::Input in;
+    in.position_x_mm = 25.0;
+    in.position_y_mm = 25.0;
+    in.diameter_mm   = 6.0;
+    in.depth_mm      = 8.0;
+    const auto out = skill::drill_hole::apply(*stock, in);
+    ASSERT_NE(out.workpiece, nullptr);
+
+    const cam::ToolpathReport report = cam::planAndVerify(*out.workpiece);
+    ASSERT_EQ(report.toolpaths.size(), 1u);
+    const auto& segs = report.toolpaths.front().segments;
+    ASSERT_GT(segs.size(), 1u);
+
+    // The highest segment Z (the safe/approach height) must sit ABOVE the
+    // entry surface (Z~20), and the lowest (the drilled depth) must be near
+    // 20 - depth = 12 — both well above the old Z=0 frame.
+    double zHi = -1e9, zLo = 1e9;
+    for (const auto& s : segs) {
+        zHi = std::max(zHi, s.end_point.Z());
+        zLo = std::min(zLo, s.end_point.Z());
+    }
+    EXPECT_GT(zHi, 20.0) << "approach must clear the real top surface (Z~20)";
+    EXPECT_GT(zLo, 5.0)
+        << "deepest cut should be near entryZ - depth (~12), not the old ~ -8";
+    EXPECT_LT(zLo, 15.0) << "and it must actually descend into the part";
 }
 
 // A bare stock has no machining features → no toolpaths, trivially clear.
