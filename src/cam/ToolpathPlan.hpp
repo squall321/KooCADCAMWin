@@ -22,6 +22,8 @@
 #include "skills/Workpiece.hpp"
 
 #include <cstddef>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace koocadcam::cam {
@@ -47,6 +49,22 @@ inline ToolpathReport planAndVerify(const skill::Workpiece& wp,
     }
     report.ok = report.collisions.empty();
     return report;
+}
+
+// Emit one runnable G-code PROGRAM for a whole report: a program-start (%),
+// every toolpath's blocks (each already carries its tool/spindle header and
+// G21/G90), then program-end (M30, %).  This is the deliverable a user exports
+// after a recognize -> execute -> verify pass.
+inline std::string toGCodeProgram(const ToolpathReport& report)
+{
+    std::ostringstream s;
+    s << "%\n";
+    s << "(KooCADCAM G-code program — " << report.toolpaths.size() << " toolpath(s)";
+    if (!report.ok) s << "; WARNING " << report.collisions.size() << " collision(s)";
+    s << ")\n";
+    for (const auto& tp : report.toolpaths) s << toGCode(tp) << '\n';
+    s << "M30\n%\n";
+    return s.str();
 }
 
 }  // namespace koocadcam::cam

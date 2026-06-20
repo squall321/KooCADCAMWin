@@ -18,6 +18,7 @@ public:
 private slots:
     void onNewSampleCylinder();
     void onSaveStep();
+    void onExportGCode();
     void onOpenStep();
     void onFitAll();
     void onExit();

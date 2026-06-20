@@ -15,9 +15,15 @@
 #include <engine/WatchFrontModel.hpp>
 #include <io/StepIO.hpp>
 #include <io/JsonSpec.hpp>
+#include <cam/ToolpathPlan.hpp>
+#include <process/Executor.hpp>
 #include <process/ProcessPlan.hpp>
 #include <process/StepInvocation.hpp>
 #include <re/Recognizer.hpp>
+#include <skills/Stock.hpp>
+#include <skills/Workpiece.hpp>
+
+#include <fstream>
 #include <skills/Skill.hpp>
 #include <skills/Workpiece.hpp>
 
@@ -55,6 +61,9 @@ void AppMenus::install(QMenuBar* menuBar)
     QAction* actSave = fileMenu->addAction(tr("&Save STEP..."));
     actSave->setShortcut(QKeySequence("Ctrl+S"));
     connect(actSave, &QAction::triggered, this, &AppMenus::onSaveStep);
+
+    QAction* actGcode = fileMenu->addAction(tr("Export &G-code..."));
+    connect(actGcode, &QAction::triggered, this, &AppMenus::onExportGCode);
 
     QAction* actOpen = fileMenu->addAction(tr("&Open STEP..."));
     actOpen->setShortcut(QKeySequence("Ctrl+O"));
@@ -165,6 +174,50 @@ void AppMenus::onSaveStep()
     {
         QMessageBox::critical(m_window, tr("Save STEP"),
                               tr("Failed to write STEP file:\n%1").arg(QString::fromStdString(err)));
+    }
+}
+
+void AppMenus::onExportGCode()
+{
+    using namespace koocadcam;
+    const TopoDS_Shape shape = m_window->viewWidget()->currentShape();
+    if (shape.IsNull()) {
+        QMessageBox::warning(m_window, tr("Export G-code"), tr("No shape to machine."));
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        m_window, tr("Export G-code"), QString(), tr("G-code (*.nc *.gcode *.tap)"));
+    if (path.isEmpty())
+        return;
+
+    try {
+        // Recognise the part's machining features, replay them onto a sized
+        // stock to get a workpiece carrying those features, then plan + verify
+        // the toolpaths and emit one G-code program.
+        skill::Workpiece wp(shape);
+        process::ProcessPlan plan = re::inferProcessPlan(wp, 0.7);
+        double x0, y0, z0, x1, y1, z1;
+        wp.boundingBox(x0, y0, z0, x1, y1, z1);
+        auto stock = skill::createCuboidStock(x1 - x0, y1 - y0, z1 - z0);
+        const auto result = process::Executor::execute(plan, stock);
+        const auto& machined = result.workpiece ? *result.workpiece : wp;
+
+        const cam::ToolpathReport report = cam::planAndVerify(machined);
+        if (report.toolpaths.empty()) {
+            m_window->statusBar()->showMessage(
+                tr("No machinable features recognised — nothing to export."), 4000);
+            return;
+        }
+        std::ofstream f(path.toStdString());
+        f << cam::toGCodeProgram(report);
+        m_window->statusBar()->showMessage(
+            tr("Exported %1 toolpath(s) — %2")
+                .arg(static_cast<int>(report.toolpaths.size()))
+                .arg(report.ok ? tr("collision-free") : tr("WITH collisions")),
+            5000);
+    } catch (const std::exception& e) {
+        QMessageBox::critical(m_window, tr("Export G-code"),
+                              tr("G-code export failed:\n%1").arg(QString::fromUtf8(e.what())));
     }
 }
 

@@ -77,6 +77,28 @@ TEST(ToolpathPlan, GeneratesToolpathForSlot)
         << "a slot traverse has plunge + cut + retract";
 }
 
+// toGCodeProgram turns a verified report into one runnable G-code program.
+TEST(ToolpathPlan, EmitsRunnableGCodeProgram)
+{
+    auto stock = skill::createCuboidStock(50.0, 50.0, 20.0);
+    skill::mill_rect_pocket::Input in;
+    in.entry_face  = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.center_x_mm = 25.0; in.center_y_mm = 25.0;
+    in.length_mm   = 16.0; in.width_mm = 10.0; in.depth_mm = 4.0;
+    const auto out = skill::mill_rect_pocket::apply(*stock, in);
+    ASSERT_NE(out.workpiece, nullptr);
+
+    const cam::ToolpathReport report = cam::planAndVerify(*out.workpiece);
+    const std::string gcode = cam::toGCodeProgram(report);
+
+    EXPECT_NE(gcode.find("%"), std::string::npos)    << "program start";
+    EXPECT_NE(gcode.find("G21"), std::string::npos)  << "metric units";
+    EXPECT_NE(gcode.find("G90"), std::string::npos)  << "absolute mode";
+    EXPECT_NE(gcode.find("G1"),  std::string::npos)  << "a feed move";
+    EXPECT_NE(gcode.find("M30"), std::string::npos)  << "program end";
+    EXPECT_NE(gcode.find("mill_rect_pocket"), std::string::npos) << "feature comment";
+}
+
 // A bare stock has no machining features → no toolpaths, trivially clear.
 TEST(ToolpathPlan, NoMachiningFeaturesYieldsNoToolpaths)
 {
