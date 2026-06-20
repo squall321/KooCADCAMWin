@@ -490,6 +490,11 @@ const std::unordered_set<std::string>& preciseRecognizers()
         // boss-on-stock has more, both rejected.  With that gate it is specific
         // enough to keep full confidence on foreign geometry.
         "extrude_boss_from_sketch",
+        // Sketch REVOLVE: its geometric path has the same class of gate — a
+        // "all planar faces are caps (perpendicular to the axis)" guard rejects
+        // any machined block with axis-parallel walls — so the recovered foreign
+        // revolution survives the cap and reaches the Executor.
+        "revolve_boss",
     };
     return kPrecise;
 }

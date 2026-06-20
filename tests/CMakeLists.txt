@@ -1490,6 +1490,17 @@ koo_apply_compiler_flags(integration_watch_re_roundtrip)
 add_test(NAME integration_watch_re_roundtrip COMMAND integration_watch_re_roundtrip)
 set_tests_properties(integration_watch_re_roundtrip PROPERTIES TIMEOUT 180 LABELS "integration")
 
+# Sketch features (extrude/revolve) replay through recognize -> inferProcessPlan
+# -> Executor (the pipeline break the unit tests masked by calling apply()).
+add_executable(integration_sketch_re_executor integration/sketch_re_executor_test.cpp)
+target_link_libraries(integration_sketch_re_executor PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills koo_process koo_re koo_io koo_adapt koo_engine)
+target_include_directories(integration_sketch_re_executor SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(integration_sketch_re_executor)
+add_test(NAME integration_sketch_re_executor COMMAND integration_sketch_re_executor)
+set_tests_properties(integration_sketch_re_executor PROPERTIES TIMEOUT 120 LABELS "integration")
+
 # ── Integration: reframe loop — original vision proven with measured dims ──
 # synth frame -> STEP(strip metadata) -> geometric recognize -> part moves
 # +15mm -> adapt -> re-execute -> STEP -> recognize -> assert holes followed.

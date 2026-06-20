@@ -8,6 +8,8 @@
 
 // Slice-1 registered skills
 #include "skills/drill_hole.hpp"
+#include "skills/extrude_boss_from_sketch.hpp"
+#include "skills/revolve_boss.hpp"
 #include "skills/bolt_circle_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
 #include "skills/rectangular_hole_grid.hpp"
@@ -4201,6 +4203,47 @@ sk::cam_lock_cavity::Input parseCamLockCavity(const json& p)
     return in;
 }
 
+// Sketch features — replay a reverse-engineered extrude / revolve from its
+// recovered params (so a recovered sketch boss survives inferProcessPlan ->
+// Executor, the same contract holes already have).
+sk::extrude_boss_from_sketch::Input parseExtrudeBossFromSketch(const json& p)
+{
+    sk::extrude_boss_from_sketch::Input in;
+    // recovered params carry "face_normal" [x,y,z]; fall back to parseFaceDatum
+    // ("entry_face") for hand-authored plans, else the top face.
+    if (p.contains("face_normal") && p["face_normal"].is_array() &&
+        p["face_normal"].size() == 3) {
+        const auto& n = p["face_normal"];
+        in.entry_face = sk::FaceByNormal{
+            gp_Dir(n[0].get<double>(), n[1].get<double>(), n[2].get<double>()), 5.0, "largest" };
+    } else {
+        in.entry_face = parseFaceDatum(p);
+    }
+    in.height_mm = jdouble(p, "height_mm", 5.0);
+    if (p.contains("polygon") && p["polygon"].is_array())
+        for (const auto& pt : p["polygon"])
+            in.polygon.emplace_back(pt.value("x", 0.0), pt.value("y", 0.0));
+    return in;
+}
+
+sk::revolve_boss::Input parseRevolveBoss(const json& p)
+{
+    sk::revolve_boss::Input in;
+    if (p.contains("profile_polyline") && p["profile_polyline"].is_array())
+        for (const auto& pt : p["profile_polyline"])
+            in.profile_polyline.emplace_back(pt.value("r", 0.0), pt.value("z", 0.0));
+    if (p.contains("axis_origin") && p["axis_origin"].is_array() && p["axis_origin"].size() == 3) {
+        const auto& a = p["axis_origin"];
+        in.axis_origin = gp_Pnt(a[0].get<double>(), a[1].get<double>(), a[2].get<double>());
+    }
+    if (p.contains("axis_dir") && p["axis_dir"].is_array() && p["axis_dir"].size() == 3) {
+        const auto& a = p["axis_dir"];
+        in.axis_dir = gp_Dir(a[0].get<double>(), a[1].get<double>(), a[2].get<double>());
+    }
+    in.revolution_angle_deg = jdouble(p, "revolution_angle_deg", 360.0);
+    return in;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Dispatch table
 // ─────────────────────────────────────────────────────────────────────────
@@ -4211,6 +4254,12 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
 
     t[sk::drill_hole::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::drill_hole::apply(wp, parseDrillHole(p));
+    };
+    t[sk::extrude_boss_from_sketch::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::extrude_boss_from_sketch::apply(wp, parseExtrudeBossFromSketch(p));
+    };
+    t[sk::revolve_boss::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::revolve_boss::apply(wp, parseRevolveBoss(p));
     };
     t[sk::bolt_circle_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::bolt_circle_pattern::apply(wp, parseBoltCirclePattern(p));
