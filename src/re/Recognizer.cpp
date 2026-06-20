@@ -414,10 +414,17 @@ std::vector<RecognizeFn> buildRegistry()
 // Substring/prefix matching keeps it stable as new skill IDs are added
 // under existing families.
 
-enum class Group { A_Stock = 0, B_Hole = 1, C_Edge = 2, Unknown = 3 };
+// Order is the REPLAY order.  Additive bosses (sketch extrude/revolve) must be
+// built on the base stock BEFORE subtractive machining cuts into them — so the
+// Additive group sits right after A_Stock and before the hole/edge cuts.
+enum class Group { A_Stock = 0, Additive = 1, B_Hole = 2, C_Edge = 3, Unknown = 4 };
 
 Group classify(std::string_view skillId)
 {
+    // Additive sketch features (built up, not cut away) — replay before cuts.
+    if (skillId == "extrude_boss_from_sketch" || skillId == "revolve_boss")
+        return Group::Additive;
+
     static const std::string_view kStock[] = {
         "hollow_cavity",
         "mill_open_pocket",
@@ -789,7 +796,7 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
     candidates      = dedupe(candidates);
 
     // Bucket by group.
-    std::vector<skill::RecognizedFeature> buckets[4];   // A, B, C, Unknown
+    std::vector<skill::RecognizedFeature> buckets[5];   // A_Stock, Additive, B_Hole, C_Edge, Unknown
     for (auto& c : candidates) {
         const Group g = classify(c.skill_id);
         buckets[static_cast<int>(g)].push_back(std::move(c));
@@ -882,6 +889,8 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
     };
 
     appendBucket(buckets[static_cast<int>(Group::A_Stock)], "A_stock_removal");
+    // Additive sketch bosses are built on the base BEFORE any cuts.
+    appendBucket(buckets[static_cast<int>(Group::Additive)], "Additive");
     appendBucket(buckets[static_cast<int>(Group::B_Hole)],  "B_hole");
     appendBucket(buckets[static_cast<int>(Group::C_Edge)],  "C_edge");
     // Unknown skill_ids are appended LAST (between edge ops and end) so
