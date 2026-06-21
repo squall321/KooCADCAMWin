@@ -4220,9 +4220,24 @@ sk::extrude_boss_from_sketch::Input parseExtrudeBossFromSketch(const json& p)
         in.entry_face = parseFaceDatum(p);
     }
     in.height_mm = jdouble(p, "height_mm", 5.0);
-    if (p.contains("polygon") && p["polygon"].is_array())
+    // Prefer the richer line|arc `profile`; fall back to the legacy `polygon`.
+    if (p.contains("profile") && p["profile"].is_array()) {
+        for (const auto& s : p["profile"]) {
+            sk::extrude_boss_from_sketch::ProfileSeg seg;
+            seg.kind = (s.value("kind", std::string("line")) == "arc")
+                     ? sk::extrude_boss_from_sketch::ProfileSeg::Kind::Arc
+                     : sk::extrude_boss_from_sketch::ProfileSeg::Kind::Line;
+            seg.x   = s.value("x", 0.0);
+            seg.y   = s.value("y", 0.0);
+            seg.cx  = s.value("cx", 0.0);
+            seg.cy  = s.value("cy", 0.0);
+            seg.ccw = s.value("ccw", true);
+            in.profile.push_back(seg);
+        }
+    } else if (p.contains("polygon") && p["polygon"].is_array()) {
         for (const auto& pt : p["polygon"])
             in.polygon.emplace_back(pt.value("x", 0.0), pt.value("y", 0.0));
+    }
     return in;
 }
 

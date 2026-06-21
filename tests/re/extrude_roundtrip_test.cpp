@@ -19,6 +19,7 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
@@ -132,4 +133,101 @@ TEST(ExtrudeRoundTrip, RecognisesForeignPrismFromGeometry)
     const double expectArea = 1.5 * std::sqrt(3.0) * R * R;
     EXPECT_NEAR(polyArea(g->recovered_params["polygon"]), expectArea, expectArea * 0.02)
         << "recovered profile area must match the hexagon";
+}
+
+// ── ARC / CIRCLE profiles ─────────────────────────────────────────────────
+
+// APPLY: a circular boss built from an Arc-only profile (one full circle, split
+// into two semicircle arcs so the wire has two edges) extrudes to the right
+// solid — its volume is the circle area * height, not a chord-polygon
+// approximation.
+TEST(ExtrudeArc, CircularBossApplyHasCircleVolume)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 10.0);
+    const double r = 8.0, h = 5.0;
+
+    using Seg = skill::extrude_boss_from_sketch::ProfileSeg;
+    skill::extrude_boss_from_sketch::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.height_mm  = h;
+    // Two semicircle arcs sharing centre (0,0): (r,0)->(-r,0)->(r,0), CCW.
+    Seg a; a.kind = Seg::Kind::Arc; a.x = -r; a.y = 0.0; a.cx = 0.0; a.cy = 0.0; a.ccw = true;
+    Seg b; b.kind = Seg::Kind::Arc; b.x =  r; b.y = 0.0; b.cx = 0.0; b.cy = 0.0; b.ccw = true;
+    in.profile = { a, b };
+
+    const auto out = skill::extrude_boss_from_sketch::apply(*stock, in);
+    ASSERT_NE(out.workpiece, nullptr);
+    ASSERT_FALSE(out.workpiece->shape().IsNull());
+
+    const double vStock = 60.0 * 60.0 * 10.0;
+    const double vBoss  = M_PI * r * r * h;
+    EXPECT_NEAR(volumeOf(out.workpiece->shape()), vStock + vBoss, vBoss * 0.01)
+        << "the circular boss must add a true cylinder, not a polygon prism";
+}
+
+// PATH B (foreign geometry): a standalone cylinder is recognised as an
+// extrusion whose profile is an ARC (the circular cap boundary), recovered as a
+// circle — NOT flattened to a chord polygon.
+TEST(ExtrudeArc, RecognisesForeignCylinderProfileAsArc)
+{
+    const double r = 9.0, h = 6.0;
+    const TopoDS_Shape cyl =
+        BRepPrimAPI_MakeCylinder(r, h).Shape();   // axis +Z, base at origin
+
+    skill::Workpiece wp(cyl);
+    const auto cands = skill::extrude_boss_from_sketch::recognize(wp);
+
+    const skill::RecognizedFeature* g = nullptr;
+    for (const auto& c : cands)
+        if (c.matched_geometry.value("source", std::string{}) == "geometry") { g = &c; break; }
+    ASSERT_NE(g, nullptr) << "a foreign cylinder must be recognised geometrically";
+    EXPECT_NEAR(g->recovered_params.value("height_mm", 0.0), h, 1e-3);
+    ASSERT_TRUE(g->recovered_params.contains("profile"))
+        << "a curved boundary must be emitted as a segment profile";
+    EXPECT_TRUE(g->matched_geometry.value("has_arc", false))
+        << "the cylinder boundary must be recovered as an arc, not a chord";
+    // At least one profile segment must be an arc.
+    bool sawArc = false;
+    for (const auto& s : g->recovered_params["profile"])
+        if (s.value("kind", std::string("line")) == "arc") sawArc = true;
+    EXPECT_TRUE(sawArc) << "the recovered profile must contain an arc segment";
+}
+
+// ROUND-TRIP: recognise the foreign cylinder, regenerate from the recovered
+// ARC profile, and get the same volume back (the circle is preserved, not
+// chord-approximated).
+TEST(ExtrudeArc, ArcProfileRoundTripsByVolume)
+{
+    const double r = 7.0, h = 4.0;
+    const TopoDS_Shape cyl = BRepPrimAPI_MakeCylinder(r, h).Shape();
+    const double vOrig = volumeOf(cyl);
+
+    skill::Workpiece wp(cyl);
+    const auto cands = skill::extrude_boss_from_sketch::recognize(wp);
+    const skill::RecognizedFeature* g = nullptr;
+    for (const auto& c : cands)
+        if (c.matched_geometry.value("source", std::string{}) == "geometry") { g = &c; break; }
+    ASSERT_NE(g, nullptr);
+
+    // Rebuild the Input from the recovered arc profile and extrude onto an empty
+    // half-space (a thin stock the boss sits on), checking the boss volume.
+    using Seg = skill::extrude_boss_from_sketch::ProfileSeg;
+    auto stock = skill::createCuboidStock(40.0, 40.0, 2.0);
+    skill::extrude_boss_from_sketch::Input in2;
+    in2.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in2.height_mm  = g->recovered_params["height_mm"].get<double>();
+    for (const auto& s : g->recovered_params["profile"]) {
+        Seg seg;
+        seg.kind = (s.value("kind", std::string("line")) == "arc")
+                 ? Seg::Kind::Arc : Seg::Kind::Line;
+        seg.x = s.value("x", 0.0); seg.y = s.value("y", 0.0);
+        seg.cx = s.value("cx", 0.0); seg.cy = s.value("cy", 0.0);
+        seg.ccw = s.value("ccw", true);
+        in2.profile.push_back(seg);
+    }
+    const auto out2 = skill::extrude_boss_from_sketch::apply(*stock, in2);
+    ASSERT_NE(out2.workpiece, nullptr);
+    const double vStock = 40.0 * 40.0 * 2.0;
+    EXPECT_NEAR(volumeOf(out2.workpiece->shape()) - vStock, vOrig, vOrig * 0.01)
+        << "the regenerated boss must reproduce the cylinder volume via arcs";
 }

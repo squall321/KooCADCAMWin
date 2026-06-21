@@ -6,6 +6,7 @@
 #include "engine/primitives/Bbox.hpp"
 #include "engine/primitives/Cuts.hpp"
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -16,10 +17,14 @@
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAbs_CurveType.hxx>
+#include <Geom_Circle.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
@@ -52,6 +57,74 @@ double polygonAreaXY(const std::vector<std::pair<double,double>>& poly)
     return std::abs(a) * 0.5;
 }
 
+using ProfileSeg = extrude_boss_from_sketch::ProfileSeg;
+
+// Promote a legacy straight-line polygon to a Line-segment profile (each vertex
+// becomes the END point of a Line whose START is the previous vertex).
+std::vector<ProfileSeg> polygonToProfile(
+    const std::vector<std::pair<double,double>>& poly)
+{
+    std::vector<ProfileSeg> prof;
+    prof.reserve(poly.size());
+    for (const auto& p : poly) {
+        ProfileSeg s;
+        s.kind = ProfileSeg::Kind::Line;
+        s.x = p.first; s.y = p.second;
+        prof.push_back(s);
+    }
+    return prof;
+}
+
+// Area enclosed by a closed line|arc profile: the end-point polygon area
+// (shoelace) plus each arc's circular-segment area (the sliver between the
+// chord and the arc), signed by whether the arc bulges OUT of or INTO the
+// polygon.  Exact for the volume specificity gate.
+double profileArea(const std::vector<ProfileSeg>& prof)
+{
+    const std::size_t n = prof.size();
+    if (n == 0) return 0.0;
+    // An all-line profile needs >= 3 vertices to enclose area; a profile with
+    // arcs can enclose area with as few as 1 segment (a full circle), so only
+    // bail early when there are no arcs AND too few vertices.
+    const bool anyArc = std::any_of(prof.begin(), prof.end(),
+        [](const ProfileSeg& s) { return s.kind == ProfileSeg::Kind::Arc; });
+    if (!anyArc && n < 3) return 0.0;
+
+    // 1) Shoelace over the end points (the chord polygon).
+    double a = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& A = prof[i];
+        const auto& B = prof[(i + 1) % n];
+        a += A.x * B.y - B.x * A.y;
+    }
+    const double polyArea = a;            // signed (>0 if CCW)
+    const double polySign  = polyArea >= 0.0 ? 1.0 : -1.0;
+
+    // 2) Add each arc's circular-segment sliver.
+    double slivers = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const ProfileSeg& s = prof[i];
+        if (s.kind != ProfileSeg::Kind::Arc) continue;
+        const ProfileSeg& prev = prof[(i + n - 1) % n];   // start = previous end
+        const double sx = prev.x, sy = prev.y, ex = s.x, ey = s.y;
+        const double r  = std::hypot(sx - s.cx, sy - s.cy);
+        if (r < 1e-9) continue;
+        // Swept angle start->end in the arc's sweep direction.
+        double a0 = std::atan2(sy - s.cy, sx - s.cx);
+        double a1 = std::atan2(ey - s.cy, ex - s.cx);
+        double sweep = a1 - a0;
+        if (s.ccw) { while (sweep <= 0) sweep += 2.0 * M_PI; }
+        else       { while (sweep >= 0) sweep -= 2.0 * M_PI; sweep = -sweep; }
+        // Circular-segment area for the (positive) swept angle.
+        const double segArea = 0.5 * r * r * (sweep - std::sin(sweep));
+        // A CCW arc bulges to the LEFT of start->end; whether that adds to or
+        // subtracts from the chord polygon depends on the polygon orientation.
+        const double bulgeSign = (s.ccw ? 1.0 : -1.0) * polySign;
+        slivers += bulgeSign * segArea;
+    }
+    return std::abs(0.5 * polyArea + slivers);
+}
+
 // Smallest edge length in the polygon (min wall heuristic).
 double minEdgeLengthXY(const std::vector<std::pair<double,double>>& poly)
 {
@@ -70,8 +143,10 @@ double minEdgeLengthXY(const std::vector<std::pair<double,double>>& poly)
 }
 
 // Construct a sketch wire on the plane defined by (origin, normal, xDir).
-// `poly` is XY in the local (xDir, yDir = normal × xDir) frame.
-TopoDS_Wire makeSketchWire(const std::vector<std::pair<double,double>>& poly,
+// `prof` is a closed line|arc profile in the local (xDir, yDir = normal × xDir)
+// frame.  Each segment's START is the previous segment's END; the loop closes
+// from the last END back to the first.
+TopoDS_Wire makeSketchWire(const std::vector<ProfileSeg>& prof,
                            const gp_Pnt& origin,
                            const gp_Dir& normal,
                            const gp_Dir& xDir)
@@ -81,30 +156,50 @@ TopoDS_Wire makeSketchWire(const std::vector<std::pair<double,double>>& poly,
     if (vyTmp.Magnitude() < 1e-9)
         throw SkillError("extrude_boss_from_sketch: degenerate frame (normal || xDir)");
     vyTmp.Normalize();
-    const gp_Vec vn(normal);
 
-    std::vector<gp_Pnt> verts;
-    verts.reserve(poly.size());
-    for (const auto& p : poly) {
-        const double dx = p.first;
-        const double dy = p.second;
-        const gp_Pnt q(
-            origin.X() + dx * vx.X() + dy * vyTmp.X(),
-            origin.Y() + dx * vx.Y() + dy * vyTmp.Y(),
-            origin.Z() + dx * vx.Z() + dy * vyTmp.Z());
-        verts.push_back(q);
-        (void)vn;  // suppress unused if not needed below
-    }
+    // Lift a face-local (u,v) point into world coords.
+    auto lift = [&](double u, double v) {
+        return gp_Pnt(origin.X() + u * vx.X() + v * vyTmp.X(),
+                      origin.Y() + u * vx.Y() + v * vyTmp.Y(),
+                      origin.Z() + u * vx.Z() + v * vyTmp.Z());
+    };
 
+    const std::size_t n = prof.size();
     BRepBuilderAPI_MakeWire wireMk;
-    for (size_t i = 0; i < verts.size(); ++i) {
-        const gp_Pnt& a = verts[i];
-        const gp_Pnt& b = verts[(i + 1) % verts.size()];
-        if (a.Distance(b) < 1e-9) continue;
-        BRepBuilderAPI_MakeEdge em(a, b);
-        if (!em.IsDone())
-            throw SkillError("extrude_boss_from_sketch: edge build failed");
-        wireMk.Add(em.Edge());
+    for (std::size_t i = 0; i < n; ++i) {
+        const ProfileSeg& seg  = prof[i];
+        const ProfileSeg& prev = prof[(i + n - 1) % n];   // start = previous end
+        const gp_Pnt a = lift(prev.x, prev.y);
+        const gp_Pnt b = lift(seg.x,  seg.y);
+        if (a.Distance(b) < 1e-9 && seg.kind == ProfileSeg::Kind::Line) continue;
+
+        if (seg.kind == ProfileSeg::Kind::Arc) {
+            // Circle in the face plane: centre lifted, axis = face normal.
+            const gp_Pnt   c   = lift(seg.cx, seg.cy);
+            const double   r   = std::hypot(prev.x - seg.cx, prev.y - seg.cy);
+            // Axis sign sets the parametrisation direction; flip to honour ccw.
+            // (Geom_Circle param = angle CCW about its axis.  For a CW sweep we
+            //  reverse the built edge — see _separation_common.hpp.)
+            const gp_Ax2 ax(c, normal, xDir);
+            Handle(Geom_Circle) circ = new Geom_Circle(ax, r);
+            // Parameters of a, b on this circle (CCW angle about `normal`).
+            const gp_Vec ca(c, a), cb(c, b);
+            const double t0 = std::atan2(ca.Dot(vyTmp), ca.Dot(vx));
+            const double t1 = std::atan2(cb.Dot(vyTmp), cb.Dot(vx));
+            double p0 = t0, p1 = t1;
+            if (p1 <= p0) p1 += 2.0 * M_PI;   // MakeEdge needs p0 < p1 (CCW)
+            BRepBuilderAPI_MakeEdge em(circ, p0, p1);
+            if (!em.IsDone())
+                throw SkillError("extrude_boss_from_sketch: arc edge build failed");
+            // The CCW edge runs a->b along +angle.  If the sketch arc sweeps
+            // CW, reverse it so the wire stays continuous.
+            wireMk.Add(seg.ccw ? em.Edge() : TopoDS::Edge(em.Edge().Reversed()));
+        } else {
+            BRepBuilderAPI_MakeEdge em(a, b);
+            if (!em.IsDone())
+                throw SkillError("extrude_boss_from_sketch: edge build failed");
+            wireMk.Add(em.Edge());
+        }
     }
     if (!wireMk.IsDone())
         throw SkillError("extrude_boss_from_sketch: wire build failed");
@@ -119,10 +214,19 @@ DFMReport validate(const Workpiece& wp, const Input& in)
 {
     DFMReport r;
 
-    if (in.polygon.size() < 3) {
+    // The working profile: the richer `profile` if supplied, else the legacy
+    // straight-line `polygon` promoted to Line segments.  A closed arc/circle
+    // profile can be as few as 1 segment (a full circle is one arc edge), so
+    // the vertex-count rule only applies to all-line profiles.
+    const std::vector<ProfileSeg> prof =
+        in.profile.empty() ? polygonToProfile(in.polygon) : in.profile;
+    const bool allLine = std::all_of(prof.begin(), prof.end(),
+        [](const ProfileSeg& s) { return s.kind == ProfileSeg::Kind::Line; });
+
+    if (prof.empty() || (allLine && prof.size() < 3)) {
         r.add("DFM-INPUT", "error",
-              "extrude_boss_from_sketch: polygon needs >= 3 vertices, got " +
-              std::to_string(in.polygon.size()));
+              "extrude_boss_from_sketch: profile needs >= 3 line vertices (or "
+              "an arc/circle), got " + std::to_string(prof.size()) + " segments");
     }
     if (in.height_mm <= 0.0) {
         r.add("DFM-INPUT", "error",
@@ -134,7 +238,8 @@ DFMReport validate(const Workpiece& wp, const Input& in)
               std::to_string(in.draft_angle_deg) +
               " out of [0, 30] range");
     }
-    if (in.polygon.size() >= 2) {
+    // Min-wall heuristic only meaningful for straight polygons.
+    if (allLine && in.polygon.size() >= 2) {
         const double minEdge = minEdgeLengthXY(in.polygon);
         if (minEdge > 0.0 && minEdge < 0.4) {
             r.add("DFM-001", "error",
@@ -143,9 +248,9 @@ DFMReport validate(const Workpiece& wp, const Input& in)
                   " mm < 0.4 mm (min wall thickness)");
         }
     }
-    if (in.polygon.size() >= 3 && polygonAreaXY(in.polygon) < 1e-6) {
+    if (!prof.empty() && profileArea(prof) < 1e-6) {
         r.add("DFM-INPUT", "error",
-              "extrude_boss_from_sketch: polygon area is ~0 (collinear?)");
+              "extrude_boss_from_sketch: profile area is ~0 (collinear?)");
     }
     (void)wp;
     return r;
@@ -183,8 +288,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     vx.Normalize();
     const gp_Dir xDirFinal(vx);
 
+    // Resolve the working profile: the richer `profile` if supplied, else the
+    // legacy straight-line `polygon` promoted to Line segments.
+    const std::vector<ProfileSeg> prof =
+        in.profile.empty() ? polygonToProfile(in.polygon) : in.profile;
+
     // Build wire on face plane.
-    const TopoDS_Wire wire = makeSketchWire(in.polygon, origin, normal, xDirFinal);
+    const TopoDS_Wire wire = makeSketchWire(prof, origin, normal, xDirFinal);
 
     BRepBuilderAPI_MakeFace faceMk(wire, true);
     if (!faceMk.IsDone())
@@ -203,25 +313,41 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // Fuse boss onto workpiece.
     const TopoDS_Shape newShape = pr::fuse(wp.shape(), boss);
 
-    const double area  = polygonAreaXY(in.polygon);
+    const double area  = profileArea(prof);
     const double vol   = area * in.height_mm;
 
     // ── signature ────────────────────────────────────────────────────────
+    // Emit the richer `profile` always (line|arc), and `polygon` too when the
+    // profile is all straight (so legacy consumers and the metadata replay path
+    // keep working unchanged).
+    const bool allLine = std::all_of(prof.begin(), prof.end(),
+        [](const ProfileSeg& s) { return s.kind == ProfileSeg::Kind::Line; });
+    json profJson = json::array();
+    for (const auto& s : prof) {
+        json e = { { "kind", s.kind == ProfileSeg::Kind::Arc ? "arc" : "line" },
+                   { "x", s.x }, { "y", s.y } };
+        if (s.kind == ProfileSeg::Kind::Arc) {
+            e["cx"] = s.cx; e["cy"] = s.cy; e["ccw"] = s.ccw;
+        }
+        profJson.push_back(e);
+    }
     json polyJson = json::array();
-    for (const auto& p : in.polygon)
-        polyJson.push_back({ { "x", p.first }, { "y", p.second } });
+    if (allLine)
+        for (const auto& s : prof)
+            polyJson.push_back({ { "x", s.x }, { "y", s.y } });
 
     json params = {
         { "entry_face_id",       faceId },
-        { "polygon",             polyJson },
+        { "profile",             profJson },
         { "height_mm",           in.height_mm },
         { "draft_angle_deg",     in.draft_angle_deg },
     };
+    if (allLine) params["polygon"] = polyJson;
     json pattern = {
         { "kind",                kSkillId },
         { "is_compound",         true },
         { "subfeature_count",    1 },     // sketch face + prism fuse
-        { "sketch_vertex_count", static_cast<int>(in.polygon.size()) },
+        { "sketch_vertex_count", static_cast<int>(prof.size()) },
         { "height_mm",           in.height_mm },
         { "draft_angle_deg",     in.draft_angle_deg },
         { "derived_volume_mm3",  vol },
@@ -283,18 +409,21 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     struct PlanarFace { int id; gp_Dir n; gp_Pnt c; double area; };
     std::vector<PlanarFace> planar;
     int verticalPlanar = 0;
+    int curvedFaces    = 0;
     for (int i = 0; i < wp.faceCount(); ++i) {
-        if (!wp.isFacePlanar(i)) continue;
+        if (!wp.isFacePlanar(i)) { ++curvedFaces; continue; }
         try {
             const gp_Dir n = wp.faceNormal(i);
             planar.push_back({ i, n, wp.faceCenter(i), wp.faceArea(i) });
             if (std::abs(n.Z()) < 0.05) ++verticalPlanar;
         } catch (...) { continue; }
     }
-    // A pristine rectangular box has exactly 4 vertical planar faces and is NOT
-    // a boss (project convention: bare stock recognises as nothing).  A real
-    // polygonal prism / boss has more side walls, so require > 4.
-    if (verticalPlanar <= 4) return out;
+    // A pristine rectangular box has exactly 4 vertical planar faces, all faces
+    // planar, and is NOT a boss (project convention: bare stock recognises as
+    // nothing).  Reject that specific shape — but a CURVED-walled prism (a
+    // cylinder / D-boss) has curved side faces, so its few-or-zero vertical
+    // planar walls must NOT disqualify it; the cap-pair + volume gates vet it.
+    if (curvedFaces == 0 && verticalPlanar <= 4) return out;
 
     // Best congruent anti-parallel cap pair (largest matching area).
     int capA = -1, capB = -1;
@@ -325,38 +454,60 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     vx.Normalize();
     const gp_Vec vy = gp_Vec(normal).Crossed(vx);
 
-    json polyJson = json::array();
+    // Walk capA's outer wire EDGE-by-edge (not just vertices) so a circular /
+    // arc boundary is recovered as an Arc segment, not flattened to a chord.
+    // Each segment stores its END point; an arc also stores centre + sweep dir.
+    std::vector<ProfileSeg> prof;
+    bool anyArc = false;
     try {
         const TopoDS_Wire ow = BRepTools::OuterWire(wp.face(capA));
         for (BRepTools_WireExplorer wexp(ow); wexp.More(); wexp.Next()) {
-            const gp_Pnt p = BRep_Tool::Pnt(wexp.CurrentVertex());
-            const gp_Vec rel(origin, p);
-            polyJson.push_back({ { "x", rel.Dot(vx) }, { "y", rel.Dot(vy) } });
+            const TopoDS_Edge   e   = wexp.Current();
+            const gp_Pnt        pv  = BRep_Tool::Pnt(wexp.CurrentVertex());   // edge start vertex
+            // End point = the NEXT vertex along the wire.  WireExplorer gives
+            // the start vertex of the current edge; the end is the start of the
+            // next, which equals this edge's far endpoint — recover it from the
+            // edge curve's last parameter to be robust.
+            BRepAdaptor_Curve crv(e);
+            const gp_Pnt pEnd = crv.Value(crv.LastParameter());
+            const gp_Pnt pBeg = crv.Value(crv.FirstParameter());
+            // WireExplorer orients edges along the wire; the segment's END is
+            // whichever curve endpoint is farther from the start vertex pv.
+            const gp_Pnt end = (pEnd.Distance(pv) >= pBeg.Distance(pv)) ? pEnd : pBeg;
+            const gp_Vec relEnd(origin, end);
+            ProfileSeg seg;
+            seg.x = relEnd.Dot(vx);
+            seg.y = relEnd.Dot(vy);
+            if (crv.GetType() == GeomAbs_Circle) {
+                const gp_Circ c = crv.Circle();
+                const gp_Vec relC(origin, c.Location());
+                seg.kind = ProfileSeg::Kind::Arc;
+                seg.cx   = relC.Dot(vx);
+                seg.cy   = relC.Dot(vy);
+                // ccw if the circle axis points the same way as the face normal
+                // (Geom_Circle param increases CCW about its own axis).
+                seg.ccw  = c.Axis().Direction().Dot(normal) >= 0.0;
+                anyArc   = true;
+            } else if (crv.GetType() != GeomAbs_Line) {
+                return out;   // ellipse / spline boundary — out of scope, bail
+            }
+            prof.push_back(seg);
         }
     } catch (...) { return out; }
-    if (polyJson.size() < 3) return out;
+    if (prof.size() < 3 && !anyArc) return out;   // a full-circle boss can be 1-2 edges
+    if (prof.empty()) return out;
 
-    // SPECIFICITY gate 1 (topology, exact): a TRUE straight-walled N-gon prism
-    // has EXACTLY N side walls + 2 caps = N+2 faces.  A pocketed/drilled/slotted
-    // block has the same congruent cap pair but EXTRA faces (the feature's walls
-    // + floor), so faceCount > N+2.  This catches even a SMALL machined feature
-    // that volume tolerance alone would miss (fpscan rect_pocket / slot).
-    if (wp.faceCount() != static_cast<int>(polyJson.size()) + 2) return out;
+    // SPECIFICITY gate 1 (topology, upper bound): a straight-walled N-gon prism
+    // has EXACTLY N side walls + 2 caps; an N-segment line|arc profile has at
+    // most #segments side walls (OCCT may MERGE adjacent co-circular arcs into a
+    // single cylindrical face, so the count can be LOWER — never higher for a
+    // pure prism).  A pocketed/drilled block has EXTRA feature faces, exceeding
+    // the bound.  Hence `<=` here, with the volume gate below as the real check.
+    if (wp.faceCount() > static_cast<int>(prof.size()) + 2) return out;
 
-    // SPECIFICITY gate 2 (volume): a TRUE prism has volume == profile_area *
-    // height — belt-and-braces against a degenerate same-face-count case (a
-    // boss-on-stock has more volume, a through-feature less).
-    double profArea = 0.0;
-    {
-        const std::size_t n = polyJson.size();
-        for (std::size_t i = 0; i < n; ++i) {
-            const auto& p = polyJson[i];
-            const auto& q = polyJson[(i + 1) % n];
-            profArea += p["x"].get<double>() * q["y"].get<double>()
-                      - q["x"].get<double>() * p["y"].get<double>();
-        }
-        profArea = std::abs(profArea) * 0.5;
-    }
+    // SPECIFICITY gate 2 (volume, primary): a TRUE prism has
+    // volume == profile_area * height, where profile_area is arc-corrected.
+    const double profArea    = profileArea(prof);
     const double expectedVol = profArea * height;
     double actualVol = 0.0;
     try {
@@ -368,17 +519,36 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         std::abs(expectedVol - actualVol) > 0.03 * actualVol)
         return out;   // not a pure prism (material added or removed)
 
+    // Emit the richer `profile`; also a `polygon` when all-line so the metadata
+    // replay path and legacy consumers keep working.
+    const bool allLine = !anyArc;
+    json profJson = json::array();
+    for (const auto& s : prof) {
+        json e = { { "kind", s.kind == ProfileSeg::Kind::Arc ? "arc" : "line" },
+                   { "x", s.x }, { "y", s.y } };
+        if (s.kind == ProfileSeg::Kind::Arc) {
+            e["cx"] = s.cx; e["cy"] = s.cy; e["ccw"] = s.ccw;
+        }
+        profJson.push_back(e);
+    }
     json recovered = {
         { "entry_face_id",   capA },
-        { "polygon",         polyJson },
+        { "profile",         profJson },
         { "height_mm",       height },
         { "draft_angle_deg", 0.0 },
     };
+    if (allLine) {
+        json polyJson = json::array();
+        for (const auto& s : prof)
+            polyJson.push_back({ { "x", s.x }, { "y", s.y } });
+        recovered["polygon"] = polyJson;
+    }
     json matched = {
-        { "source",       "geometry" },
-        { "cap_face_a",   capA },
-        { "cap_face_b",   capB },
-        { "vertex_count", static_cast<int>(polyJson.size()) },
+        { "source",        "geometry" },
+        { "cap_face_a",    capA },
+        { "cap_face_b",    capB },
+        { "segment_count", static_cast<int>(prof.size()) },
+        { "has_arc",       anyArc },
     };
     out.push_back(RecognizedFeature{ kSkillId, recovered, 0.9, matched });
     return out;

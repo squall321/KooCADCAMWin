@@ -39,10 +39,25 @@ namespace extrude_boss_from_sketch {
 
 constexpr const char* kSkillId = "extrude_boss_from_sketch";
 
+// One segment of a closed sketch profile.  The segment's START point is the
+// previous segment's END point (the first segment starts where the last one
+// ends, closing the loop), so each segment only stores its own END point — and,
+// for an arc, the centre + sweep direction needed to reconstruct it.  A
+// straight-line polygon is the all-Line special case.
+struct ProfileSeg
+{
+    enum class Kind { Line, Arc };
+    Kind   kind = Kind::Line;
+    double x = 0.0, y = 0.0;     // END point of this segment (face-local XY)
+    double cx = 0.0, cy = 0.0;   // Arc only: circle centre (face-local XY)
+    bool   ccw = true;           // Arc only: sweep start->end counter-clockwise
+};
+
 struct Input
 {
     FaceDatum                            entry_face;
-    std::vector<std::pair<double,double>> polygon;        // XY in face-local
+    std::vector<std::pair<double,double>> polygon;        // XY in face-local (legacy: all-line)
+    std::vector<ProfileSeg>              profile;         // richer line|arc profile; empty => use polygon
     double                               height_mm        = 5.0;
     double                               draft_angle_deg  = 0.0;
 };
