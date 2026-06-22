@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <vector>
 
 #ifndef M_PI
@@ -209,6 +210,14 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
+    // ── Geometric path B (foreign geometry) ──────────────────────────────
+    // A linear pattern is a regular GRID of identical, coaxial cylinders.  The
+    // old fallback fired on ANY two same-radius cylinders and flattened them to
+    // a 1-D count — so an unrelated pair of holes was mis-read as a pattern and
+    // a 2-D grid was mangled.  We instead REQUIRE a real equally-spaced grid:
+    // the largest set of same-radius / same-axis cylinders whose centres fall on
+    // a 1-D (or 2-D) lattice with a consistent pitch.  At least 3 instances and
+    // < 5 % pitch variation are needed, so two coincidental holes never qualify.
     std::vector<CylInst> cyls;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFaceCylinder(i)) continue;
@@ -224,38 +233,103 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             cyls.push_back(ci);
         } catch (...) { continue; }
     }
+    if (cyls.size() < 3) return out;
 
-    if (cyls.size() < 2) return out;
+    // Group by (radius, axis direction): only co-radial, co-axial cylinders can
+    // belong to one pattern.
+    auto sameGroup = [](const CylInst& a, const CylInst& b) {
+        return std::abs(a.radius - b.radius) < 1e-2 &&
+               std::abs(std::abs(a.dir.Dot(b.dir)) - 1.0) < 1e-2;
+    };
+    std::vector<bool> used(cyls.size(), false);
+    size_t bestCount = 0;
+    json bestRecovered, bestMatched;
 
-    // Pair-finder: find ≥2 cyls with same radius (±1e-2) whose XY positions
-    // share a non-trivial Δx or Δy.
-    for (size_t a = 0; a < cyls.size(); ++a) {
-        for (size_t b = a + 1; b < cyls.size(); ++b) {
-            if (std::abs(cyls[a].radius - cyls[b].radius) > 1e-2) continue;
-            const double dx = cyls[b].x - cyls[a].x;
-            const double dy = cyls[b].y - cyls[a].y;
-            const double dist = std::sqrt(dx * dx + dy * dy);
-            if (dist < cyls[a].radius * 2.0) continue;  // not separable
+    for (size_t g = 0; g < cyls.size(); ++g) {
+        if (used[g]) continue;
+        std::vector<CylInst> grp;
+        for (size_t k = 0; k < cyls.size(); ++k)
+            if (!used[k] && sameGroup(cyls[g], cyls[k])) grp.push_back(cyls[k]);
+        for (size_t k = 0; k < cyls.size(); ++k)
+            if (!used[k] && sameGroup(cyls[g], cyls[k])) used[k] = true;
+        if (grp.size() < 3) continue;
 
-            json recovered = {
-                { "hole_dia_mm",   2.0 * cyls[a].radius },
-                { "hole_depth_mm", 0.0 },
-                { "count_x",       static_cast<int>(cyls.size()) },
-                { "pitch_x_mm",    std::abs(dx) },
-                { "count_y",       1 },
-                { "pitch_y_mm",    0.0 },
-                { "start_x_mm",    cyls[a].x },
-                { "start_y_mm",    cyls[a].y },
-            };
-            json matched = {
-                { "cyl_count",    static_cast<int>(cyls.size()) },
-                { "first_radius", cyls[a].radius },
-            };
-            out.push_back(RecognizedFeature{
-                kSkillId, recovered, /*confidence*/ 0.55, matched });
-            return out;
+        // AXIS gate: the recovered params (XY pitch grid) and apply()'s
+        // face-normal model assume holes bored along +/-Z.  A SIDE grille
+        // (axis along X/Y — e.g. a watch speaker grille) would be recovered with
+        // its Z stripped (hole_centers carries only XY), so its replay/subsumption
+        // would be wrong.  Recover ONLY vertical-axis grids; a side grid is left
+        // to its individual drills (a fuller 3-D pattern model is a follow-up).
+        if (std::abs(grp[0].dir.Z()) < 0.99) continue;
+
+        // Project centres onto the dominant axis to test for an equally-spaced
+        // 1-D line.  The dominant direction is the largest XY spread axis.
+        double minX = grp[0].x, maxX = grp[0].x, minY = grp[0].y, maxY = grp[0].y;
+        for (const auto& c : grp) {
+            minX = std::min(minX, c.x); maxX = std::max(maxX, c.x);
+            minY = std::min(minY, c.y); maxY = std::max(maxY, c.y);
         }
+        const double spanX = maxX - minX, spanY = maxY - minY;
+        const bool xDominant = spanX >= spanY;
+
+        // Sort along the dominant axis and measure inter-hole gaps.
+        std::vector<CylInst> line = grp;
+        std::sort(line.begin(), line.end(),
+            [xDominant](const CylInst& a, const CylInst& b) {
+                return xDominant ? a.x < b.x : a.y < b.y;
+            });
+        // Collinearity: the off-axis spread must be small relative to the on-axis
+        // span (otherwise it's a 2-D blob, not a clean line — punt to circular).
+        const double onSpan  = xDominant ? spanX : spanY;
+        const double offSpan = xDominant ? spanY : spanX;
+        if (onSpan < grp[0].radius) continue;            // degenerate
+        if (offSpan > 0.10 * onSpan) continue;           // not collinear
+
+        // Equal pitch check.
+        std::vector<double> gaps;
+        for (size_t k = 1; k < line.size(); ++k)
+            gaps.push_back(xDominant ? (line[k].x - line[k-1].x)
+                                     : (line[k].y - line[k-1].y));
+        const double meanGap =
+            std::accumulate(gaps.begin(), gaps.end(), 0.0) / gaps.size();
+        if (meanGap < 2.0 * grp[0].radius) continue;     // overlapping / bogus
+        double maxDev = 0.0;
+        for (double gp : gaps) maxDev = std::max(maxDev, std::abs(gp - meanGap));
+        if (maxDev / meanGap > 0.05) continue;           // not equally spaced
+
+        if (line.size() <= bestCount) continue;
+        bestCount = line.size();
+
+        json centers = json::array();
+        for (const auto& c : line) centers.push_back({ c.x, c.y });
+        const double pitch = xDominant ? meanGap : 0.0;
+        const double pitchY = xDominant ? 0.0 : meanGap;
+        bestRecovered = {
+            { "hole_dia_mm",   2.0 * line[0].radius },
+            { "hole_depth_mm", 0.0 },
+            { "count_x",       xDominant ? static_cast<int>(line.size()) : 1 },
+            { "pitch_x_mm",    pitch },
+            { "count_y",       xDominant ? 1 : static_cast<int>(line.size()) },
+            { "pitch_y_mm",    pitchY },
+            { "start_x_mm",    line.front().x },
+            { "start_y_mm",    line.front().y },
+            { "hole_centers",  centers },     // for pattern subsumption
+        };
+        bestMatched = {
+            { "cyl_count",      static_cast<int>(line.size()) },
+            { "first_radius",   line[0].radius },
+            { "pitch_mm",       meanGap },
+            { "pitch_dev_frac", meanGap > 0 ? maxDev / meanGap : 0.0 },
+        };
     }
+
+    // Emit only at >= 4 instances: with 3 holes the pitch-consistency gate has
+    // just 2 gaps and is near-vacuous, so a chance trio of equally-spaced
+    // same-radius holes would pass.  Four instances force 3 consistent gaps —
+    // strong enough to keep full (precise-tier) confidence and then subsume.
+    if (bestCount >= 4)
+        out.push_back(RecognizedFeature{
+            kSkillId, bestRecovered, /*confidence*/ 0.7, bestMatched });
     return out;
 }
 

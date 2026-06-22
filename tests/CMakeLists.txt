@@ -943,8 +943,18 @@ koo_add_skill_test(surface_offset_from_face)
 koo_add_skill_test(surface_fill_4_edges)
 
 # slice 12 — CAD-native patterns (5)
-koo_add_skill_test(linear_pattern)
-koo_add_skill_test(circular_pattern)
+# linear/circular pattern tests also exercise re::inferProcessPlan (pattern
+# subsumption of individual drills), so they additionally link koo_re/process.
+foreach(pat linear_pattern circular_pattern)
+    add_executable(skill_${pat}_test skills/${pat}_test.cpp)
+    target_link_libraries(skill_${pat}_test PRIVATE
+        GTest::gtest GTest::gtest_main
+        koo_re koo_process koo_skills koo_engine koo_io koo_adapt)
+    target_include_directories(skill_${pat}_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+    koo_apply_compiler_flags(skill_${pat}_test)
+    add_test(NAME skill_${pat} COMMAND skill_${pat}_test)
+    set_tests_properties(skill_${pat} PROPERTIES TIMEOUT 90 LABELS "skill")
+endforeach()
 koo_add_skill_test(mirror_pattern)
 koo_add_skill_test(fill_pattern)
 koo_add_skill_test(sketch_driven_pattern)

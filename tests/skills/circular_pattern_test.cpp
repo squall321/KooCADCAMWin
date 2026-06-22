@@ -11,9 +11,11 @@
 
 #include <gtest/gtest.h>
 
+#include "re/Recognizer.hpp"
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
 #include "skills/circular_pattern.hpp"
+#include "skills/drill_hole.hpp"
 
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
@@ -130,4 +132,50 @@ TEST(SkillCircularPattern, RecognizeIdentifiesPattern)
     ASSERT_GE(cands.size(), 1u);
     EXPECT_EQ(cands[0].skill_id, std::string("circular_pattern"));
     EXPECT_GT(cands[0].confidence, 0.5);
+}
+
+// ─── 6. GEOMETRIC recognition (no history): a 6-hole bolt circle is recovered
+// as one pattern with the right count + radial offset, from geometry alone. ──
+TEST(SkillCircularPattern, RecognizeFromForeignGeometry)
+{
+    auto stock = skill::createCylindricalStock(80.0, 10.0);
+    skill::circular_pattern::Input in;
+    in.axis_origin_xyz  = { 0.0, 0.0, 10.0 };
+    in.axis_dir_xyz     = { 0.0, 0.0, 1.0 };
+    in.hole_dia_mm      = 5.0;
+    in.hole_depth_mm    = 6.0;
+    in.radial_offset_mm = 30.0;
+    in.count            = 6;
+    in.total_angle_deg  = 360.0;
+    auto built = skill::circular_pattern::apply(*stock, in);
+
+    skill::Workpiece foreign(built.workpiece->shape());   // NO history
+    auto cands = skill::circular_pattern::recognize(foreign);
+    ASSERT_GE(cands.size(), 1u) << "a 6-hole bolt circle must be recognised";
+    const auto& p = cands[0].recovered_params;
+    EXPECT_EQ(p.value("count", 0), 6) << "all 6 holes counted";
+    EXPECT_NEAR(p.value("radial_offset_mm", 0.0), 30.0, 1.0) << "radius recovered";
+    ASSERT_TRUE(p.contains("hole_centers"));
+    EXPECT_EQ(p["hole_centers"].size(), 6u) << "centres emitted for subsumption";
+}
+
+// ─── 7. NO false pattern: an irregular cluster (not on one circle, not evenly
+// spaced) must NOT be read as a bolt circle. ─────────────────────────────────
+TEST(SkillCircularPattern, IrregularClusterIsNotAPattern)
+{
+    auto stock = skill::createCylindricalStock(80.0, 10.0);
+    // Three same-diameter holes at WILDLY different radii from centre — fails
+    // the 5% radial-deviation gate, so it is not a bolt circle.
+    const double rr[3] = { 8.0, 20.0, 33.0 };
+    std::shared_ptr<skill::Workpiece> wp = stock;
+    for (double rad : rr) {
+        skill::drill_hole::Input h;
+        h.position_x_mm = rad; h.position_y_mm = 0.0;
+        h.diameter_mm = 4.0;   h.depth_mm = 5.0;
+        wp = skill::drill_hole::apply(*wp, h).workpiece;
+    }
+    skill::Workpiece foreign(wp->shape());
+    auto cands = skill::circular_pattern::recognize(foreign);
+    EXPECT_TRUE(cands.empty())
+        << "holes at different radii must not be a circular pattern";
 }

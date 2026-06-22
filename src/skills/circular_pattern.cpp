@@ -220,15 +220,40 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     if (!out.empty()) return out;
 
     struct C { double x, y, z, r; };
-    std::vector<C> cyls;
+    std::vector<C> all;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFaceCylinder(i)) continue;
         try {
             BRepAdaptor_Surface s(wp.face(i));
             const gp_Cylinder gc = s.Cylinder();
-            cyls.push_back(C{ gc.Location().X(), gc.Location().Y(),
-                              gc.Location().Z(), gc.Radius() });
+            // AXIS gate: the recovered params (axis_dir hard-coded +Z) and
+            // apply() assume holes bored along +/-Z.  A SIDE bolt-circle (axis
+            // along X/Y) would be recovered with the wrong axis and its
+            // hole_centers (XY only) would mismatch the drills in subsumption, so
+            // recover ONLY vertical-axis bolt circles (a 3-D variant is a follow-up).
+            if (std::abs(gc.Axis().Direction().Z()) < 0.99) continue;
+            all.push_back(C{ gc.Location().X(), gc.Location().Y(),
+                             gc.Location().Z(), gc.Radius() });
         } catch (...) {}
+    }
+    if (all.size() < 3) return out;
+
+    // Only co-radial cylinders can belong to one bolt circle.  Pick the LARGEST
+    // same-radius group (within 1e-2) of >= 3 — this discards the stock's own
+    // outer wall (a lone, differently-sized cylinder) that would otherwise
+    // pollute the centre/radius statistics and break the deviation gate.
+    std::vector<C> cyls;
+    {
+        std::vector<bool> used(all.size(), false);
+        for (size_t g = 0; g < all.size(); ++g) {
+            if (used[g]) continue;
+            std::vector<C> grp;
+            for (size_t k = 0; k < all.size(); ++k)
+                if (!used[k] && std::abs(all[k].r - all[g].r) < 1e-2) {
+                    grp.push_back(all[k]); used[k] = true;
+                }
+            if (grp.size() > cyls.size()) cyls = grp;
+        }
     }
     if (cyls.size() < 3) return out;
 
@@ -247,6 +272,25 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     for (double d : ds) maxDev = std::max(maxDev, std::abs(d - meanD));
     if (maxDev / meanD > 0.05) return out;
 
+    // Require a roughly EVEN angular distribution too — N holes equally spaced
+    // on the circle — so an irregular cluster that merely sits on a common
+    // radius (e.g. 3 unrelated holes) is not mis-read as a bolt circle.
+    std::vector<double> angles;
+    for (const auto& c : cyls)
+        angles.push_back(std::atan2(c.y - my, c.x - mx));
+    std::sort(angles.begin(), angles.end());
+    std::vector<double> aGaps;
+    for (size_t k = 1; k < angles.size(); ++k)
+        aGaps.push_back(angles[k] - angles[k - 1]);
+    aGaps.push_back(2.0 * M_PI - (angles.back() - angles.front()));  // wrap gap
+    const double meanA = (2.0 * M_PI) / cyls.size();
+    double maxADev = 0.0;
+    for (double a : aGaps) maxADev = std::max(maxADev, std::abs(a - meanA));
+    // Allow up to 25 % of the nominal step (a partial arc still reads as even).
+    if (meanA > 1e-6 && maxADev / meanA > 0.25) return out;
+
+    json centers = json::array();
+    for (const auto& c : cyls) centers.push_back({ c.x, c.y });
     json recovered = {
         { "axis_origin_xyz",  { mx, my, 0.0 } },
         { "axis_dir_xyz",     { 0.0, 0.0, 1.0 } },
@@ -255,6 +299,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         { "radial_offset_mm", meanD },
         { "count",            static_cast<int>(cyls.size()) },
         { "total_angle_deg",  360.0 },
+        { "hole_centers",     centers },     // for pattern subsumption
     };
     json matched = {
         { "cyl_count",  static_cast<int>(cyls.size()) },

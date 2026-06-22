@@ -179,6 +179,8 @@
 #include "skills/eccentric_bushing_seat.hpp"
 #include "skills/extrude_boss_from_sketch.hpp"
 #include "skills/revolve_boss.hpp"
+#include "skills/linear_pattern.hpp"
+#include "skills/circular_pattern.hpp"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -405,6 +407,16 @@ std::vector<RecognizeFn> buildRegistry()
     // until Workpiece exposes surface-of-revolution detection (follow-up).
     reg.emplace_back(&skill::revolve_boss::recognize);
 
+    // Hole PATTERNS — a regular grid (linear) or bolt-circle (circular) of
+    // identical coaxial holes.  Recovering the pattern lets a speaker grille /
+    // camera array / vent round-trip as ONE editable pattern step instead of N
+    // separate drills.  Both geometric paths require >= 3 instances with a
+    // consistent pitch / even angular spacing, so an unrelated pair of holes is
+    // not mis-read as a pattern; the subsumption pass below drops the individual
+    // drills the pattern consumed.
+    reg.emplace_back(&skill::linear_pattern::recognize);
+    reg.emplace_back(&skill::circular_pattern::recognize);
+
     return reg;
 }
 
@@ -502,6 +514,13 @@ const std::unordered_set<std::string>& preciseRecognizers()
         // any machined block with axis-parallel walls — so the recovered foreign
         // revolution survives the cap and reaches the Executor.
         "revolve_boss",
+        // Hole PATTERNS: the geometric path requires >= 3 co-radial / co-axial
+        // holes on an EQUALLY-SPACED line (pitch within 5 %) or an EVENLY-spaced
+        // bolt circle (radial dev < 5 %, angular dev < 25 %).  Those gates make a
+        // chance pair or an irregular cluster fail, so a recovered pattern is
+        // specific enough to keep full confidence (and then subsume its drills).
+        "linear_pattern",
+        "circular_pattern",
     };
     return kPrecise;
 }
@@ -820,6 +839,7 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
     {
         static const std::unordered_set<std::string> kHolePatternCompounds = {
             "bolt_circle_pattern", "linear_hole_array", "rectangular_hole_grid",
+            "linear_pattern", "circular_pattern",   // geometric pattern recognizers
         };
         // A consumed centre carries its compound's hole diameter and whether
         // bores (not just drills) belong to it — so we DON'T over-subsume an
