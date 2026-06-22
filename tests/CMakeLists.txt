@@ -927,6 +927,7 @@ koo_add_skill_test(extrude_cut_from_sketch)
 koo_add_skill_test(revolve_boss)
 koo_add_skill_test(revolve_cut)
 koo_add_skill_test(projected_sketch_cut)
+koo_add_skill_test(dome_boss)
 
 # slice 11 — SolidWorks-style body management (5)
 koo_add_skill_test(move_face_along_direction)

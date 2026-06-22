@@ -10,6 +10,7 @@
 #include "skills/drill_hole.hpp"
 #include "skills/extrude_boss_from_sketch.hpp"
 #include "skills/revolve_boss.hpp"
+#include "skills/dome_boss.hpp"
 #include "skills/bolt_circle_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
 #include "skills/rectangular_hole_grid.hpp"
@@ -671,8 +672,10 @@ sk::mill_slot::Input parseMillSlot(const json& p)
     in.entry_face = parseFaceDatum(p);
     in.start_x_mm = jdouble(p, "start_x_mm", 0.0);
     in.start_y_mm = jdouble(p, "start_y_mm", 0.0);
+    in.start_z_mm = jdouble(p, "start_z_mm", 0.0);
     in.end_x_mm   = jdouble(p, "end_x_mm",   0.0);
     in.end_y_mm   = jdouble(p, "end_y_mm",   0.0);
+    in.end_z_mm   = jdouble(p, "end_z_mm",   0.0);
     in.axis_dir   = parseAxisDir(p);
     in.width_mm   = jdouble(p, "width_mm",   0.0);
     in.depth_mm   = jdouble(p, "depth_mm",   0.0);
@@ -4241,6 +4244,26 @@ sk::extrude_boss_from_sketch::Input parseExtrudeBossFromSketch(const json& p)
     return in;
 }
 
+sk::dome_boss::Input parseDomeBoss(const json& p)
+{
+    sk::dome_boss::Input in;
+    // recovered params carry "face_normal"; fall back to entry_face / top face.
+    if (p.contains("face_normal") && p["face_normal"].is_array() &&
+        p["face_normal"].size() == 3) {
+        const auto& n = p["face_normal"];
+        in.entry_face = sk::FaceByNormal{
+            gp_Dir(n[0].get<double>(), n[1].get<double>(), n[2].get<double>()), 5.0, "largest" };
+    } else {
+        in.entry_face = parseFaceDatum(p);
+    }
+    in.center_x_mm    = jdouble(p, "center_x_mm",    0.0);
+    in.center_y_mm    = jdouble(p, "center_y_mm",    0.0);
+    in.base_radius_mm = jdouble(p, "base_radius_mm", 0.0);
+    in.height_mm      = jdouble(p, "height_mm",      0.0);
+    in.sections       = static_cast<int>(jdouble(p, "sections", 6.0));
+    return in;
+}
+
 sk::revolve_boss::Input parseRevolveBoss(const json& p)
 {
     sk::revolve_boss::Input in;
@@ -4275,6 +4298,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::revolve_boss::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::revolve_boss::apply(wp, parseRevolveBoss(p));
+    };
+    t[sk::dome_boss::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::dome_boss::apply(wp, parseDomeBoss(p));
     };
     t[sk::bolt_circle_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::bolt_circle_pattern::apply(wp, parseBoltCirclePattern(p));

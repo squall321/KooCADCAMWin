@@ -66,3 +66,4 @@ _*/
 koo_targeted.ps1
 koo_fullverify.ps1
 koo_ctest_only.ps1
+koo_fullbuild.ps1

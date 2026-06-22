@@ -181,6 +181,14 @@ bool Workpiece::isFaceCylinder(int face_id) const
     return surf.GetType() == GeomAbs_Cylinder;
 }
 
+bool Workpiece::isFaceBSpline(int face_id) const
+{
+    const GeomAbs_SurfaceType t = BRepAdaptor_Surface(m_faces.at(face_id)).GetType();
+    // A lofted freeform cap (pr::domeSolid via ThruSections) surfaces as a
+    // BSpline or, for a few control points, a Bezier patch.
+    return t == GeomAbs_BSplineSurface || t == GeomAbs_BezierSurface;
+}
+
 bool Workpiece::isFaceRevolution(int face_id) const
 {
     const GeomAbs_SurfaceType t = BRepAdaptor_Surface(m_faces.at(face_id)).GetType();

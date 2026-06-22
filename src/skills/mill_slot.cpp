@@ -78,45 +78,71 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     auto entryId = wp.resolve(in.entry_face);
     if (!entryId) throw SkillError("mill_slot: entry_face datum unresolved");
 
-    if (std::abs(in.axis_dir.X()) > 1e-6 || std::abs(in.axis_dir.Y()) > 1e-6
-        || in.axis_dir.Z() >= 0) {
-        throw SkillError("mill_slot: only axis_dir = -Z is supported in slice 1");
-    }
-
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
     const double kOverhang = 0.05;
     const double radius    = in.width_mm / 2.0;
-    const double zBottom   = zMax - in.depth_mm;
     const double cutterH   = in.depth_mm + kOverhang;
 
-    // Build stadium cutter = 2 cylinders + 1 box (fused).
-    const gp_Ax2 axStart(gp_Pnt(in.start_x_mm, in.start_y_mm, zMax + kOverhang),
-                         gp_Dir(0.0, 0.0, -1.0));
-    const gp_Ax2 axEnd  (gp_Pnt(in.end_x_mm,   in.end_y_mm,   zMax + kOverhang),
-                         gp_Dir(0.0, 0.0, -1.0));
+    // cutDir = the slot's machining axis (INTO the face).  Legacy callers pass
+    // axis_dir = -Z; a SIDE port (USB-C / SIM tray) passes e.g. -Y.
+    gp_Vec cutVec(in.axis_dir.X(), in.axis_dir.Y(), in.axis_dir.Z());
+    if (cutVec.Magnitude() < 1e-9) throw SkillError("mill_slot: axis_dir is zero");
+    cutVec.Normalize();
+    const gp_Dir cutDir(cutVec);
+
+    // Entry-plane start/end points.  BACKWARD-COMPAT: when the caller leaves
+    // start_z/end_z at 0 AND axis = -Z (the original top-face contract), the
+    // entry plane is the stock top (zMax) and start/end are the XY the caller
+    // gave — identical to the previous behaviour.  Otherwise the caller's 3-D
+    // start/end define the entry points directly.
+    const bool legacyTop = std::abs(in.start_z_mm) < 1e-9 &&
+                           std::abs(in.end_z_mm)   < 1e-9 &&
+                           std::abs(in.axis_dir.X()) < 1e-6 &&
+                           std::abs(in.axis_dir.Y()) < 1e-6 &&
+                           in.axis_dir.Z() < 0.0;
+    const double sz = legacyTop ? zMax : in.start_z_mm;
+    const double ez = legacyTop ? zMax : in.end_z_mm;
+    const gp_Pnt startPt(in.start_x_mm, in.start_y_mm, sz);
+    const gp_Pnt endPt  (in.end_x_mm,   in.end_y_mm,   ez);
+
+    // The cutter starts slightly OUTSIDE the entry plane (along -cutDir) and
+    // extends cutterH inward (along +cutDir).
+    const gp_Pnt cylStartBase(startPt.X() - cutDir.X() * kOverhang,
+                              startPt.Y() - cutDir.Y() * kOverhang,
+                              startPt.Z() - cutDir.Z() * kOverhang);
+    const gp_Pnt cylEndBase  (endPt.X() - cutDir.X() * kOverhang,
+                              endPt.Y() - cutDir.Y() * kOverhang,
+                              endPt.Z() - cutDir.Z() * kOverhang);
+    const gp_Ax2 axStart(cylStartBase, cutDir);
+    const gp_Ax2 axEnd  (cylEndBase,   cutDir);
     const TopoDS_Shape cylStart = pr::cylinder(axStart, radius, cutterH);
     const TopoDS_Shape cylEnd   = pr::cylinder(axEnd,   radius, cutterH);
 
-    // Connecting box: oriented along start→end vector.
-    const gp_Vec dir2D(in.end_x_mm - in.start_x_mm, in.end_y_mm - in.start_y_mm, 0.0);
-    const double slotLen = dir2D.Magnitude();
-    const gp_Dir xLoc(dir2D.X() / slotLen, dir2D.Y() / slotLen, 0.0);
-    const gp_Dir yLoc(-xLoc.Y(), xLoc.X(), 0.0);  // 90° CCW
+    // Connecting box, oriented along the start->end vector in the entry plane.
+    // xLoc = slot length direction; the box's local Z (main dir) = cutDir so DZ
+    // = depth extrudes inward; YDir = cutDir × xLoc = the width direction.
+    gp_Vec lenVec(startPt, endPt);
+    const double slotLen = lenVec.Magnitude();
+    if (slotLen < 1e-9) throw SkillError("mill_slot: start == end (zero length)");
+    lenVec.Normalize();
+    const gp_Dir xLoc(lenVec);
+    // width direction = cutDir × xLoc (perpendicular to both, in the entry plane).
+    gp_Vec widthVec = gp_Vec(cutDir).Crossed(gp_Vec(xLoc));
+    if (widthVec.Magnitude() < 1e-9) throw SkillError("mill_slot: axis parallel to slot");
+    widthVec.Normalize();
+    const gp_Dir yLoc(widthVec);
 
-    // gp_Ax2(P, V, Vx) — V = local Z, Vx = local X.  We pick V = +Z (up) and
-    // Vx = xLoc so YDir = V × Vx = +Z × xLoc = (-xLoc.Y, xLoc.X, 0) = yLoc.
-    // Then DX = slotLen along xLoc, DY = width along yLoc, DZ = cutterH along
-    // +Z.  Origin = (start - radius*yLoc, zMax - depth)  so the box extends
-    // from the slot bottom (z = zMax - depth) upward by cutterH = depth +
-    // overhang, ending above the stock top.
+    // Box origin: start, shifted -radius along width, and -overhang along -cutDir
+    // (so it starts outside the face like the cylinders).
     const gp_Pnt boxOrigin(
-        in.start_x_mm - radius * yLoc.X(),
-        in.start_y_mm - radius * yLoc.Y(),
-        zMax - in.depth_mm);
-    const gp_Ax2 boxAx(boxOrigin, gp_Dir(0.0, 0.0, 1.0), xLoc);
-    const TopoDS_Shape boxConn = pr::box(boxAx, slotLen, in.width_mm,
-                                          in.depth_mm + kOverhang);
+        startPt.X() - radius * yLoc.X() - cutDir.X() * kOverhang,
+        startPt.Y() - radius * yLoc.Y() - cutDir.Y() * kOverhang,
+        startPt.Z() - radius * yLoc.Z() - cutDir.Z() * kOverhang);
+    // gp_Ax2(P, V=cutDir, Vx=xLoc): box DX runs along Vx (xLoc = slot length),
+    // DY along YDir = cutDir × xLoc (= yLoc = width), DZ along V (cutDir = depth).
+    const gp_Ax2 boxAx(boxOrigin, cutDir, xLoc);
+    const TopoDS_Shape boxConn = pr::box(boxAx, slotLen, in.width_mm, cutterH);
 
     // Combine cutter parts.  Fuse rather than compound-then-cut because
     // we want a single connected cutter (avoids ambiguous Boolean result).
@@ -124,15 +150,16 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     const TopoDS_Shape newShape = pr::cut(wp.shape(), cutter);
 
-    // Emit the entry-plane Z (top face, since axis = -Z) so the CAM generator
-    // places the slot traverse on the real surface, not Z=0.
+    // Emit the 3-D entry points + axis so a recovered side slot regenerates and
+    // the CAM generator places the traverse on the real surface.
     json params = {
         { "entry_face_id",  *entryId },
         { "start_x_mm",     in.start_x_mm },
         { "start_y_mm",     in.start_y_mm },
-        { "start_z_mm",     zMax },
+        { "start_z_mm",     sz },
         { "end_x_mm",       in.end_x_mm },
         { "end_y_mm",       in.end_y_mm },
+        { "end_z_mm",       ez },
         { "axis_dir",       { in.axis_dir.X(), in.axis_dir.Y(), in.axis_dir.Z() } },
         { "width_mm",       in.width_mm },
         { "depth_mm",       in.depth_mm },
@@ -165,7 +192,6 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     spdlog::debug("skill::mill_slot applied: len={} width={} depth={} faces {}→{}",
                   slotLen, in.width_mm, in.depth_mm, wp.faceCount(), wpNew->faceCount());
-    (void)zBottom;
 
     return SkillOutput{ wpNew, sig };
 }
@@ -222,13 +248,17 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     std::vector<RecognizedFeature> out;
     const auto edgeFaces = buildEdgeFaceMap(wp.shape());
 
-    // Collect vertical-axis cylindrical faces grouped by shared bottom face.
+    // Collect cylindrical end-cap faces grouped by shared bottom face.  The
+    // slot axis is arbitrary (a top slot bores along -Z; a SIDE port along
+    // -X/-Y), so we track each end's geometry in 3-D and along the cylinder's
+    // OWN axis instead of assuming Z.
     struct CylEntry {
         int     cylIdx;
         double  radius;
-        gp_Pnt  axisBase;
-        double  zTop;
-        double  zBot;
+        gp_Pnt  axisBase;     // entry-plane centre of this end (3-D)
+        gp_Dir  axisDir;      // this cylinder's axis
+        double  aTop;         // max axial coordinate (entry side)
+        double  aBot;         // min axial coordinate (bottom side)
     };
     std::map<int, std::vector<CylEntry>> bottomGroups;
 
@@ -238,7 +268,6 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         BRepAdaptor_Surface surf(cf);
         const gp_Cylinder cyl = surf.Cylinder();
         const gp_Dir adir = cyl.Axis().Direction();
-        if (std::abs(std::abs(adir.Z()) - 1.0) > 1e-2) continue;
 
         // CONCAVITY gate (B1.5 follow-up): a slot's end half-cylinder is
         // CONCAVE (outward normal points back toward the end axis); a
@@ -262,15 +291,33 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             continue;
         }
 
-        int bottomFaceIdx = -1;
-        double zHi = -1e30, zLo = 1e30;
+        // Track each circular edge's coordinate ALONG the cylinder axis (not Z),
+        // and record the entry-plane circle centre (the edge at the larger axial
+        // coordinate, where the slot opens to the surface).
+        // First pass: find the axial extent (aHi = entry side, aLo = bottom).
+        const gp_Pnt axisLoc = cyl.Axis().Location();
+        double aHi = -1e30, aLo = 1e30;
+        gp_Pnt entryCentre = axisLoc;
         for (TopExp_Explorer exp(cf, TopAbs_EDGE); exp.More(); exp.Next()) {
             const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
             BRepAdaptor_Curve crv(e);
             if (crv.GetType() != GeomAbs_Circle) continue;
             const gp_Pnt mid = crv.Value((crv.FirstParameter() + crv.LastParameter()) / 2.0);
-            zHi = std::max(zHi, mid.Z());
-            zLo = std::min(zLo, mid.Z());
+            const double a = gp_Vec(axisLoc, mid).Dot(gp_Vec(adir));
+            if (a > aHi) { aHi = a; entryCentre = crv.Circle().Location(); }
+            aLo = std::min(aLo, a);
+        }
+        // Second pass: among the axis-normal planar faces adjacent to this end
+        // cylinder, the slot has TWO that matter — the ENTRY surface (the face
+        // the slot opens onto; the LARGEST) and the FLOOR (the pocket bottom; a
+        // SMALL face).  We classify by area: the floor is the smallest axis-
+        // normal adjacent plane, the entry is the largest.  Both ends then share
+        // the floor.  This is orientation- AND axis-sign-independent (unlike
+        // keying to aHi/aLo, where a flipped cylinder axis swaps entry/floor).
+        int bottomFaceIdx = -1, entryFaceIdx = -1;
+        double bottomArea = 1e30, entryArea = -1.0;
+        for (TopExp_Explorer exp(cf, TopAbs_EDGE); exp.More(); exp.Next()) {
+            const TopoDS_Edge& e = TopoDS::Edge(exp.Current());
             if (!edgeFaces.Contains(e)) continue;
             const auto& adj = edgeFaces.FindFromKey(e);
             for (NCollection_List<TopoDS_Shape>::Iterator it(adj); it.More(); it.Next()) {
@@ -278,29 +325,76 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                 if (af.IsSame(cf)) continue;
                 if (BRepAdaptor_Surface(af).GetType() != GeomAbs_Plane) continue;
                 const int idx = findPlanarFaceIndex(wp, af);
-                if (idx >= 0) { bottomFaceIdx = idx; }
+                if (idx < 0) continue;
+                const gp_Dir fn = wp.faceNormal(idx);
+                if (std::abs(std::abs(fn.Dot(adir)) - 1.0) > 1e-2) continue;
+                const double area = wp.faceArea(idx);
+                if (area < bottomArea) { bottomArea = area; bottomFaceIdx = idx; }
+                if (area > entryArea)  { entryArea  = area; entryFaceIdx  = idx; }
             }
         }
         if (bottomFaceIdx < 0) continue;
+        // The end's entry circle centre = its axis projected onto the entry
+        // (largest) face plane, so start/end carry the real entry-surface point.
+        gp_Pnt endEntry = entryCentre;
+        if (entryFaceIdx >= 0) {
+            const gp_Pnt fc = wp.faceCenter(entryFaceIdx);
+            const gp_Dir fn = wp.faceNormal(entryFaceIdx);
+            // Project the cylinder axis location onto the entry plane along adir.
+            const double t = gp_Vec(axisLoc, fc).Dot(gp_Vec(fn)) /
+                             std::max(1e-9, gp_Vec(adir).Dot(gp_Vec(fn)));
+            endEntry = gp_Pnt(axisLoc.X() + adir.X() * t,
+                              axisLoc.Y() + adir.Y() * t,
+                              axisLoc.Z() + adir.Z() * t);
+        }
         bottomGroups[bottomFaceIdx].push_back({
-            fIdx, cyl.Radius(), cyl.Axis().Location(), zHi, zLo
+            fIdx, cyl.Radius(), endEntry, adir, aHi, aLo
         });
     }
 
-    // For each group of exactly 2 vertical-cyl faces with matching radii →
-    // mill_slot candidate.
-    for (const auto& [bottomIdx, entries] : bottomGroups) {
+    // For each group of exactly 2 DISTINCT end positions with matching radii →
+    // mill_slot candidate.  (OCCT may split one semicircular end into several
+    // co-radial / co-axial cylindrical faces at the SAME position; collapse
+    // those to one end before counting.)
+    for (const auto& [bottomIdx, rawEntries] : bottomGroups) {
+        std::vector<CylEntry> entries;
+        for (const auto& e : rawEntries) {
+            bool merged = false;
+            for (const auto& kept : entries)
+                if (e.axisBase.Distance(kept.axisBase) < 0.5 &&
+                    std::abs(e.radius - kept.radius) < 1e-3) { merged = true; break; }
+            if (!merged) entries.push_back(e);
+        }
         if (entries.size() != 2) continue;
         if (std::abs(entries[0].radius - entries[1].radius) > 1e-3) continue;
+        // Both ends share the slot axis; recover it (and flip toward the bottom
+        // = the machining/cut direction).  depth = axial span of the end walls.
         const double r = entries[0].radius;
-        const double depth = std::abs(entries[0].zTop - entries[0].zBot);
+        const double depth = std::abs(entries[0].aTop - entries[0].aBot);
+
+        // The cut direction is the machining axis pointing INTO the part: from
+        // the entry-plane circle centre toward the slot floor.  Deriving it from
+        // the floor geometry (not the cylinder axis sign, which OCCT may flip)
+        // makes it unambiguous for any orientation.
+        const gp_Pnt floorCentre = wp.faceCenter(bottomIdx);
+        gp_Vec cutVec(entries[0].axisBase, floorCentre);
+        // Project onto the bore axis to get a clean direction (ignore any in-plane
+        // offset of the floor centre).
+        const gp_Vec aDirVec(entries[0].axisDir);
+        const double proj = cutVec.Dot(aDirVec);
+        gp_Vec dirVec = aDirVec * (proj >= 0.0 ? 1.0 : -1.0);
+        if (dirVec.Magnitude() < 1e-9) dirVec = aDirVec;
+        dirVec.Normalize();
+        const gp_Dir cutDir(dirVec);
 
         json recovered = {
             { "start_x_mm",   entries[0].axisBase.X() },
             { "start_y_mm",   entries[0].axisBase.Y() },
+            { "start_z_mm",   entries[0].axisBase.Z() },
             { "end_x_mm",     entries[1].axisBase.X() },
             { "end_y_mm",     entries[1].axisBase.Y() },
-            { "axis_dir",     { 0.0, 0.0, -1.0 } },
+            { "end_z_mm",     entries[1].axisBase.Z() },
+            { "axis_dir",     { cutDir.X(), cutDir.Y(), cutDir.Z() } },
             { "width_mm",     2.0 * r },
             { "depth_mm",     depth },
         };

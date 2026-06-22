@@ -57,9 +57,11 @@ struct Input
     FaceDatum   entry_face;
     double      start_x_mm = 0.0;
     double      start_y_mm = 0.0;
+    double      start_z_mm = 0.0;   // 3-D start (0 + axis -Z => legacy top-face slot)
     double      end_x_mm   = 0.0;
     double      end_y_mm   = 0.0;
-    gp_Dir      axis_dir   { 0.0, 0.0, -1.0 };
+    double      end_z_mm   = 0.0;   // 3-D end
+    gp_Dir      axis_dir   { 0.0, 0.0, -1.0 };  // cut direction (into the face)
     double      width_mm   = 0.0;   // == tool diameter
     double      depth_mm   = 0.0;
 };
