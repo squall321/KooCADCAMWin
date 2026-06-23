@@ -11,6 +11,7 @@
 #include "skills/extrude_boss_from_sketch.hpp"
 #include "skills/revolve_boss.hpp"
 #include "skills/dome_boss.hpp"
+#include "skills/annular_groove.hpp"
 #include "skills/bolt_circle_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
 #include "skills/rectangular_hole_grid.hpp"
@@ -4264,6 +4265,26 @@ sk::dome_boss::Input parseDomeBoss(const json& p)
     return in;
 }
 
+sk::annular_groove::Input parseAnnularGroove(const json& p)
+{
+    sk::annular_groove::Input in;
+    if (p.contains("face_normal") && p["face_normal"].is_array() &&
+        p["face_normal"].size() == 3) {
+        const auto& n = p["face_normal"];
+        in.entry_face = sk::FaceByNormal{
+            gp_Dir(n[0].get<double>(), n[1].get<double>(), n[2].get<double>()), 5.0, "largest" };
+    } else {
+        in.entry_face = parseFaceDatum(p);
+    }
+    in.center_x_mm = jdouble(p, "center_x_mm", 0.0);
+    in.center_y_mm = jdouble(p, "center_y_mm", 0.0);
+    in.outer_dia_mm = jdouble(p, "outer_dia_mm", 0.0);
+    in.inner_dia_mm = jdouble(p, "inner_dia_mm", 0.0);
+    in.depth_mm     = jdouble(p, "depth_mm",     0.0);
+    in.taper_deg    = jdouble(p, "taper_deg",    0.0);
+    return in;
+}
+
 sk::revolve_boss::Input parseRevolveBoss(const json& p)
 {
     sk::revolve_boss::Input in;
@@ -4301,6 +4322,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::dome_boss::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::dome_boss::apply(wp, parseDomeBoss(p));
+    };
+    t[sk::annular_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::annular_groove::apply(wp, parseAnnularGroove(p));
     };
     t[sk::bolt_circle_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::bolt_circle_pattern::apply(wp, parseBoltCirclePattern(p));

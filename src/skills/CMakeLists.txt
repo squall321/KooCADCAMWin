@@ -672,6 +672,7 @@ add_library(koo_skills STATIC
     revolve_cut.cpp
     projected_sketch_cut.cpp
     dome_boss.cpp
+    annular_groove.cpp
     # slice 11 — SolidWorks-style body management (5)
     move_face_along_direction.cpp
     body_split_by_plane.cpp
