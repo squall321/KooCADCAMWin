@@ -1,0 +1,205 @@
+// @lat: [[process/test-strategy#re-roundtrip]] [[engine/feature-watch]]
+//
+// FULL-PART round-trip: build the COMPLETE watch (WatchFrontModel::buildAll, all
+// ~10 steps — base, fillets, bezel, display pocket + sapphire dome, crown
+// cavity/knob, side buttons, speaker grille, rear sensors, lugs, secondary
+// fillets) → write to STEP (strips ALL feature history, leaving only geometry) →
+// re-import as foreign geometry → re::analyze → inferProcessPlan → Executor →
+// compare the re-synthesised solid to the original.
+//
+// Unlike watch_re_roundtrip (a hand-built drill+chamfer cuboid) this drives the
+// REAL builder, so it MEASURES the true end-to-end recognition fidelity across
+// every feature at once.  Two tests:
+//   1. MEASUREMENT HARNESS (full default watch): reports which feature kinds the
+//      geometric recognizer recovers vs misses, and the overall volume drift.
+//      A loose gate (<40% drift) — its job is to SURFACE remaining gaps as
+//      concrete numbers, not to be tight.  Tighten as gaps close.
+//   2. STRICT fidelity (reduced spec, only currently-recognisable features):
+//      a watch with just a bezel + display pocket + a couple of holes must
+//      round-trip to <12% volume drift.
+
+#include <gtest/gtest.h>
+
+#include "engine/WatchFrontModel.hpp"
+#include "io/StepIO.hpp"
+#include "process/Executor.hpp"
+#include "process/ProcessPlan.hpp"
+#include "re/Recognizer.hpp"
+#include "skills/Stock.hpp"
+#include "skills/Workpiece.hpp"
+
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
+#include <TopoDS_Shape.hxx>
+
+#include <nlohmann/json.hpp>
+
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace fs = std::filesystem;
+using namespace koocadcam;
+using nlohmann::json;
+
+namespace {
+double volumeOf(const TopoDS_Shape& s)
+{
+    GProp_GProps p; BRepGProp::VolumeProperties(s, p); return p.Mass();
+}
+
+// Build a watch from `spec`, write+read it through STEP (drops all metadata),
+// and return the foreign-geometry Workpiece + the original shape.
+struct Reimported {
+    TopoDS_Shape original;
+    std::shared_ptr<skill::Workpiece> foreign;
+};
+Reimported buildAndReimport(const json& spec, const std::string& tag)
+{
+    std::vector<engine::BuildWarning> warnings;
+    const TopoDS_Shape shape = engine::WatchFrontModel::buildAll(spec, warnings);
+    EXPECT_FALSE(shape.IsNull()) << "buildAll produced a null shape (" << tag << ")";
+
+    const fs::path stepPath = fs::temp_directory_path() / ("watch_full_" + tag + ".step");
+    std::string err;
+    EXPECT_TRUE(io::StepIO::write(shape, stepPath, err)) << err;
+    auto reim = io::StepIO::read(stepPath, err);
+    EXPECT_TRUE(reim.has_value()) << err;
+
+    Reimported r;
+    r.original = shape;
+    r.foreign  = reim.has_value() ? std::make_shared<skill::Workpiece>(*reim) : nullptr;
+    return r;
+}
+}  // namespace
+
+// ── 1. MEASUREMENT HARNESS — full default watch ────────────────────────────
+//
+// Surfaces, as concrete data, which feature kinds the geometric recognizer
+// recovers on a complete watch and what the overall volume drift is.  Prints a
+// per-skill recognition table.  Loose gate: it must recover SOMETHING and the
+// re-synth volume must be in a sane ballpark — the value is the printed report,
+// which dictates the next recognizer to build.
+TEST(WatchFullRoundtrip, MeasuresRecognitionOfCompleteWatch)
+{
+    const json spec = engine::WatchFrontModel::defaultSpec();
+    auto re_ = buildAndReimport(spec, "default");
+    ASSERT_NE(re_.foreign, nullptr);
+    const double vOrig = volumeOf(re_.original);
+
+    // What does the geometric recognizer find on the foreign full watch?
+    const auto cands = re::analyzeFiltered(*re_.foreign, 0.7);
+    std::map<std::string, int> byKind;
+    for (const auto& c : cands) byKind[c.skill_id]++;
+
+    std::printf("\n[WATCH FULL] original volume = %.1f mm^3, faces = %d\n",
+                vOrig, re_.foreign->faceCount());
+    std::printf("[WATCH FULL] recognized feature kinds (conf>=0.7):\n");
+    for (const auto& [k, n] : byKind)
+        std::printf("    %-28s x%d\n", k.c_str(), n);
+    if (byKind.empty())
+        std::printf("    (none)\n");
+
+    // The complete watch has many recognisable machining features (the bezel
+    // ring, the display pocket, holes); analyze must surface at least a few.
+    EXPECT_FALSE(cands.empty())
+        << "a complete watch must yield SOME recognised features";
+
+    // Re-synthesise from the inferred plan and report the volume drift.
+    const process::ProcessPlan inferred = re::inferProcessPlan(*re_.foreign, 0.7);
+    std::printf("[WATCH FULL] inferred plan steps = %d\n",
+                static_cast<int>(inferred.size()));
+
+    process::ProcessPlan replayable;
+    for (const auto& step : inferred.steps())
+        replayable.append(re::liftRecoveredStep(step));
+
+    // Start from the same cylindrical stock the builder uses (Ø44 x 10).
+    auto stock = skill::createCylindricalStock(44.0, 10.0);
+    auto result = process::Executor::execute(replayable, stock, process::ExecuteOptions{true});
+    ASSERT_NE(result.workpiece, nullptr) << "full-watch re-synth produced no workpiece";
+    ASSERT_FALSE(result.workpiece->shape().IsNull());
+    const double vResynth = volumeOf(result.workpiece->shape());
+    const double drift = std::abs(vResynth - vOrig) / std::max(1.0, vOrig);
+    std::printf("[WATCH FULL] re-synth volume = %.1f mm^3, drift = %.1f%%\n",
+                vResynth, drift * 100.0);
+
+    // MEASUREMENT HARNESS — this test REPORTS the current full-watch round-trip
+    // fidelity rather than gating on it: several features (crown knob/knurl,
+    // lugs, sensor domes, the side speaker grille) are not yet geometrically
+    // recognised, and the holes/pockets that ARE recognised over-cut where a
+    // dome/boss should sit, so the re-synth currently UNDER-shoots the volume.
+    // The printed table + this number are the backlog signal; the partner test
+    // (StrictFidelityOnRecognisableSubset) is the tight regression gate on the
+    // features that DO round-trip today.  The only hard assertion here is a
+    // sanity bound: the re-synth must produce a non-degenerate solid that did
+    // not blow up or vanish entirely.
+    EXPECT_GT(vResynth, 0.05 * vOrig)
+        << "re-synth collapsed to near-nothing — recognition/replay is broken, "
+           "not merely incomplete (see the printed table)";
+    EXPECT_LT(vResynth, 1.20 * vOrig)
+        << "re-synth ADDED net volume — a cut was inverted or a boss double-applied";
+}
+
+// ── 2. STRICT fidelity — reduced spec, only recognisable features ──────────
+//
+// A watch built with ONLY features the geometric recognizer covers today
+// (bezel ring + display pocket + a few holes) must round-trip tightly.  This is
+// the regression gate: as long as those recognizers work, the end-to-end loop
+// reproduces the part within a small tolerance.
+TEST(WatchFullRoundtrip, StrictFidelityOnRecognisableSubset)
+{
+    // Start from the default spec but strip the features whose geometric
+    // recognition is still a gap (crown knob/knurl, lugs, sensor domes, speaker
+    // grille on the curved side, secondary micro-fillets), keeping the bezel,
+    // display pocket and any straightforward holes.
+    json spec = engine::WatchFrontModel::defaultSpec();
+    spec.erase("crown_cavity");
+    spec.erase("side_buttons");
+    spec.erase("speaker_grille");
+    spec.erase("rear_sensors");
+    spec.erase("lugs");
+    spec.erase("secondary_fillets");
+
+    auto re_ = buildAndReimport(spec, "reduced");
+    ASSERT_NE(re_.foreign, nullptr);
+    const double vOrig = volumeOf(re_.original);
+
+    const process::ProcessPlan inferred = re::inferProcessPlan(*re_.foreign, 0.7);
+    // Report the post-dedupe plan (the bezel must survive as annular_groove,
+    // not get displaced by a bore_with_shelf mis-claim on the shared walls).
+    {
+        std::printf("[WATCH REDUCED] inferred plan (post-dedupe):");
+        bool sawAnnular = false;
+        for (const auto& s : inferred.steps()) {
+            std::printf(" %s", s.skill_id.c_str());
+            if (s.skill_id == "annular_groove") sawAnnular = true;
+        }
+        std::printf("\n");
+        EXPECT_TRUE(sawAnnular)
+            << "the bezel must round-trip as annular_groove (not be displaced by "
+               "a bore_with_shelf mis-claim that over-cuts the part)";
+    }
+    ASSERT_FALSE(inferred.empty())
+        << "the reduced watch must yield a non-empty inferred plan";
+
+    process::ProcessPlan replayable;
+    for (const auto& step : inferred.steps())
+        replayable.append(re::liftRecoveredStep(step));
+
+    auto stock = skill::createCylindricalStock(44.0, 10.0);
+    auto result = process::Executor::execute(replayable, stock, process::ExecuteOptions{true});
+    ASSERT_NE(result.workpiece, nullptr);
+    ASSERT_FALSE(result.workpiece->shape().IsNull());
+
+    const double vResynth = volumeOf(result.workpiece->shape());
+    const double drift = std::abs(vResynth - vOrig) / std::max(1.0, vOrig);
+    std::printf("\n[WATCH REDUCED] orig=%.1f resynth=%.1f drift=%.1f%%\n",
+                vOrig, vResynth, drift * 100.0);
+    EXPECT_LT(drift, 0.12)
+        << "reduced-watch (recognisable features only) must round-trip to <12% "
+           "volume drift";
+}

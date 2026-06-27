@@ -1502,6 +1502,18 @@ koo_apply_compiler_flags(integration_watch_re_roundtrip)
 add_test(NAME integration_watch_re_roundtrip COMMAND integration_watch_re_roundtrip)
 set_tests_properties(integration_watch_re_roundtrip PROPERTIES TIMEOUT 180 LABELS "integration")
 
+# FULL-PART round-trip: build the COMPLETE watch (WatchFrontModel::buildAll) and
+# measure end-to-end recognition fidelity across every feature at once.
+add_executable(integration_watch_full_roundtrip
+    integration/watch_full_roundtrip_test.cpp)
+target_link_libraries(integration_watch_full_roundtrip PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills koo_process koo_re koo_io koo_adapt koo_engine)
+target_include_directories(integration_watch_full_roundtrip SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(integration_watch_full_roundtrip)
+add_test(NAME integration_watch_full_roundtrip COMMAND integration_watch_full_roundtrip)
+set_tests_properties(integration_watch_full_roundtrip PROPERTIES TIMEOUT 240 LABELS "integration")
+
 # Sketch features (extrude/revolve) replay through recognize -> inferProcessPlan
 # -> Executor (the pipeline break the unit tests masked by calling apply()).
 add_executable(integration_sketch_re_executor integration/sketch_re_executor_test.cpp)

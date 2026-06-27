@@ -348,13 +348,25 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         { "world_center", { floor.center.X(), floor.center.Y() } },
     };
     json matched = {
-        { "source",          "geometry" },
-        { "floor_face",      floor.faceIdx },
-        { "inner_cyl_face",  innerFace },
-        { "outer_cyl_face",  outerFace },           // -1 when outer wall is the case exterior
-        { "groove_width_mm", floor.outerR - floor.innerR },
+        { "source",            "geometry" },
+        // Use *_face_id keys so the dedupe face-id collector counts ALL three
+        // (collectFaceIds keys on "face_id"/"cyl_face"); the floor face in
+        // particular must be in the set or a stepped-bore's larger face set would
+        // wrongly subsume the (more specific) annular groove.
+        { "floor_face_id",     floor.faceIdx },
+        { "inner_cyl_face_id", innerFace },
+        { "outer_cyl_face_id", outerFace },         // -1 when outer wall is the case exterior
+        { "groove_width_mm",   floor.outerR - floor.innerR },
     };
-    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.9, matched });
+    // Confidence 0.95 (above the 0.90 of bore_cylindrical / bore_with_shelf): a
+    // ring channel and a stepped bore can share the inner+outer wall faces, and
+    // dedupe resolves a partial face-set overlap by confidence.  A real watch
+    // bezel was being mis-claimed as a bore_with_shelf (the seat-plane look-
+    // alike) which then out-ranked the annular_groove and replayed as a giant
+    // stepped bore (measured ~90% volume drift on the full-watch round-trip).
+    // The annular floor signature (solid below the floor) is the more specific
+    // and correct explanation, so it must win.
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.95, matched });
     return out;
 }
 
