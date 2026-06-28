@@ -183,6 +183,7 @@
 #include "skills/circular_pattern.hpp"
 #include "skills/dome_boss.hpp"
 #include "skills/annular_groove.hpp"
+#include "skills/box_boss.hpp"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -429,6 +430,12 @@ std::vector<RecognizeFn> buildRegistry()
     // annular floor (the floor distinguishes it from an O-ring seal U-groove).
     reg.emplace_back(&skill::annular_groove::recognize);
 
+    // BOX boss — a raised rectangular pad (watch lug, phone camera island).
+    // Recognised by a planar outer cap bounded by 4 perpendicular side walls; an
+    // additive feature extrude_boss can't see (the boss has no second free cap —
+    // its inner face merges into the host body).
+    reg.emplace_back(&skill::box_boss::recognize);
+
     return reg;
 }
 
@@ -544,6 +551,10 @@ const std::unordered_set<std::string>& preciseRecognizers()
         // (rounded floor) and two unrelated bores, so a recovered ring channel is
         // specific enough to keep full confidence.
         "annular_groove",
+        // Box boss: the geometric path requires a planar cap bounded by 4
+        // perpendicular adjacent side walls (a box top) protruding from the host
+        // — specific enough that a random planar face won't qualify.
+        "box_boss",
     };
     return kPrecise;
 }

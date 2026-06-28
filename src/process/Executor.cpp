@@ -12,6 +12,7 @@
 #include "skills/revolve_boss.hpp"
 #include "skills/dome_boss.hpp"
 #include "skills/annular_groove.hpp"
+#include "skills/box_boss.hpp"
 #include "skills/bolt_circle_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
 #include "skills/rectangular_hole_grid.hpp"
@@ -4285,6 +4286,48 @@ sk::annular_groove::Input parseAnnularGroove(const json& p)
     return in;
 }
 
+sk::box_boss::Input parseBoxBoss(const json& p)
+{
+    sk::box_boss::Input in;
+    in.length_mm   = jdouble(p, "length_mm",   0.0);
+    in.width_mm    = jdouble(p, "width_mm",    0.0);
+    in.height_mm   = jdouble(p, "height_mm",   0.0);
+    in.center_x_mm = jdouble(p, "center_x_mm", 0.0);
+    in.center_y_mm = jdouble(p, "center_y_mm", 0.0);
+    // Foreign-recovery path: a recovered boss carries a world placement (lug on
+    // a curved host has no planar datum), so use it directly.
+    if (p.value("use_world", false) &&
+        p.contains("world_center") && p["world_center"].is_array() &&
+        p["world_center"].size() == 3 &&
+        p.contains("face_normal") && p["face_normal"].is_array() &&
+        p["face_normal"].size() == 3) {
+        in.use_world = true;
+        const auto& c = p["world_center"];
+        in.world_cx_mm = c[0].get<double>();
+        in.world_cy_mm = c[1].get<double>();
+        in.world_cz_mm = c[2].get<double>();
+        const auto& n = p["face_normal"];
+        in.world_nx = n[0].get<double>();
+        in.world_ny = n[1].get<double>();
+        in.world_nz = n[2].get<double>();
+        if (p.contains("face_xaxis") && p["face_xaxis"].is_array() &&
+            p["face_xaxis"].size() == 3) {
+            const auto& xa = p["face_xaxis"];
+            in.world_xx = xa[0].get<double>();
+            in.world_xy = xa[1].get<double>();
+            in.world_xz = xa[2].get<double>();
+        }
+    } else if (p.contains("face_normal") && p["face_normal"].is_array() &&
+               p["face_normal"].size() == 3) {
+        const auto& n = p["face_normal"];
+        in.entry_face = sk::FaceByNormal{
+            gp_Dir(n[0].get<double>(), n[1].get<double>(), n[2].get<double>()), 5.0, "largest" };
+    } else {
+        in.entry_face = parseFaceDatum(p);
+    }
+    return in;
+}
+
 sk::revolve_boss::Input parseRevolveBoss(const json& p)
 {
     sk::revolve_boss::Input in;
@@ -4325,6 +4368,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::annular_groove::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::annular_groove::apply(wp, parseAnnularGroove(p));
+    };
+    t[sk::box_boss::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::box_boss::apply(wp, parseBoxBoss(p));
     };
     t[sk::bolt_circle_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::bolt_circle_pattern::apply(wp, parseBoltCirclePattern(p));
