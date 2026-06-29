@@ -223,6 +223,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         // case side) loses one wall into the case, so accept 3 or 4.
         std::vector<int> walls;
         double wallHeight = 0.0;   // max side-wall extent along the cap normal
+        int outwardWalls = 0, inwardWalls = 0;
         for (const auto& w : planar) {
             if (w.id == cap.id) continue;
             const double dot = std::abs(gp_Vec(cap.n).Dot(gp_Vec(w.n)));
@@ -233,8 +234,15 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             double a0, b0, c0, a1, b1, c1; wb.Get(a0, b0, c0, a1, b1, c1);
             const gp_Vec span(a1 - a0, b1 - b0, c1 - c0);
             wallHeight = std::max(wallHeight, std::abs(span.Dot(gp_Vec(cap.n))));
+            // CONVEXITY — a BOSS wall faces OUTWARD (its normal points away from
+            // the cap centre); a POCKET wall faces INWARD (toward the centre).
+            // The phone display-pocket FRAME is a flat top face bounded by INWARD
+            // pocket walls, which must NOT read as a boss.
+            const gp_Vec capToWall(cap.c, w.c);
+            if (capToWall.Dot(gp_Vec(w.n)) > 0) ++outwardWalls; else ++inwardWalls;
         }
         if (walls.size() < 3 || walls.size() > 4) continue;   // a box top: 3 or 4 walls
+        if (outwardWalls < inwardWalls) continue;     // a recess (pocket frame), not a boss
 
         // The boss HEIGHT is the side-wall extent along the cap normal.
         const double height = wallHeight;

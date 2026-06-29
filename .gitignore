@@ -69,3 +69,4 @@ koo_ctest_only.ps1
 koo_fullbuild.ps1
 koo_fullwatch.ps1
 koo_box.ps1
+koo_phone.ps1
