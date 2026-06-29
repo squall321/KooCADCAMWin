@@ -324,18 +324,19 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (depth < 0.1) return out;
 
-    // SPECIFICITY — the floor must be SOLID below: a ring channel is closed at
-    // the floor (nothing deeper inside the inner radius).  A COUNTERBORE /
-    // STEPPED BORE keeps its pilot bore going PAST the seat floor — there is a
-    // coaxial cylinder of radius <= innerR reaching below the floor, AND a
-    // separate DEEPER axis-normal floor plane (the pilot bottom).  Reject if
-    // EITHER exists, so even a counterbore whose pilot is only slightly deeper
-    // than the seat is rejected.
+    // SPECIFICITY — the floor's own INNER WALL must end at the floor (a closed
+    // ring channel), NOT continue past it.  A COUNTERBORE / STEPPED BORE has its
+    // inner wall (the pilot, radius ~= the seat's inner radius) bored DEEPER than
+    // the seat floor.  So reject only when a cylinder AT ~innerR (the inner wall
+    // ITSELF, within tolerance) reaches below the floor.  A SMALLER, separate
+    // coaxial hole inside the inner radius (e.g. a watch display pocket cut
+    // inside the bezel ring) is a DIFFERENT feature and must NOT disqualify the
+    // ring — the bezel floor is still a genuine closed annulus.
     for (const auto& cyl : cyls) {
-        if (cyl.radius > floor.innerR + 0.2) continue;      // not the pilot/inner hole
+        if (std::abs(cyl.radius - floor.innerR) > 0.3) continue;  // not the inner WALL
         if (!coaxial(cyl)) continue;
         double lo, hi; cylRange(cyl, lo, hi);
-        if (lo < floorAxial - 0.15) return out;             // a hole continues past the floor
+        if (lo < floorAxial - 0.15) return out;             // the inner wall continues past the floor
     }
 
     json recovered = {

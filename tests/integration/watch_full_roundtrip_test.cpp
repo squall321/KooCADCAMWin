@@ -127,21 +127,17 @@ TEST(WatchFullRoundtrip, MeasuresRecognitionOfCompleteWatch)
     std::printf("[WATCH FULL] re-synth volume = %.1f mm^3, drift = %.1f%%\n",
                 vResynth, drift * 100.0);
 
-    // MEASUREMENT HARNESS — this test REPORTS the current full-watch round-trip
-    // fidelity rather than gating on it: several features (crown knob/knurl,
-    // lugs, sensor domes, the side speaker grille) are not yet geometrically
-    // recognised, and the holes/pockets that ARE recognised over-cut where a
-    // dome/boss should sit, so the re-synth currently UNDER-shoots the volume.
-    // The printed table + this number are the backlog signal; the partner test
-    // (StrictFidelityOnRecognisableSubset) is the tight regression gate on the
-    // features that DO round-trip today.  The only hard assertion here is a
-    // sanity bound: the re-synth must produce a non-degenerate solid that did
-    // not blow up or vanish entirely.
-    EXPECT_GT(vResynth, 0.05 * vOrig)
-        << "re-synth collapsed to near-nothing — recognition/replay is broken, "
-           "not merely incomplete (see the printed table)";
-    EXPECT_LT(vResynth, 1.20 * vOrig)
-        << "re-synth ADDED net volume — a cut was inverted or a boss double-applied";
+    // FULL-WATCH FIDELITY GATE.  With the bezel (annular_groove) + lugs
+    // (box_boss) now round-tripping, the complete default watch reproduces to a
+    // few percent volume drift (measured ~3.4% — down from ~89% when the bezel
+    // was mis-claimed as a stepped bore and the lugs were unrecovered).  The
+    // residual is the still-unrecognised crown cavity / side buttons / speaker
+    // grille, so we gate at <15% with headroom; tighten as those close.  A
+    // regression that drops the bezel or a lug (or re-introduces an over-cut)
+    // pushes the drift back up and trips this gate.
+    EXPECT_LT(drift, 0.15)
+        << "full-watch round-trip drift > 15% — a major feature stopped round-"
+           "tripping (bezel/lugs) or a cut is over-claimed (see the printed table)";
 }
 
 // ── 2. STRICT fidelity — reduced spec, only recognisable features ──────────
