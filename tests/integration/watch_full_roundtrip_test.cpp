@@ -199,3 +199,72 @@ TEST(WatchFullRoundtrip, StrictFidelityOnRecognisableSubset)
         << "reduced-watch (recognisable features only) must round-trip to <12% "
            "volume drift";
 }
+
+// ── 3. Crown KNOB (radial cone frustum) round-trip ─────────────────────────
+//
+// A realistic watch has a PROTRUDING crown knob — a sideways (radial-axis)
+// tapered cone fused onto the case.  The default spec keeps the crown purely
+// subtractive (a cavity) so other tests' volume/bbox assertions are stable, so
+// here we OPT IN to the protruding knob and verify revolve_boss recovers it via
+// its radial-axis cone meridian path: the knob must surface as a recognised
+// revolve_boss feature, and a knob-only reduced watch must round-trip tightly.
+TEST(WatchFullRoundtrip, CrownKnobRoundTripsAsRadialRevolve)
+{
+    // Reduced spec (only the bezel + display + holes + the protruding knob) so
+    // the measured drift isolates the knob's contribution, not the still-gap
+    // features.
+    json spec = engine::WatchFrontModel::defaultSpec();
+    spec.erase("side_buttons");
+    spec.erase("speaker_grille");
+    spec.erase("rear_sensors");
+    spec.erase("lugs");
+    spec.erase("secondary_fillets");
+    // OPT IN: a protruding tapered crown knob pointing radially outward.
+    spec["crown_cavity"]["body_protrusion_mm"] = 2.0;
+    spec["crown_cavity"]["body_dia_mm"]        = 3.0;
+
+    auto re_ = buildAndReimport(spec, "crown_knob");
+    ASSERT_NE(re_.foreign, nullptr);
+    const double vOrig = volumeOf(re_.original);
+
+    const auto cands = re::analyzeFiltered(*re_.foreign, 0.7);
+    std::map<std::string, int> byKind;
+    for (const auto& c : cands) byKind[c.skill_id]++;
+    std::printf("\n[WATCH KNOB] recognized kinds:");
+    for (const auto& [k, n] : byKind) std::printf(" %s x%d", k.c_str(), n);
+    std::printf("\n");
+
+    // The protruding cone knob must be recovered as a revolve_boss with a
+    // regeneratable (non-empty) profile and a ±X (radial) axis — NOT left as a
+    // sub-threshold empty-meridian detection.
+    const skill::RecognizedFeature* knob = nullptr;
+    for (const auto& c : cands)
+        if (c.skill_id == "revolve_boss" &&
+            c.recovered_params.value("profile_polyline", json::array()).size() >= 3u) {
+            knob = &c; break;
+        }
+    ASSERT_NE(knob, nullptr)
+        << "the protruding crown knob must round-trip as a revolve_boss with a "
+           "recovered cone meridian (radial-axis path)";
+    const auto& ad = knob->recovered_params["axis_dir"];
+    EXPECT_LT(std::abs(ad[2].get<double>()), 0.2)
+        << "the crown knob axis must be roughly radial (in the XY plane), not ±Z";
+
+    // End-to-end: the knob-bearing reduced watch must still round-trip tightly —
+    // the additive knob is now reproduced, so it does not become drift.
+    const process::ProcessPlan inferred = re::inferProcessPlan(*re_.foreign, 0.7);
+    process::ProcessPlan replayable;
+    for (const auto& step : inferred.steps())
+        replayable.append(re::liftRecoveredStep(step));
+    auto stock = skill::createCylindricalStock(44.0, 10.0);
+    auto result = process::Executor::execute(replayable, stock, process::ExecuteOptions{true});
+    ASSERT_NE(result.workpiece, nullptr);
+    ASSERT_FALSE(result.workpiece->shape().IsNull());
+    const double vResynth = volumeOf(result.workpiece->shape());
+    const double drift = std::abs(vResynth - vOrig) / std::max(1.0, vOrig);
+    std::printf("[WATCH KNOB] orig=%.1f resynth=%.1f drift=%.1f%%\n",
+                vOrig, vResynth, drift * 100.0);
+    EXPECT_LT(drift, 0.15)
+        << "the crown-knob watch must round-trip to <15% (the additive knob is "
+           "now recovered by the radial cone-meridian path)";
+}
