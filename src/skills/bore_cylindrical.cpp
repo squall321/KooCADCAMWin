@@ -111,22 +111,23 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // 3) Compute bore geometry & start point
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
-    const double bboxDiag = std::sqrt(
-        (xMax - xMin) * (xMax - xMin) +
-        (yMax - yMin) * (yMax - yMin) +
-        (zMax - zMin) * (zMax - zMin));
 
     const double kEntryOverhang = 0.05;
     const gp_Dir adir = in.axis_dir;
 
-    // Default start: pull back along reversed axis from the bbox centre.
+    // Tool start = the ENTRY point (position_*) pulled back a hair along -adir so
+    // the cut breaks cleanly through the entry surface.  position_* is the entry
+    // point ON the entry face (in world XYZ), so this works for ANY axis — a
+    // radial (±X/±Y) side bore starts on its side face, not just a ±Z top bore.
     gp_Pnt toolStart(
-        in.position_x_mm - adir.X() * (bboxDiag + kEntryOverhang),
-        in.position_y_mm - adir.Y() * (bboxDiag + kEntryOverhang),
-        (zMin + zMax) / 2.0 - adir.Z() * (bboxDiag + kEntryOverhang));
+        in.position_x_mm - adir.X() * kEntryOverhang,
+        in.position_y_mm - adir.Y() * kEntryOverhang,
+        in.position_z_mm - adir.Z() * kEntryOverhang);
 
-    // Simple axial straight-down/up case
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
+    // Legacy ±Z convenience: if no position_z was authored (the common top-face
+    // case where callers pass only XY), snap the start to the ±Z entry surface.
+    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6 &&
+        std::abs(in.position_z_mm) < 1e-9) {
         if (adir.Z() < 0) {
             toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMax + kEntryOverhang);
         } else {

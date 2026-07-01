@@ -62,6 +62,7 @@ struct Input
     FaceDatum   entry_face;
     double      position_x_mm  = 0.0;
     double      position_y_mm  = 0.0;
+    double      position_z_mm  = 0.0;     // entry point Z (0 => snap to ±Z face)
     gp_Dir      axis_dir       { 0.0, 0.0, -1.0 };
     double      diameter_mm    = 0.0;
     double      depth_mm       = 0.0;

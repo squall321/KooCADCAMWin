@@ -29,6 +29,7 @@
 #include <gp_Ax2.hxx>
 
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 
 namespace fs = std::filesystem;
@@ -257,6 +258,65 @@ TEST(SkillBoreCylindrical, RecognizeRecoversMeasuredDimensions)
     EXPECT_NEAR(axis[2].get<double>(), -1.0, 1e-3);
 
     EXPECT_GT(best.confidence, 0.8);
+}
+
+// ─── 6b. RADIAL bore: a blind bore into the +X SIDE face (axis -X, e.g. a
+// watch crown stem or a phone side-key bore) must recover with the ±X axis and
+// full 3-D entry — the recognizer is orientation-independent, not Z-biased. ──
+TEST(SkillBoreCylindrical, RecognizesRadialSideBore)
+{
+    // Stock corner at origin: x∈[0,40], y∈[0,60], z∈[0,30].  Bore into the +X
+    // face (x=40) along -X, at mid-height.
+    auto stock = skill::createCuboidStock(40.0, 60.0, 30.0);
+
+    skill::bore_cylindrical::Input in;
+    in.entry_face    = skill::FaceByNormal{ gp_Dir(1, 0, 0), 5.0, "largest" };  // +X side
+    in.position_x_mm = 40.0;          // on the +X face plane
+    in.position_y_mm = 30.0;
+    in.position_z_mm = 15.0;          // mid-height entry point
+    in.axis_dir      = gp_Dir(-1, 0, 0);   // bore inward along -X
+    in.diameter_mm   = 12.0;
+    in.depth_mm      = 10.0;
+    in.tolerance_class = "H7";
+    auto synth = skill::bore_cylindrical::apply(*stock, in);
+
+    skill::Workpiece fresh(synth.workpiece->shape());   // geometric path
+    const auto cands = skill::bore_cylindrical::recognize(fresh);
+    ASSERT_GE(cands.size(), 1u) << "a radial side bore must be recognised";
+    auto best = cands.front();
+    for (const auto& c : cands)
+        if (c.confidence > best.confidence) best = c;
+
+    EXPECT_NEAR(best.recovered_params["diameter_mm"].get<double>(), 12.0, 0.2);
+    EXPECT_NEAR(best.recovered_params["depth_mm"].get<double>(),    10.0, 0.3);
+    // The axis must be ±X (radial), NOT ±Z.
+    const auto axis = best.recovered_params["axis_dir"];
+    ASSERT_EQ(axis.size(), 3u);
+    EXPECT_NEAR(std::abs(axis[0].get<double>()), 1.0, 1e-2) << "bore axis is ±X (radial)";
+    EXPECT_NEAR(axis[2].get<double>(), 0.0, 1e-2);
+    // Entry X is the +X face plane (x=40).
+    ASSERT_TRUE(best.recovered_params.contains("position_x_mm"));
+    EXPECT_NEAR(best.recovered_params["position_x_mm"].get<double>(), 40.0, 0.3)
+        << "entry on the +X face";
+
+    // REGENERATE from the recovered params (incl. the 3-D entry Z) → same removed
+    // volume, in place.  This proves apply() places a radial bore from the real
+    // entry point (the old code pulled the start back by the bbox diagonal, so
+    // the cutter never reached the stock and removed nothing).
+    auto fresh2 = skill::createCuboidStock(40.0, 60.0, 30.0);
+    const double vFresh = volumeOf(fresh2->shape());
+    skill::bore_cylindrical::Input in2;
+    in2.entry_face    = skill::FaceByNormal{ gp_Dir(1, 0, 0), 5.0, "largest" };
+    in2.position_x_mm = best.recovered_params["position_x_mm"].get<double>();
+    in2.position_y_mm = best.recovered_params["position_y_mm"].get<double>();
+    in2.position_z_mm = best.recovered_params["position_z_mm"].get<double>();
+    in2.axis_dir      = gp_Dir(axis[0].get<double>(), axis[1].get<double>(), axis[2].get<double>());
+    in2.diameter_mm   = best.recovered_params["diameter_mm"].get<double>();
+    in2.depth_mm      = best.recovered_params["depth_mm"].get<double>();
+    const auto regen = skill::bore_cylindrical::apply(*fresh2, in2);
+    EXPECT_NEAR(vFresh - volumeOf(regen.workpiece->shape()),
+                M_PI * 6.0 * 6.0 * 10.0, M_PI * 6.0 * 6.0 * 10.0 * 0.05)
+        << "the recovered radial bore regenerates the same removed volume";
 }
 
 // ─── 7. Concavity gate: a convex BOSS (rod) is NOT a bore ─────────────────

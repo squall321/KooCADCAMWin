@@ -970,6 +970,7 @@ sk::bore_cylindrical::Input parseBoreCylindrical(const json& p)
     in.entry_face      = parseFaceDatum(p);
     in.position_x_mm   = jdouble(p, "position_x_mm",   0.0);
     in.position_y_mm   = jdouble(p, "position_y_mm",   0.0);
+    in.position_z_mm   = jdouble(p, "position_z_mm",   0.0);   // 3-D entry (radial bore)
     in.axis_dir        = parseAxisDir(p);
     in.diameter_mm     = jdouble(p, "diameter_mm",     0.0);
     in.depth_mm        = jdouble(p, "depth_mm",        0.0);
