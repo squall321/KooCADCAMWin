@@ -94,31 +94,21 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
-    const double bboxDiag = std::sqrt(
-        (xMax - xMin) * (xMax - xMin) +
-        (yMax - yMin) * (yMax - yMin) +
-        (zMax - zMin) * (zMax - zMin));
 
     const double kEntryOverhang = 0.05;
     const gp_Dir adir = in.axis_dir;
 
+    // True entry = where the axis pierces the resolved entry-face plane (any
+    // axis; a prior bbox guess put the cutter a whole bboxDiag off for tilted).
+    const gp_Pnt entryPt =
+        entryPointOnFacePlane(wp, *entryId, in.position_x_mm, in.position_y_mm,
+                              adir, zMin, zMax);
     // Upper cylinder origin = on/just outside the entry face, along -axis_dir.
-    // Lower cylinder origin = upper origin shifted by (upper_depth + overhang) along +axis_dir,
-    // i.e. starts at the shelf plane and extends into the material.
-    gp_Pnt upperStart;
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
-        // Common straight-down/up case
-        if (adir.Z() < 0) {
-            upperStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMax + kEntryOverhang);
-        } else {
-            upperStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMin - kEntryOverhang);
-        }
-    } else {
-        upperStart = gp_Pnt(
-            in.position_x_mm - adir.X() * (bboxDiag + kEntryOverhang),
-            in.position_y_mm - adir.Y() * (bboxDiag + kEntryOverhang),
-            (zMin + zMax) / 2.0 - adir.Z() * (bboxDiag + kEntryOverhang));
-    }
+    // Lower cylinder origin = upper origin shifted by (upper_depth + overhang)
+    // along +axis_dir — starts at the shelf plane and extends into the material.
+    const gp_Pnt upperStart(entryPt.X() - adir.X() * kEntryOverhang,
+                            entryPt.Y() - adir.Y() * kEntryOverhang,
+                            entryPt.Z() - adir.Z() * kEntryOverhang);
 
     // Upper cylinder tall enough to pierce just past the shelf depth.
     const double upperHeight = in.upper_depth_mm + kEntryOverhang;
@@ -152,6 +142,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "entry_face_id",   *entryId },
         { "position_x_mm",   in.position_x_mm },
         { "position_y_mm",   in.position_y_mm },
+        { "position_z_mm",   entryPt.Z() },
         { "axis_dir",        { adir.X(), adir.Y(), adir.Z() } },
         { "upper_dia_mm",    in.upper_dia_mm },
         { "upper_depth_mm",  in.upper_depth_mm },

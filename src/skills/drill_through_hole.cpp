@@ -82,10 +82,13 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     FeatureSignature sig = drillOut.signature;
     sig.skill_id        = kSkillId;
     sig.pattern["kind"] = kSkillId;
-    // Echo our own input params verbatim (no depth_mm in this skill).
+    // Echo our own input params verbatim (no depth_mm in this skill).  Preserve
+    // the entry-plane Z the inner drill_hole resolved (axis∩face crossing) so
+    // downstream CAM machines from the real surface, not Z=0.
     sig.params = {
         { "position_x_mm", in.position_x_mm },
         { "position_y_mm", in.position_y_mm },
+        { "position_z_mm", drillOut.signature.params.value("position_z_mm", 0.0) },
         { "axis_dir",      { in.axis_dir.X(), in.axis_dir.Y(), in.axis_dir.Z() } },
         { "diameter_mm",   in.diameter_mm },
         { "through_hole",  true },

@@ -115,25 +115,22 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double kEntryOverhang = 0.05;
     const gp_Dir adir = in.axis_dir;
 
-    // Tool start = the ENTRY point (position_*) pulled back a hair along -adir so
-    // the cut breaks cleanly through the entry surface.  position_* is the entry
-    // point ON the entry face (in world XYZ), so this works for ANY axis — a
-    // radial (±X/±Y) side bore starts on its side face, not just a ±Z top bore.
+    // Entry Z: the authored position_z_mm when given, else the true entry-face
+    // plane Z (axis∩face, correct for any axis — not a Z=0 guess).  We stamp this
+    // into the signature so downstream CAM machines from the real surface.
+    double entryZ = in.position_z_mm;
+    if (std::abs(in.position_z_mm) < 1e-9) {
+        entryZ = entryPointOnFacePlane(wp, *entryId, in.position_x_mm,
+                                       in.position_y_mm, adir, zMin, zMax).Z();
+    }
+
+    // Tool start = the ENTRY point (position_x/y, entryZ) pulled back a hair along
+    // -adir so the cut breaks cleanly through the entry surface.  Works for ANY
+    // axis — a radial (±X/±Y) side bore starts on its side face.
     gp_Pnt toolStart(
         in.position_x_mm - adir.X() * kEntryOverhang,
         in.position_y_mm - adir.Y() * kEntryOverhang,
-        in.position_z_mm - adir.Z() * kEntryOverhang);
-
-    // Legacy ±Z convenience: if no position_z was authored (the common top-face
-    // case where callers pass only XY), snap the start to the ±Z entry surface.
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6 &&
-        std::abs(in.position_z_mm) < 1e-9) {
-        if (adir.Z() < 0) {
-            toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMax + kEntryOverhang);
-        } else {
-            toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMin - kEntryOverhang);
-        }
-    }
+        entryZ           - adir.Z() * kEntryOverhang);
 
     const double toolHeight = in.depth_mm + kEntryOverhang;
 
@@ -150,6 +147,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "entry_face_id",   *entryId },
         { "position_x_mm",   in.position_x_mm },
         { "position_y_mm",   in.position_y_mm },
+        { "position_z_mm",   entryZ },
         { "axis_dir",        { adir.X(), adir.Y(), adir.Z() } },
         { "diameter_mm",     in.diameter_mm },
         { "depth_mm",        in.depth_mm },

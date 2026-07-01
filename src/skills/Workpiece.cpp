@@ -75,6 +75,42 @@ TopoDS_Shape validateOrHeal(const TopoDS_Shape& shape, const char* context)
     throw SkillError(ctx + ": invalid BRep that ShapeFix could not heal");
 }
 
+gp_Pnt entryPointOnFacePlane(const Workpiece& wp,
+                             int              entryFaceId,
+                             double           px,
+                             double           py,
+                             const gp_Dir&    axisDir,
+                             double           zMin,
+                             double           zMax)
+{
+    // A point on the tool axis (bbox mid — any point on the line works).
+    const gp_Pnt a0(px, py, (zMin + zMax) / 2.0);
+
+    if (entryFaceId >= 0 && entryFaceId < wp.faceCount()) {
+        BRepAdaptor_Surface efs(wp.face(entryFaceId));
+        if (efs.GetType() == GeomAbs_Plane) {
+            const gp_Pln pln = efs.Plane();
+            const gp_Pnt p0  = pln.Location();
+            const gp_Dir n   = pln.Axis().Direction();
+            // t solves n·(a0 + t·axisDir − p0) = 0.  Use gp_Vec dot products —
+            // gp_Dir::Dot(gp_Vec) would implicitly NORMALISE the vector.
+            const gp_Vec nv(n);
+            const double denom = nv.Dot(gp_Vec(axisDir));
+            if (std::abs(denom) > 1e-9) {
+                const double t = nv.Dot(gp_Vec(a0, p0)) / denom;
+                return gp_Pnt(a0.X() + axisDir.X() * t,
+                              a0.Y() + axisDir.Y() * t,
+                              a0.Z() + axisDir.Z() * t);
+            }
+        }
+    }
+
+    // Fallback: the ±Z surface (a downward axis enters the top, upward the
+    // bottom).  For a truly tilted axis with no planar entry face this is the
+    // best scalar available; callers that need XY accuracy pass a planar face.
+    return gp_Pnt(px, py, (axisDir.Z() < 0.0) ? zMax : zMin);
+}
+
 Workpiece::Workpiece(const TopoDS_Shape& shape, const std::string& material)
     : m_shape(validateOrHeal(shape, "Workpiece")), m_material(material)
 {

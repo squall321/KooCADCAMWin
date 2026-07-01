@@ -275,3 +275,35 @@ TEST(SkillDrillHole, RejectsConvexBossAsHole)
     EXPECT_GT(atHole, 0) << "the real concave hole must still be recovered";
     EXPECT_EQ(atBoss, 0) << "the convex boss must NOT be recognized as a hole";
 }
+
+// ─── 8. apply() stamps the true entry-plane Z (not Z=0), any axis ──────────
+//
+// apply() must stamp position_z_mm at the real surface where the axis pierces
+// the entry face — for a ±Z hole it equals zMax/zMin, and for a TILTED axis it
+// is the axis∩face crossing (previously hardcoded to 0.0, which machined the
+// re-synthesised hole from Z=0).
+TEST(SkillDrillHole, ApplyStampsEntryZOnSurfaceForAnyAxis)
+{
+    auto stock = skill::createCuboidStock(50.0, 50.0, 20.0);   // top face Z=20
+
+    // Straight-down: entry Z = 20 (top face).
+    skill::drill_hole::Input dn;
+    dn.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    dn.position_x_mm = 25; dn.position_y_mm = 25;
+    dn.axis_dir = gp_Dir(0, 0, -1); dn.diameter_mm = 4; dn.depth_mm = 6;
+    auto od = skill::drill_hole::apply(*stock, dn);
+    ASSERT_TRUE(od.signature.params.contains("position_z_mm"));
+    EXPECT_NEAR(od.signature.params["position_z_mm"].get<double>(), 20.0, 1e-6)
+        << "±Z entry must be the top face Z";
+
+    // Tilted axis entering the +Z top face: entry Z must still be ON the top
+    // face (~20), NOT 0 and NOT tens of mm off.
+    skill::drill_hole::Input tl;
+    tl.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    tl.position_x_mm = 25; tl.position_y_mm = 25;
+    tl.axis_dir = gp_Dir(0.2, 0.0, -1.0); tl.diameter_mm = 4; tl.depth_mm = 6;
+    auto ot = skill::drill_hole::apply(*stock, tl);
+    ASSERT_TRUE(ot.signature.params.contains("position_z_mm"));
+    EXPECT_NEAR(ot.signature.params["position_z_mm"].get<double>(), 20.0, 1e-6)
+        << "tilted entry through the top face must still land at Z=20, not 0";
+}

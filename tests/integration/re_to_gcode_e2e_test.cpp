@@ -30,6 +30,8 @@
 #include "skills/counterbore.hpp"
 #include "skills/countersink.hpp"
 #include "skills/ream.hpp"
+#include "skills/bore_with_shelf.hpp"
+#include "skills/multi_step_bore.hpp"
 #include "cam/Toolpath.hpp"
 
 #include <string>
@@ -306,6 +308,61 @@ TEST(ReToGCodeE2E, RadialCounterboreYieldsEmptyToolpath)
     ASSERT_EQ(tps.size(), 1u);
     EXPECT_EQ(tps[0].segments.size(), 0u)
         << "a radial counterbore is not machinable on the 3-axis-Z post";
+}
+
+// A bore_with_shelf (a stepped counterbore-class bore) must plunge to the shelf
+// (upper_depth) and then to the full depth (upper + lower, since lower_depth is
+// measured from the shelf).
+TEST(ReToGCodeE2E, BoreWithShelfPlungesShelfThenFullDepth)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 30.0);
+    skill::bore_with_shelf::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 30; in.position_y_mm = 30; in.axis_dir = gp_Dir(0, 0, -1);
+    in.upper_dia_mm = 8; in.upper_depth_mm = 10; in.lower_dia_mm = 16; in.lower_depth_mm = 8;
+    auto part = skill::bore_with_shelf::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* bs = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "bore_with_shelf") { bs = &t; break; }
+    ASSERT_NE(bs, nullptr) << "a bore_with_shelf must reach boreWithShelfToolpath";
+    EXPECT_EQ(bs->segments.size(), 6u) << "shelf plunge + full-depth plunge";
+    // Entry top = Z=30.  Shelf at 30-10=20, full depth at 30-(10+8)=12.
+    bool reachesShelf = false, reachesFull = false;
+    for (const auto& s : bs->segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            if (std::abs(s.end_point.Z() - 20.0) < 1e-6) reachesShelf = true;
+            if (std::abs(s.end_point.Z() - 12.0) < 1e-6) reachesFull  = true;
+        }
+    EXPECT_TRUE(reachesShelf) << "one plunge reaches the shelf (Z=20)";
+    EXPECT_TRUE(reachesFull)  << "one plunge reaches the full depth (Z=12)";
+}
+
+// A multi_step_bore (N≥3 coaxial steps, cumulative depths) must plunge once per
+// step at the CUMULATIVE depth.
+TEST(ReToGCodeE2E, MultiStepBorePlungesEveryStepCumulatively)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 40.0);
+    skill::multi_step_bore::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 30; in.position_y_mm = 30; in.axis_dir = gp_Dir(0, 0, -1);
+    in.steps = { { 20.0, 6.0 }, { 14.0, 6.0 }, { 9.0, 6.0 } };   // widest → narrowest
+    auto part = skill::multi_step_bore::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* ms = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "multi_step_bore") { ms = &t; break; }
+    ASSERT_NE(ms, nullptr) << "a multi_step_bore must reach multiStepBoreToolpath";
+    EXPECT_EQ(ms->segments.size(), 9u) << "3 steps x 3 segments";
+    // Entry top = Z=40.  Cumulative plunge floors at 40-6=34, 40-12=28, 40-18=22.
+    bool z34 = false, z28 = false, z22 = false;
+    for (const auto& s : ms->segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            if (std::abs(s.end_point.Z() - 34.0) < 1e-6) z34 = true;
+            if (std::abs(s.end_point.Z() - 28.0) < 1e-6) z28 = true;
+            if (std::abs(s.end_point.Z() - 22.0) < 1e-6) z22 = true;
+        }
+    EXPECT_TRUE(z34 && z28 && z22) << "plunges at cumulative depths 34/28/22";
 }
 
 // A bare stock travels the same chain and yields an EMPTY-but-valid program

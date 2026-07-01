@@ -633,6 +633,79 @@ Toolpath reamToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── bore_with_shelf toolpath ──────────────────────────────────────────────
+// A stepped bore: a wider/narrower UPPER bore to upper_depth, then a coaxial
+// LOWER bore to (upper_depth + lower_depth).  lower_depth is measured FROM THE
+// SHELF, so the deep pass reaches upper_depth + lower_depth below the entry.
+// Two coaxial plunges (rough two-tool boring), same shape as counterbore.
+Toolpath boreWithShelfToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double x        = sig.params.value("position_x_mm", 0.0);
+    const double y        = sig.params.value("position_y_mm", 0.0);
+    const double zTop     = entryZ(sig.params);
+    const double upDep    = sig.params.value("upper_depth_mm", 0.0);
+    const double loDep    = sig.params.value("lower_depth_mm", 0.0);
+    const double feed     = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                   sig.tooling.feed_per_tooth_mm);
+
+    const double safe_z = zTop + kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    // [upper] plunge to the shelf (upper_depth below entry).
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),               0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - upDep),         feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),               0.0,  0, 0, 0 });
+    // [lower] plunge to the full depth (shelf + lower_depth below entry).
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),               0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - (upDep + loDep)), feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),               0.0,  0, 0, 0 });
+
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── multi_step_bore toolpath ──────────────────────────────────────────────
+// N coaxial steps of {dia_mm, depth_mm}; steps[0] is the entry (widest) and the
+// depths are CUMULATIVE down the bore.  A plunge at the CUMULATIVE depth of each
+// step (each pass a different-diameter boring bar).  3 segments per step.
+Toolpath multiStepBoreToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double x    = sig.params.value("position_x_mm", 0.0);
+    const double y    = sig.params.value("position_y_mm", 0.0);
+    const double zTop = entryZ(sig.params);
+    const double feed = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                               sig.tooling.feed_per_tooth_mm);
+
+    const double safe_z = zTop + kSafeZAboveStock_mm;
+    if (!sig.params.contains("steps") || !sig.params["steps"].is_array()) {
+        spdlog::warn("cam: '{}' has no steps — emitting empty toolpath", sig.skill_id);
+        return tp;
+    }
+    using M = PathSegment::Move;
+    double cumulative = 0.0;
+    for (const auto& s : sig.params["steps"]) {
+        cumulative += s.value("depth_mm", 0.0);   // depths are cumulative down the bore
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),            0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - cumulative), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),            0.0,  0, 0, 0 });
+    }
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── Dispatcher ───────────────────────────────────────────────────────────
 
 std::vector<Toolpath> generateAllToolpaths(
@@ -650,6 +723,7 @@ std::vector<Toolpath> generateAllToolpaths(
             "bore_cylindrical", "mill_circular_pocket", "mill_rect_pocket", "mill_slot",
             "linear_pattern", "circular_pattern",
             "counterbore", "countersink", "ream",
+            "bore_with_shelf", "multi_step_bore",
         };
         if (kZAxisGuarded.count(sig.skill_id) && !cutAxisIsZ(sig.params)) {
             out.push_back(emptyRadialToolpath(sig));
@@ -682,6 +756,10 @@ std::vector<Toolpath> generateAllToolpaths(
             out.push_back(countersinkToolpath(sig));
         } else if (sig.skill_id == "ream") {
             out.push_back(reamToolpath(sig));
+        } else if (sig.skill_id == "bore_with_shelf") {
+            out.push_back(boreWithShelfToolpath(sig));
+        } else if (sig.skill_id == "multi_step_bore") {
+            out.push_back(multiStepBoreToolpath(sig));
         } else {
             spdlog::warn("cam::generateAllToolpaths: no generator for skill_id '{}'; "
                          "emitting empty toolpath", sig.skill_id);

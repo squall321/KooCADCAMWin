@@ -103,40 +103,10 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const gp_Dir adir = in.axis_dir;
 
     // True entry point = where the tool axis pierces the resolved entry-face
-    // plane.  For a tilted axis the piercing XY differs from (position_x/y), so we
-    // intersect the axis line with the face plane instead of guessing from the
-    // bbox (a prior overhang-only recovery landed tens of mm off for tilted axes).
-    std::optional<gp_Pnt> entryOnFace;
-    {
-        const TopoDS_Face& ef = wp.face(*entryId);
-        BRepAdaptor_Surface efs(ef);
-        if (efs.GetType() == GeomAbs_Plane) {
-            const gp_Pln pln = efs.Plane();
-            const gp_Pnt p0  = pln.Location();
-            const gp_Dir n   = pln.Axis().Direction();
-            const gp_Pnt a0(in.position_x_mm, in.position_y_mm, (zMin + zMax) / 2.0);
-            // NOTE: use gp_Vec dot products, not gp_Dir::Dot — passing a gp_Vec to
-            // gp_Dir::Dot implicitly NORMALISES it, discarding the magnitude.
-            const gp_Vec nv(n);
-            const double denom = nv.Dot(gp_Vec(adir));
-            if (std::abs(denom) > 1e-9) {
-                const double t = nv.Dot(gp_Vec(a0, p0)) / denom;
-                entryOnFace = gp_Pnt(a0.X() + adir.X() * t,
-                                     a0.Y() + adir.Y() * t,
-                                     a0.Z() + adir.Z() * t);
-            }
-        }
-    }
-
-    // entryPlanePoint: where the axis crosses the entry surface (what CAM needs as
-    // the entry Z).  Prefer the exact axis∩face intersection; fall back to the
-    // bbox estimate, and pin the ±Z surface for the shortcut when no face plane.
-    gp_Pnt entryPlanePoint = entryOnFace.value_or(gp_Pnt(
-        in.position_x_mm, in.position_y_mm, (zMin + zMax) / 2.0));
-    if (!entryOnFace && std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
-        entryPlanePoint = gp_Pnt(in.position_x_mm, in.position_y_mm,
-                                 (adir.Z() < 0) ? zMax : zMin);
-    }
+    // plane (correct for any axis, including tilted).
+    const gp_Pnt entryPlanePoint =
+        entryPointOnFacePlane(wp, *entryId, in.position_x_mm, in.position_y_mm,
+                              adir, zMin, zMax);
     // toolStart = the cutter launch point, kEntryOverhang OUTSIDE the surface
     // (back along -adir from the true entry point).
     gp_Pnt toolStart(entryPlanePoint.X() - adir.X() * kEntryOverhang,

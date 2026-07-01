@@ -115,6 +115,27 @@ private:
 TopoDS_Shape validateOrHeal(const TopoDS_Shape& shape,
                             const char* context = "skill output");
 
+// ── Entry-plane resolution (shared by the hole/bore family) ────────────────
+//
+// The true entry point where a tool axis pierces a resolved entry face — the Z
+// a downstream CAM generator needs to machine from the REAL surface instead of
+// Z=0.  For a TILTED axis the piercing XY differs from (px, py), so we intersect
+// the axis line with the entry-face plane.  Correct for any axis; falls back to
+// the ±Z surface (zMax for a downward axis, zMin for upward) when the entry face
+// is non-planar or the axis is parallel to it.
+//
+// Prevents two recurring bugs: (1) stamping position_z_mm = 0 (or a bbox guess)
+// for tilted axes, and (2) the gp_Dir::Dot(gp_Vec) footgun (that overload
+// implicitly NORMALISES the vector, discarding magnitude) — this uses gp_Vec
+// dot products throughout.
+gp_Pnt entryPointOnFacePlane(const Workpiece& wp,
+                             int              entryFaceId,
+                             double           px,
+                             double           py,
+                             const gp_Dir&    axisDir,
+                             double           zMin,
+                             double           zMax);
+
 // ── Canonical apply() epilogue ─────────────────────────────────────────────
 //
 // The single sanctioned way to finish a skill apply(): VALIDATES newShape

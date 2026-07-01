@@ -78,27 +78,18 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     if (depth <= 1e-6)
         throw SkillError("spot_drill: degenerate cone depth (angle/dia mismatch)");
 
-    // 3) Bbox-driven entry point (same convention as drill_hole / countersink)
+    // 3) Entry point via the shared axis∩face-plane resolver.
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
-    const double bboxDiag = std::sqrt(
-        (xMax - xMin) * (xMax - xMin) +
-        (yMax - yMin) * (yMax - yMin) +
-        (zMax - zMin) * (zMax - zMin));
 
     const gp_Dir adir = in.axis_dir;
 
-    // Entry-plane point: where the cone top lives.  For the common ±Z case
-    // we project onto zMax or zMin directly; otherwise fall back to a
-    // bbox-margin point along -axis_dir.
-    gp_Pnt entryPlanePoint(
-        in.position_x_mm - adir.X() * bboxDiag,
-        in.position_y_mm - adir.Y() * bboxDiag,
-        (zMin + zMax) / 2.0 - adir.Z() * bboxDiag);
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
-        const double entryZ = (adir.Z() < 0) ? zMax : zMin;
-        entryPlanePoint = gp_Pnt(in.position_x_mm, in.position_y_mm, entryZ);
-    }
+    // Entry-plane point: where the cone top lives = where the axis pierces the
+    // resolved entry-face plane (correct for any axis; a prior bbox-margin guess
+    // floated the cone a whole bboxDiag behind the part for a tilted axis).
+    const gp_Pnt entryPlanePoint =
+        entryPointOnFacePlane(wp, *entryId, in.position_x_mm, in.position_y_mm,
+                              adir, zMin, zMax);
 
     // 4) Build the cone-frustum cutter.
     //    coneFrustum(axis, r1_at_origin, r2_at_+height, height):
@@ -125,6 +116,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "entry_face_id",    *entryId },
         { "position_x_mm",    in.position_x_mm },
         { "position_y_mm",    in.position_y_mm },
+        { "position_z_mm",    entryPlanePoint.Z() },
         { "axis_dir",         { adir.X(), adir.Y(), adir.Z() } },
         { "diameter_mm",      in.diameter_mm },
         { "cone_angle_deg",   in.cone_angle_deg },

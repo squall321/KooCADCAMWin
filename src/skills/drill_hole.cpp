@@ -110,35 +110,16 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double kEntryOverhang = 0.05;
     const gp_Dir adir = in.axis_dir;
 
-    gp_Pnt toolStart(
-        in.position_x_mm - adir.X() * kEntryOverhang,
-        in.position_y_mm - adir.Y() * kEntryOverhang,
-        // start "above" the workpiece relative to drilling direction:
-        // we walk against the axis to find the entry plane.  Simplest: use
-        // workpiece bbox to pick a start that is guaranteed outside.
-        0.0);
-    // Refine Z start: cast against -axis_dir from some far above-Z to find
-    // a Z that is outside the bbox along -axis_dir direction.
-    {
-        // Project a point along -axis_dir, far enough to be outside bbox.
-        // We assume axis_dir has a non-trivial component along Z for typical
-        // top-face drilling.  For arbitrary directions, the caller must
-        // ensure the position+axis goes through the workpiece.
-        const double margin = bboxDiag + 1.0;
-        toolStart = gp_Pnt(
-            in.position_x_mm - adir.X() * (margin + kEntryOverhang),
-            in.position_y_mm - adir.Y() * (margin + kEntryOverhang),
-            // start point along -axis_dir from a centered point
-            (zMin + zMax) / 2.0 - adir.Z() * (margin + kEntryOverhang));
-    }
-    // For the common case (drill straight down from top face), simplify:
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
-        if (adir.Z() < 0) {
-            toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMax + kEntryOverhang);
-        } else {
-            toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMin - kEntryOverhang);
-        }
-    }
+    // Entry point = where the axis pierces the resolved entry-face plane (correct
+    // for any axis, including tilted — a prior bbox cast + Z=0-for-tilted stamp
+    // put the launch point tens of mm off and machined tilted holes from Z=0).
+    const gp_Pnt entryPt =
+        entryPointOnFacePlane(wp, *entryId, in.position_x_mm, in.position_y_mm,
+                              adir, zMin, zMax);
+    // Launch the cutter kEntryOverhang OUTSIDE the surface, back along -adir.
+    gp_Pnt toolStart(entryPt.X() - adir.X() * kEntryOverhang,
+                     entryPt.Y() - adir.Y() * kEntryOverhang,
+                     entryPt.Z() - adir.Z() * kEntryOverhang);
 
     const double toolHeight = in.through_hole
         ? (bboxDiag + 2.0 * kEntryOverhang)
@@ -151,14 +132,11 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // 5) Cut
     const TopoDS_Shape newShape = pr::cut(wp.shape(), cutter);
 
-    // 6) Build signature.  Emit the resolved axial entry plane Z so the CAM
-    //    generator can place the toolpath on the real surface instead of
-    //    assuming Z=0 (matches recognize()'s `position_z_mm` 3-D entry).  Only
-    //    the straight-vertical case has an unambiguous scalar entry Z; for
-    //    arbitrary axes we leave it unset (generator falls back to 0, the
-    //    prior behaviour).
-    const bool vertical = std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6;
-    const double entryZ = vertical ? (adir.Z() < 0 ? zMax : zMin) : 0.0;
+    // 6) Build signature.  Emit the resolved axial entry-plane Z so the CAM
+    //    generator machines from the real surface instead of Z=0 (matches
+    //    recognize()'s `position_z_mm` 3-D entry).  entryPt is the true axis∩face
+    //    crossing, correct for ANY axis (the tilted case is no longer stamped 0).
+    const double entryZ = entryPt.Z();
     json params = {
         { "entry_face_kind", "resolved_id" },
         { "entry_face_id",   *entryId },

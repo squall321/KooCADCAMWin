@@ -97,27 +97,20 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
-    const double bboxDiag = std::sqrt(
-        (xMax - xMin) * (xMax - xMin) +
-        (yMax - yMin) * (yMax - yMin) +
-        (zMax - zMin) * (zMax - zMin));
 
     const double kEntryOverhang = 0.05;
     const double kStepOverlap   = 0.05;     // overlap between adjacent steps
     const gp_Dir adir = in.axis_dir;
 
-    // Origin at the entry face (just outside, along reversed axis).
-    gp_Pnt entryStart(
-        in.position_x_mm - adir.X() * (bboxDiag + kEntryOverhang),
-        in.position_y_mm - adir.Y() * (bboxDiag + kEntryOverhang),
-        (zMin + zMax) / 2.0 - adir.Z() * (bboxDiag + kEntryOverhang));
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
-        if (adir.Z() < 0) {
-            entryStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMax + kEntryOverhang);
-        } else {
-            entryStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMin - kEntryOverhang);
-        }
-    }
+    // True entry = where the axis pierces the resolved entry-face plane (any
+    // axis; a prior bbox guess put the cutter a whole bboxDiag off for tilted).
+    const gp_Pnt entryPt =
+        entryPointOnFacePlane(wp, *entryId, in.position_x_mm, in.position_y_mm,
+                              adir, zMin, zMax);
+    // Launch origin at the entry face (just outside, along reversed axis).
+    const gp_Pnt entryStart(entryPt.X() - adir.X() * kEntryOverhang,
+                            entryPt.Y() - adir.Y() * kEntryOverhang,
+                            entryPt.Z() - adir.Z() * kEntryOverhang);
 
     // Build N cylinders.  Step 0 starts at the entry; each subsequent step
     // starts (overlap before) at the cumulative depth of the previous steps.
@@ -175,6 +168,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "entry_face_id",   *entryId },
         { "position_x_mm",   in.position_x_mm },
         { "position_y_mm",   in.position_y_mm },
+        { "position_z_mm",   entryPt.Z() },
         { "axis_dir",        { adir.X(), adir.Y(), adir.Z() } },
         { "steps",           stepsJson },
     };

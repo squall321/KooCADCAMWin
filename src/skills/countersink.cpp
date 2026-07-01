@@ -122,71 +122,22 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // 3) Compute drill geometry (same pattern as drill_hole)
     double xMin, yMin, zMin, xMax, yMax, zMax;
     wp.boundingBox(xMin, yMin, zMin, xMax, yMax, zMax);
-    const double bboxDiag = std::sqrt(
-        (xMax - xMin) * (xMax - xMin) +
-        (yMax - yMin) * (yMax - yMin) +
-        (zMax - zMin) * (zMax - zMin));
-
-    // True entry point = where the tool axis pierces the resolved entry-face
-    // plane.  For a tilted axis the XY of that piercing differs from
-    // (position_x, position_y), so we intersect the axis line with the face
-    // plane rather than guessing from the bbox.  Falls back to std::nullopt for
-    // a non-planar entry face (then the ±Z / general heuristics below apply).
-    std::optional<gp_Pnt> entryOnFace;
-    {
-        const TopoDS_Face& ef = wp.face(*entryId);
-        BRepAdaptor_Surface efs(ef);
-        if (efs.GetType() == GeomAbs_Plane) {
-            const gp_Pln pln = efs.Plane();
-            const gp_Pnt p0  = pln.Location();
-            const gp_Dir n   = pln.Axis().Direction();
-            // Line: L(t) = a0 + t*adir, with a0 a point on the axis at bbox mid.
-            const gp_Pnt a0(in.position_x_mm, in.position_y_mm, (zMin + zMax) / 2.0);
-            const gp_Dir ad = in.axis_dir;
-            const double denom = n.Dot(ad);
-            if (std::abs(denom) > 1e-9) {
-                // Use gp_Vec dot for the (a0→p0) term: gp_Dir::Dot(gp_Vec) would
-                // implicitly normalise the vector and discard its magnitude.
-                const double t = gp_Vec(n).Dot(gp_Vec(a0, p0)) / denom;
-                entryOnFace = gp_Pnt(a0.X() + ad.X() * t,
-                                     a0.Y() + ad.Y() * t,
-                                     a0.Z() + ad.Z() * t);
-            }
-        }
-    }
 
     const double kEntryOverhang = 0.05;
     const gp_Dir adir = in.axis_dir;
 
-    // Default toolStart (general-axis case): set just outside the workpiece
-    // along -adir.
-    gp_Pnt toolStartCyl(
-        in.position_x_mm - adir.X() * (bboxDiag + kEntryOverhang),
-        in.position_y_mm - adir.Y() * (bboxDiag + kEntryOverhang),
-        (zMin + zMax) / 2.0 - adir.Z() * (bboxDiag + kEntryOverhang));
-    // The entry-plane point is where the axis crosses the entry SURFACE.  Prefer
-    // the exact axis∩face-plane intersection computed above; it is correct for
-    // ANY axis.  (A prior bug used a copy of toolStartCyl — a whole bboxDiag
-    // behind the part — so a tilted countersink cut NOTHING and stamped garbage.)
-    gp_Pnt entryPlanePoint = entryOnFace.value_or(gp_Pnt(
-        toolStartCyl.X() + adir.X() * (bboxDiag + kEntryOverhang),
-        toolStartCyl.Y() + adir.Y() * (bboxDiag + kEntryOverhang),
-        toolStartCyl.Z() + adir.Z() * (bboxDiag + kEntryOverhang)));
+    // True entry point = where the tool axis pierces the resolved entry-face
+    // plane (correct for any axis, including tilted).  A prior bug placed the
+    // cone/pilot cutters a whole bboxDiag behind the part for a tilted axis, so a
+    // tilted countersink cut NOTHING and stamped a garbage entry Z.
+    const gp_Pnt entryPlanePoint =
+        entryPointOnFacePlane(wp, *entryId, in.position_x_mm, in.position_y_mm,
+                              adir, zMin, zMax);
     // The cutter launch point sits kEntryOverhang OUTSIDE the entry surface,
     // back along -adir from the true entry point.
-    toolStartCyl = gp_Pnt(entryPlanePoint.X() - adir.X() * kEntryOverhang,
-                          entryPlanePoint.Y() - adir.Y() * kEntryOverhang,
-                          entryPlanePoint.Z() - adir.Z() * kEntryOverhang);
-
-    // Common-case shortcut: drilling along ±Z, planar entry face — keep the exact
-    // top/bottom Z (the axis∩plane result already equals this, but pin it for the
-    // no-entryOnFace fallback path).
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6 && !entryOnFace) {
-        const double entryZ = (adir.Z() < 0) ? zMax : zMin;
-        toolStartCyl     = gp_Pnt(in.position_x_mm, in.position_y_mm,
-                                  entryZ - adir.Z() * kEntryOverhang);
-        entryPlanePoint  = gp_Pnt(in.position_x_mm, in.position_y_mm, entryZ);
-    }
+    gp_Pnt toolStartCyl(entryPlanePoint.X() - adir.X() * kEntryOverhang,
+                        entryPlanePoint.Y() - adir.Y() * kEntryOverhang,
+                        entryPlanePoint.Z() - adir.Z() * kEntryOverhang);
 
     // 4) Build the two cutters.
     //    Pilot cylinder runs from above-entry (with overhang) down for the

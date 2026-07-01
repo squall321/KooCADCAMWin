@@ -120,6 +120,13 @@ Toolpath counterboreToolpath(const skill::FeatureSignature& sig);
 Toolpath countersinkToolpath(const skill::FeatureSignature& sig);
 Toolpath reamToolpath(const skill::FeatureSignature& sig);
 
+// bore_with_shelf → two coaxial plunges (upper to upper_depth_mm, then lower to
+// upper_depth + lower_depth, since lower_depth is measured from the shelf).
+// multi_step_bore → one plunge per step at the CUMULATIVE depth (steps[] carry
+// {dia_mm, depth_mm}, depths accumulate down the bore).  Both ±Z-guarded.
+Toolpath boreWithShelfToolpath(const skill::FeatureSignature& sig);
+Toolpath multiStepBoreToolpath(const skill::FeatureSignature& sig);
+
 // ── Multi-feature dispatcher ─────────────────────────────────────────────
 
 // Generate toolpaths for ALL features in a vector of signatures (e.g.,

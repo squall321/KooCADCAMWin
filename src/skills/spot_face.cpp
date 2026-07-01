@@ -81,24 +81,14 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double kOverhang = 0.05;
     const gp_Dir adir = in.axis_dir;
 
-    gp_Pnt toolStart;
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
-        if (adir.Z() < 0) {
-            toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMax + kOverhang);
-        } else {
-            toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMin - kOverhang);
-        }
-    } else {
-        const double bboxDiag = std::sqrt(
-            (xMax - xMin)*(xMax - xMin) +
-            (yMax - yMin)*(yMax - yMin) +
-            (zMax - zMin)*(zMax - zMin));
-        const double margin = bboxDiag + 1.0;
-        toolStart = gp_Pnt(
-            in.position_x_mm - adir.X() * margin,
-            in.position_y_mm - adir.Y() * margin,
-            (zMin + zMax) / 2.0 - adir.Z() * margin);
-    }
+    // Entry point = axis∩entry-face plane (any axis; a prior bbox-margin guess
+    // put the cutter a whole bboxDiag behind the part for a tilted axis).
+    const gp_Pnt entryPt =
+        entryPointOnFacePlane(wp, *entryId, in.position_x_mm, in.position_y_mm,
+                              adir, zMin, zMax);
+    const gp_Pnt toolStart(entryPt.X() - adir.X() * kOverhang,
+                           entryPt.Y() - adir.Y() * kOverhang,
+                           entryPt.Z() - adir.Z() * kOverhang);
 
     const double toolHeight = in.depth_mm + kOverhang;
     const gp_Ax2 toolAx(toolStart, adir);
@@ -110,6 +100,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "entry_face_id",  *entryId },
         { "position_x_mm",  in.position_x_mm },
         { "position_y_mm",  in.position_y_mm },
+        { "position_z_mm",  entryPt.Z() },
         { "axis_dir",       { adir.X(), adir.Y(), adir.Z() } },
         { "dia_mm",         in.dia_mm },
         { "depth_mm",       in.depth_mm },
