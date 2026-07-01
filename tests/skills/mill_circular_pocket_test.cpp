@@ -150,6 +150,57 @@ TEST(SkillMillCircularPocket, MeasuredGeometricRecovery)
     EXPECT_NEAR(rp["bottom_corner_r_mm"].get<double>(), 0.0, 1e-6);
 }
 
+// ─── RADIAL side pocket: a round recess on the +X SIDE face (axis -X — a watch
+// case-side well or a phone side sensor window) must apply, recover the ±X axis
+// + 3-D entry, and regenerate the same volume.  The old apply() started the tool
+// a bbox-diagonal outside the +X face and removed nothing. ────────────────────
+TEST(SkillMillCircularPocket, RadialSidePocketRoundTrips)
+{
+    // Stock corner at origin: x∈[0,40], y∈[0,60], z∈[0,30].  Pocket into +X.
+    auto stock = skill::createCuboidStock(40.0, 60.0, 30.0);
+    const double vStock = volumeOf(stock->shape());
+    skill::mill_circular_pocket::Input in;
+    in.entry_face    = skill::FaceByNormal{ gp_Dir(1, 0, 0), 5.0, "largest" };  // +X side
+    in.position_x_mm = 40.0;          // on the +X face plane
+    in.position_y_mm = 30.0;
+    in.position_z_mm = 15.0;          // mid-height entry
+    in.axis_dir      = gp_Dir(-1, 0, 0);
+    in.diameter_mm   = 12.0;
+    in.depth_mm      = 5.0;
+    auto out = skill::mill_circular_pocket::apply(*stock, in);
+    const double removed = vStock - volumeOf(out.workpiece->shape());
+    ASSERT_NEAR(removed, M_PI * 6.0 * 6.0 * 5.0, M_PI * 6.0 * 6.0 * 5.0 * 0.05)
+        << "the radial side pocket must actually remove material";
+
+    skill::Workpiece fresh(out.workpiece->shape());
+    auto cands = skill::mill_circular_pocket::recognize(fresh);
+    ASSERT_FALSE(cands.empty()) << "a radial side pocket must be recognised";
+    const auto& rp = cands[0].recovered_params;
+    EXPECT_NEAR(rp["diameter_mm"].get<double>(), 12.0, 0.2);
+    EXPECT_NEAR(rp["depth_mm"].get<double>(),    5.0,  0.3);
+    // Axis is ±X (radial), entry on the +X face.
+    EXPECT_NEAR(std::abs(rp["axis_dir"][0].get<double>()), 1.0, 1e-2) << "axis is ±X";
+    EXPECT_NEAR(rp["axis_dir"][2].get<double>(), 0.0, 1e-2);
+    EXPECT_NEAR(rp["position_x_mm"].get<double>(), 40.0, 0.3) << "entry on +X face";
+
+    // Regenerate from the recovered params → same removed volume.
+    auto fresh2 = skill::createCuboidStock(40.0, 60.0, 30.0);
+    const double vFresh = volumeOf(fresh2->shape());
+    skill::mill_circular_pocket::Input in2;
+    in2.entry_face    = skill::FaceByNormal{ gp_Dir(1, 0, 0), 5.0, "largest" };
+    in2.position_x_mm = rp["position_x_mm"].get<double>();
+    in2.position_y_mm = rp["position_y_mm"].get<double>();
+    in2.position_z_mm = rp["position_z_mm"].get<double>();
+    in2.axis_dir      = gp_Dir(rp["axis_dir"][0].get<double>(),
+                               rp["axis_dir"][1].get<double>(),
+                               rp["axis_dir"][2].get<double>());
+    in2.diameter_mm   = rp["diameter_mm"].get<double>();
+    in2.depth_mm      = rp["depth_mm"].get<double>();
+    auto regen = skill::mill_circular_pocket::apply(*fresh2, in2);
+    EXPECT_NEAR(vFresh - volumeOf(regen.workpiece->shape()), removed, removed * 0.05)
+        << "the recovered radial pocket regenerates the same removed volume";
+}
+
 // ─── Concavity gate: a convex BOSS is NOT a pocket ─────────────────────────
 //
 // recognize() must reject convex cylinders.  Mill a real pocket at (20,20) and

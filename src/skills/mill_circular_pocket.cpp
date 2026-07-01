@@ -102,28 +102,26 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double kEntryOverhang = 0.05;
     const gp_Dir adir = in.axis_dir;
 
-    // Resolve a Z for the entry plane: project bbox along axis_dir.
-    // For the common Z-aligned drill-down case (axis = -Z) start at zMax.
-    gp_Pnt toolStart;
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
+    // Tool start = the ENTRY point (position_*) pulled back a hair along -adir so
+    // the cut breaks cleanly through the entry surface.  position_* is the entry
+    // point ON the entry face (in world XYZ), so this works for ANY axis — a
+    // radial (±X/±Y) side pocket starts on its side face, not just a ±Z top
+    // pocket.  (Mirrors the bore_cylindrical fix: the old bbox-diagonal pull-back
+    // started the cutter far outside the stock for a non-Z axis, removing nothing.)
+    gp_Pnt toolStart(
+        in.position_x_mm - adir.X() * kEntryOverhang,
+        in.position_y_mm - adir.Y() * kEntryOverhang,
+        in.position_z_mm - adir.Z() * kEntryOverhang);
+
+    // Legacy ±Z convenience: if no position_z was authored (the common top-face
+    // case where callers pass only XY), snap the start to the ±Z entry surface.
+    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6 &&
+        std::abs(in.position_z_mm) < 1e-9) {
         if (adir.Z() < 0) {
             toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMax + kEntryOverhang);
         } else {
             toolStart = gp_Pnt(in.position_x_mm, in.position_y_mm, zMin - kEntryOverhang);
         }
-    } else {
-        // Fallback: position the tool start on the bbox boundary along -axis_dir
-        // from the requested XY.  For non-axial pockets, the caller is
-        // responsible for ensuring this places the tool above the entry face.
-        const double bboxDiag = std::sqrt(
-            (xMax - xMin)*(xMax - xMin) +
-            (yMax - yMin)*(yMax - yMin) +
-            (zMax - zMin)*(zMax - zMin));
-        const double margin = bboxDiag + 1.0;
-        toolStart = gp_Pnt(
-            in.position_x_mm - adir.X() * margin,
-            in.position_y_mm - adir.Y() * margin,
-            (zMin + zMax)/2.0 - adir.Z() * margin);
     }
 
     const double toolHeight = in.depth_mm + kEntryOverhang;
