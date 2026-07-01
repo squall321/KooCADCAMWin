@@ -128,6 +128,19 @@ TEST(PhoneFullRoundtrip, StrictFidelityOnRecognisableSubset)
         std::printf("[PHONE REDUCED] inferred plan (post-dedupe):");
         for (const auto& [k, n] : bk) std::printf(" %s x%d", k.c_str(), n);
         std::printf("\n");
+        // REGRESSION: every recovered coordinate must be SANE (within the part's
+        // bounding box, ~ +/-200mm).  The side USB-C obround was recovered with
+        // end_y ~ -5e7 (an ill-conditioned entry-plane projection where the slot
+        // axis grazed the chosen entry face), placing the cut outside the stock.
+        for (const auto& s : inferred.steps()) {
+            for (auto it = s.params.begin(); it != s.params.end(); ++it) {
+                if (!it.value().is_number()) continue;
+                const double v = it.value().get<double>();
+                EXPECT_LT(std::abs(v), 1000.0)
+                    << "recovered param " << it.key() << "=" << v << " on "
+                    << s.skill_id << " is out of range (coordinate blow-up)";
+            }
+        }
         // REGRESSION: box_boss must NOT claim the display-pocket FRAME (the flat
         // top face bounded by inward pocket walls) as a large additive boss —
         // that over-shoots the cut-only phone (was a 158x74x0.6 false boss).

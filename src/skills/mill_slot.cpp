@@ -341,11 +341,24 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             const gp_Pnt fc = wp.faceCenter(entryFaceIdx);
             const gp_Dir fn = wp.faceNormal(entryFaceIdx);
             // Project the cylinder axis location onto the entry plane along adir.
-            const double t = gp_Vec(axisLoc, fc).Dot(gp_Vec(fn)) /
-                             std::max(1e-9, gp_Vec(adir).Dot(gp_Vec(fn)));
-            endEntry = gp_Pnt(axisLoc.X() + adir.X() * t,
-                              axisLoc.Y() + adir.Y() * t,
-                              axisLoc.Z() + adir.Z() * t);
+            // The entry face was selected (above) only from faces with
+            // |fn·adir| ≈ 1 (axis-facing), so denom is GUARANTEED ≈ ±1 here — the
+            // |denom|>0.5 test is belt-and-suspenders and the else-branch never
+            // runs in practice.  The bug this divide replaced was the PRIOR
+            // `t = … / std::max(1e-9, denom)` clamp: faceNormal returns the
+            // OUTWARD normal, so a +Y side-port entry face has fn=+Y while OCCT
+            // may orient the bore axis as adir=−Y, giving a well-conditioned but
+            // NEGATIVE denom=−1.0.  max(1e-9, −1.0)=1e-9 turned t into O(mm)/1e-9
+            // ≈ 5e7 (the observed end_y ≈ −5e7).  Dividing by the SIGNED denom is
+            // the fix; keep the guard only to be safe against a future caller
+            // that relaxes the entry-face filter.
+            const double denom = gp_Vec(adir).Dot(gp_Vec(fn));
+            if (std::abs(denom) > 0.5) {
+                const double t = gp_Vec(axisLoc, fc).Dot(gp_Vec(fn)) / denom;
+                endEntry = gp_Pnt(axisLoc.X() + adir.X() * t,
+                                  axisLoc.Y() + adir.Y() * t,
+                                  axisLoc.Z() + adir.Z() * t);
+            }
         }
         bottomGroups[bottomFaceIdx].push_back({
             fIdx, cyl.Radius(), endEntry, adir, aHi, aLo
