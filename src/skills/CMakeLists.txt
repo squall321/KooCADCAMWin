@@ -674,6 +674,7 @@ add_library(koo_skills STATIC
     dome_boss.cpp
     annular_groove.cpp
     box_boss.cpp
+    box_pocket.cpp
     # slice 11 — SolidWorks-style body management (5)
     move_face_along_direction.cpp
     body_split_by_plane.cpp

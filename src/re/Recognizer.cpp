@@ -184,6 +184,7 @@
 #include "skills/dome_boss.hpp"
 #include "skills/annular_groove.hpp"
 #include "skills/box_boss.hpp"
+#include "skills/box_pocket.hpp"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -436,6 +437,11 @@ std::vector<RecognizeFn> buildRegistry()
     // additive feature extrude_boss can't see (the boss has no second free cap —
     // its inner face merges into the host body).
     reg.emplace_back(&skill::box_boss::recognize);
+    // BOX pocket — a sharp-corner rectangular recess on any face (phone/watch side
+    // button, SIM tray, connector cutout).  The subtractive mirror of box_boss: a
+    // planar FLOOR bounded by 3-4 INWARD-facing walls, recessed below the entry
+    // plane.  Complements mill_rect_pocket (Z-only, keyed on corner fillets).
+    reg.emplace_back(&skill::box_pocket::recognize);
 
     return reg;
 }
@@ -462,6 +468,7 @@ Group classify(std::string_view skillId)
         "mill_open_pocket",
         "profile_milling",
         "mill_rect_pocket",
+        "box_pocket",           // sharp-corner arbitrary-axis rect pocket (side button)
         "mill_circular_pocket",
         "mill_slot",
         "mill_keyway",
@@ -556,6 +563,10 @@ const std::unordered_set<std::string>& preciseRecognizers()
         // perpendicular adjacent side walls (a box top) protruding from the host
         // — specific enough that a random planar face won't qualify.
         "box_boss",
+        // Box pocket: a planar floor bounded by 3-4 INWARD walls, recessed below
+        // the entry plane (recess gate) with a compact footprint (aspect/min-dim)
+        // — the inverse-convexity + recess gates make it specific on foreign CAD.
+        "box_pocket",
     };
     return kPrecise;
 }

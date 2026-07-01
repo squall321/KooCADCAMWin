@@ -68,6 +68,10 @@ const std::set<std::string>& preciseTier()
         "chamfer_edge", "fillet_edge", "bore_cylindrical", "bore_with_shelf",
         "ream", "spot_drill", "spot_face", "mill_circular_pocket",
         "mill_rect_pocket", "mill_slot", "bolt_hole_metric_spec",
+        // box_pocket is precise-tier (a sharp-corner rect recess): it legitimately
+        // fires on a filleted rect_pocket panel part (a rect pocket IS a rect
+        // pocket), so it is exempt from the domain-compound cap invariant here.
+        "box_pocket",
     };
     return k;
 }
