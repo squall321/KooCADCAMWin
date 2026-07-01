@@ -107,6 +107,44 @@ TEST(SkillAnnularGroove, RoundTripsByVolume)
         << "regenerated ring reproduces the original volume";
 }
 
+// ─── 3b. a TAPERED bezel (cone outer wall) recovers its taper angle and
+// regenerates as a cone ring, not a straight wall. ───────────────────────────
+TEST(SkillAnnularGroove, TaperedBezelRecoversTaperAngle)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 10.0);
+    skill::annular_groove::Input in;
+    in.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in.outer_dia_mm = 44.0;
+    in.inner_dia_mm = 36.0;
+    in.depth_mm     = 2.0;
+    in.taper_deg    = 15.0;      // sloped outer wall (a real watch bezel)
+    const auto built = skill::annular_groove::apply(*stock, in);
+    const double vOrig = volumeOf(built.workpiece->shape());
+
+    skill::Workpiece foreign(built.workpiece->shape());
+    const auto cands = skill::annular_groove::recognize(foreign);
+    const skill::RecognizedFeature* g = nullptr;
+    for (const auto& c : cands)
+        if (c.matched_geometry.value("source", std::string{}) == "geometry") { g = &c; break; }
+    ASSERT_NE(g, nullptr) << "a tapered bezel must be recognised";
+    // The taper angle must be recovered (not the old hard-coded 0).
+    EXPECT_NEAR(g->recovered_params.value("taper_deg", 0.0), 15.0, 1.0)
+        << "the cone outer wall's half-angle must be recovered";
+
+    // Regenerate from the recovered params (incl. taper) → same volume.  Without
+    // taper recovery this would rebuild a straight wall and mismatch the volume.
+    auto fresh = skill::createCuboidStock(60.0, 60.0, 10.0);
+    skill::annular_groove::Input in2;
+    in2.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in2.outer_dia_mm = g->recovered_params["outer_dia_mm"].get<double>();
+    in2.inner_dia_mm = g->recovered_params["inner_dia_mm"].get<double>();
+    in2.depth_mm     = g->recovered_params["depth_mm"].get<double>();
+    in2.taper_deg    = g->recovered_params.value("taper_deg", 0.0);
+    const auto out2 = skill::annular_groove::apply(*fresh, in2);
+    EXPECT_NEAR(volumeOf(out2.workpiece->shape()), vOrig, vOrig * 0.03)
+        << "the tapered ring must regenerate to the same volume";
+}
+
 // ─── 4. a SHALLOW decorative ring (0.3mm) is recognised (o_ring rejects it) ─
 TEST(SkillAnnularGroove, RecognizesShallowDecoRing)
 {

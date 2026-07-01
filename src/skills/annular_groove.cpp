@@ -16,6 +16,7 @@
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
@@ -339,13 +340,37 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         if (lo < floorAxial - 0.15) return out;             // the inner wall continues past the floor
     }
 
+    // TAPER recovery: a sloped bezel/deco ring has a CONE outer wall (apply()
+    // builds it via annularConeRing from taper_deg), not a cylinder — so it is
+    // absent from collectCyls and outerFace stays -1.  Look for a coaxial CONE
+    // face whose reference radius is near the floor's outer radius; its half-angle
+    // is the taper.  Recovering it stops a sloped bezel from regenerating as a
+    // straight wall (the common real-watch case).
+    double taperDeg = 0.0;
+    for (int i = 0; i < wp.faceCount(); ++i) {
+        BRepAdaptor_Surface s(wp.face(i));
+        if (s.GetType() != GeomAbs_Cone) continue;
+        const gp_Cone cone = s.Cone();
+        // Coaxial with the groove axis?
+        if (std::abs(std::abs(cone.Axis().Direction().Dot(adir)) - 1.0) > 1e-2) continue;
+        gp_Vec rel(floor.center, cone.Axis().Location());
+        if ((rel - gp_Vec(adir) * rel.Dot(gp_Vec(adir))).Magnitude() > 0.3) continue;
+        // The cone must be the OUTER wall: its radius over the groove's axial span
+        // should bracket the floor outer radius (a cone narrows with depth, so the
+        // ref radius is near outerR).  Reject small inner cones (display taper).
+        if (std::abs(cone.RefRadius() - floor.outerR) > std::max(0.5, 0.3 * floor.outerR))
+            continue;
+        const double semi = std::abs(cone.SemiAngle()) * 180.0 / M_PI;
+        if (semi > 1e-3 && semi <= 60.0) { taperDeg = semi; outerFace = i; break; }
+    }
+
     json recovered = {
         { "center_x_mm",  0.0 },                        // foreign: on its own face
         { "center_y_mm",  0.0 },
         { "outer_dia_mm", 2.0 * floor.outerR },
         { "inner_dia_mm", 2.0 * floor.innerR },
         { "depth_mm",     depth },
-        { "taper_deg",    0.0 },
+        { "taper_deg",    taperDeg },
         { "world_center", { floor.center.X(), floor.center.Y() } },
     };
     json matched = {
