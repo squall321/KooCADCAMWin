@@ -191,6 +191,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -880,7 +881,12 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
         // unrelated hole that merely sits near a centre (different diameter), or
         // a counterbore SEAT bore at a bolt-hole centre (a step bore alone owns
         // coaxial bores).
-        struct Consumed { double x, y, dia; bool dropBores; };
+        // z is NaN when the pattern carried only 2-D centres (legacy top grids);
+        // matching then falls back to XY-only.  A SIDE grille carries 3-D centres
+        // (holes share XY but differ in Z), so z-aware matching is required to
+        // avoid collapsing distinct side holes onto one another.
+        struct Consumed { double x, y, z, dia; bool dropBores; };
+        constexpr double kNoZ = std::numeric_limits<double>::quiet_NaN();
         std::vector<Consumed> consumed;
         for (const auto& c : buckets[static_cast<int>(Group::Unknown)]) {
             const auto& rp = c.recovered_params;
@@ -890,15 +896,18 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
                 if (rp.contains("hole_centers") && rp["hole_centers"].is_array()) {
                     for (const auto& p : rp["hole_centers"]) {
                         if (p.is_array() && p.size() >= 2 &&
-                            p[0].is_number() && p[1].is_number())
+                            p[0].is_number() && p[1].is_number()) {
+                            const double z = (p.size() >= 3 && p[2].is_number())
+                                             ? p[2].get<double>() : kNoZ;
                             consumed.push_back({ p[0].get<double>(), p[1].get<double>(),
-                                                 hd, /*dropBores=*/false });
+                                                 z, hd, /*dropBores=*/false });
+                        }
                     }
                 }
             } else if (c.skill_id == "coaxial_step_bore") {
                 consumed.push_back({ rp.value("position_x_mm", 1e9),
                                      rp.value("position_y_mm", 1e9),
-                                     0.0, /*dropBores=*/true });
+                                     kNoZ, 0.0, /*dropBores=*/true });
             }
         }
         if (!consumed.empty()) {
@@ -913,9 +922,14 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
                     if (!p.is_object()) return false;
                     const double x = p.value("position_x_mm", 1e9);
                     const double y = p.value("position_y_mm", 1e9);
+                    const double z = p.value("position_z_mm", 1e9);
                     const double d = p.value("diameter_mm", -1.0);
                     for (const auto& cc : consumed) {
                         if (std::hypot(x - cc.x, y - cc.y) >= 0.5) continue;
+                        // When the pattern carried a 3-D centre (side grille),
+                        // also require the Z to match so distinct side holes at
+                        // the same XY are not all collapsed onto one.
+                        if (!std::isnan(cc.z) && std::abs(z - cc.z) >= 0.5) continue;
                         if (cc.dropBores) return true;            // step-bore axis: any drill/bore
                         // Hole pattern: only the matching-diameter drills.
                         if (isDrill && (cc.dia <= 0.0 || std::abs(d - cc.dia) < 0.2))

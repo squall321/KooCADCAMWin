@@ -8,11 +8,14 @@
 #include "engine/primitives/Tools.hpp"
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -83,11 +86,22 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         throw SkillError(msg);
     }
 
-    auto faceIdOpt = wp.resolve(in.face);
-    if (!faceIdOpt) throw SkillError("linear_pattern: face datum unresolved");
-    const int faceId = *faceIdOpt;
-    const gp_Pnt center = wp.faceCenter(faceId);
-    const gp_Dir normal = wp.faceNormal(faceId);
+    // Placement source: either a resolved face datum (design path) or a direct
+    // world origin+normal (foreign-recovery path — a side grille has no design
+    // datum).  Both feed the same face-local (u,v) grid below.
+    int faceId = -1;
+    gp_Pnt center;
+    gp_Dir normal;
+    if (in.use_world) {
+        center = gp_Pnt(in.world_ox_mm, in.world_oy_mm, in.world_oz_mm);
+        normal = gp_Dir(in.world_nx, in.world_ny, in.world_nz);
+    } else {
+        auto faceIdOpt = wp.resolve(in.face);
+        if (!faceIdOpt) throw SkillError("linear_pattern: face datum unresolved");
+        faceId = *faceIdOpt;
+        center = wp.faceCenter(faceId);
+        normal = wp.faceNormal(faceId);
+    }
 
     // Tool length must overshoot the depth so the cut is clean at the entry.
     constexpr double kOverhang = 0.1;
@@ -97,6 +111,17 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // Cut axis direction = INTO the face (opposite outward normal).
     const gp_Dir cutDir(-normal.X(), -normal.Y(), -normal.Z());
 
+    // The (start_x/pitch_x, start_y/pitch_y) grid is laid out in the FACE'S OWN
+    // in-plane frame (u along X-of-grid, v along Y-of-grid) — NOT world XY — so a
+    // grid on a SIDE face (normal along +/-X or +/-Y, e.g. a watch speaker
+    // grille) places correctly.  For a top face (normal +Z) u=+X and v=+Y, which
+    // reproduces the legacy world-XY behaviour exactly (byte-parity).
+    gp_Vec seed = std::abs(normal.X()) < 0.9 ? gp_Vec(1, 0, 0) : gp_Vec(0, 1, 0);
+    seed = seed - gp_Vec(normal) * seed.Dot(gp_Vec(normal));   // project into face plane
+    const gp_Dir uDir(seed);
+    const gp_Vec vVec = gp_Vec(normal).Crossed(gp_Vec(uDir));  // right-handed in-plane
+    const gp_Dir vDir(vVec);
+
     const int total = in.count_x * in.count_y;
     std::vector<TopoDS_Shape> cutters;
     cutters.reserve(static_cast<size_t>(total));
@@ -105,12 +130,12 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     // outside the face along +normal, then sweep INTO the body for toolLen.
     for (int j = 0; j < in.count_y; ++j) {
         for (int i = 0; i < in.count_x; ++i) {
-            const double dx = in.start_x_mm + i * in.pitch_x_mm;
-            const double dy = in.start_y_mm + j * in.pitch_y_mm;
+            const double du = in.start_x_mm + i * in.pitch_x_mm;
+            const double dv = in.start_y_mm + j * in.pitch_y_mm;
             const gp_Pnt entryOnPlane(
-                center.X() + dx,
-                center.Y() + dy,
-                center.Z() + 0.0);
+                center.X() + uDir.X() * du + vDir.X() * dv,
+                center.Y() + uDir.Y() * du + vDir.Y() * dv,
+                center.Z() + uDir.Z() * du + vDir.Z() * dv);
             // Lift slightly along +normal to start the cylinder above the face.
             const gp_Pnt cylStart(
                 entryOnPlane.X() + normal.X() * kOverhang,
@@ -189,6 +214,7 @@ struct CylInst
 {
     double x, y, z;
     double radius;
+    double depth = 0.0;   // axial extent of the cylinder face (recovered hole depth)
     gp_Dir dir;
 };
 
@@ -230,6 +256,25 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             ci.z = c.Location().Z();
             ci.radius = c.Radius();
             ci.dir = c.Axis().Direction();
+            // Depth = the cylinder face's extent ALONG its own axis (project the
+            // face bbox corners onto the axis).  Recovering depth is essential:
+            // apply()/validate reject hole_depth_mm<=0, so a pattern replayed with
+            // a zero depth would ABORT the whole re-synthesis plan.
+            Bnd_Box fb; BRepBndLib::Add(wp.face(i), fb);
+            if (!fb.IsVoid()) {
+                double q0, q1, q2, q3, q4, q5; fb.Get(q0, q1, q2, q3, q4, q5);
+                const double qx[2] = { q0, q3 }, qy[2] = { q1, q4 }, qz[2] = { q2, q5 };
+                double lo = 1e30, hi = -1e30;
+                const gp_Pnt L = c.Location();
+                for (int ix = 0; ix < 2; ++ix)
+                    for (int iy = 0; iy < 2; ++iy)
+                        for (int iz = 0; iz < 2; ++iz) {
+                            const double a = gp_Vec(L, gp_Pnt(qx[ix], qy[iy], qz[iz]))
+                                                 .Dot(gp_Vec(ci.dir));
+                            lo = std::min(lo, a); hi = std::max(hi, a);
+                        }
+                ci.depth = hi - lo;
+            }
             cyls.push_back(ci);
         } catch (...) { continue; }
     }
@@ -254,42 +299,56 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             if (!used[k] && sameGroup(cyls[g], cyls[k])) used[k] = true;
         if (grp.size() < 3) continue;
 
-        // AXIS gate: the recovered params (XY pitch grid) and apply()'s
-        // face-normal model assume holes bored along +/-Z.  A SIDE grille
-        // (axis along X/Y — e.g. a watch speaker grille) would be recovered with
-        // its Z stripped (hole_centers carries only XY), so its replay/subsumption
-        // would be wrong.  Recover ONLY vertical-axis grids; a side grid is left
-        // to its individual drills (a fuller 3-D pattern model is a follow-up).
-        if (std::abs(grp[0].dir.Z()) < 0.99) continue;
+        // The hole axis is grp[0].dir (up to sign).  apply() cuts along -normal
+        // (INTO the body), so the OUTWARD normal points OUT of the body.  A
+        // cylinder axis has an arbitrary OCCT sign, so orient the normal to point
+        // AWAY from the solid's bbox centre (the entry face is on the outside).
+        gp_Dir axis = grp[0].dir;
+        double wxMin, wyMin, wzMin, wxMax, wyMax, wzMax;
+        wp.boundingBox(wxMin, wyMin, wzMin, wxMax, wyMax, wzMax);
+        const gp_Pnt bodyC(0.5 * (wxMin + wxMax), 0.5 * (wyMin + wyMax),
+                           0.5 * (wzMin + wzMax));
+        const gp_Vec cToHole(bodyC, gp_Pnt(grp[0].x, grp[0].y, grp[0].z));
+        gp_Dir normal = axis;
+        if (gp_Vec(axis).Dot(cToHole) < 0.0)       // axis points inward → flip
+            normal = gp_Dir(-axis.X(), -axis.Y(), -axis.Z());
+        if (std::abs(normal.Z()) > 0.99 && normal.Z() < 0.0)
+            normal = gp_Dir(0, 0, 1);             // +/-Z parity: prefer +Z
+        gp_Vec seed = std::abs(normal.X()) < 0.9 ? gp_Vec(1, 0, 0) : gp_Vec(0, 1, 0);
+        seed = seed - gp_Vec(normal) * seed.Dot(gp_Vec(normal));
+        const gp_Dir uDir(seed);
+        const gp_Dir vDir(gp_Vec(normal).Crossed(gp_Vec(uDir)));
 
-        // Project centres onto the dominant axis to test for an equally-spaced
-        // 1-D line.  The dominant direction is the largest XY spread axis.
-        double minX = grp[0].x, maxX = grp[0].x, minY = grp[0].y, maxY = grp[0].y;
+        // Project every centre into (u, v) relative to the group's first centre.
+        const gp_Pnt o(grp[0].x, grp[0].y, grp[0].z);
+        struct UV { double u, v; const CylInst* c; };
+        std::vector<UV> pts; pts.reserve(grp.size());
         for (const auto& c : grp) {
-            minX = std::min(minX, c.x); maxX = std::max(maxX, c.x);
-            minY = std::min(minY, c.y); maxY = std::max(maxY, c.y);
+            const gp_Vec d(o, gp_Pnt(c.x, c.y, c.z));
+            pts.push_back({ d.Dot(gp_Vec(uDir)), d.Dot(gp_Vec(vDir)), &c });
         }
-        const double spanX = maxX - minX, spanY = maxY - minY;
-        const bool xDominant = spanX >= spanY;
+        double minU = pts[0].u, maxU = pts[0].u, minV = pts[0].v, maxV = pts[0].v;
+        for (const auto& p : pts) {
+            minU = std::min(minU, p.u); maxU = std::max(maxU, p.u);
+            minV = std::min(minV, p.v); maxV = std::max(maxV, p.v);
+        }
+        const double spanU = maxU - minU, spanV = maxV - minV;
+        const bool uDominant = spanU >= spanV;
 
-        // Sort along the dominant axis and measure inter-hole gaps.
-        std::vector<CylInst> line = grp;
+        std::vector<UV> line = pts;
         std::sort(line.begin(), line.end(),
-            [xDominant](const CylInst& a, const CylInst& b) {
-                return xDominant ? a.x < b.x : a.y < b.y;
+            [uDominant](const UV& a, const UV& b) {
+                return uDominant ? a.u < b.u : a.v < b.v;
             });
-        // Collinearity: the off-axis spread must be small relative to the on-axis
-        // span (otherwise it's a 2-D blob, not a clean line — punt to circular).
-        const double onSpan  = xDominant ? spanX : spanY;
-        const double offSpan = xDominant ? spanY : spanX;
+        const double onSpan  = uDominant ? spanU : spanV;
+        const double offSpan = uDominant ? spanV : spanU;
         if (onSpan < grp[0].radius) continue;            // degenerate
         if (offSpan > 0.10 * onSpan) continue;           // not collinear
 
-        // Equal pitch check.
         std::vector<double> gaps;
         for (size_t k = 1; k < line.size(); ++k)
-            gaps.push_back(xDominant ? (line[k].x - line[k-1].x)
-                                     : (line[k].y - line[k-1].y));
+            gaps.push_back(uDominant ? (line[k].u - line[k-1].u)
+                                     : (line[k].v - line[k-1].v));
         const double meanGap =
             std::accumulate(gaps.begin(), gaps.end(), 0.0) / gaps.size();
         if (meanGap < 2.0 * grp[0].radius) continue;     // overlapping / bogus
@@ -297,29 +356,61 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         for (double gp : gaps) maxDev = std::max(maxDev, std::abs(gp - meanGap));
         if (maxDev / meanGap > 0.05) continue;           // not equally spaced
 
+        // SIDE-AXIS SIZE gate: recognising ANY-axis grids (not just +/-Z) newly
+        // exposes functional SIDE bore rows — cross-drilled oil galleries, dowel-
+        // pin rows, hinge-knuckle bores — that are geometrically identical to a
+        // grille but are NOT one editable pattern.  A real side GRILLE (speaker /
+        // mic / vent) uses SMALL holes (<= ~3 mm); a structural side bore row uses
+        // larger holes.  So on a side (non-+/-Z) axis require small holes; +/-Z
+        // grids (bolt/mounting grids) keep the legacy behaviour (no size cap).
+        const bool verticalAxis = std::abs(normal.Z()) > 0.99;
+        if (!verticalAxis && 2.0 * grp[0].radius > 3.0) continue;
+
+        // A recovered hole must carry a positive depth (apply/validate reject
+        // depth<=0).  A cylinder face always has axial extent, but guard anyway.
+        if (line[0].c->depth <= 0.0) continue;
+
         if (line.size() <= bestCount) continue;
         bestCount = line.size();
 
+        // Recovered params are face-local (u,v) offsets FROM THE GROUP ORIGIN o;
+        // the pattern axis/origin carry the 3-D placement so apply() replays it
+        // in-plane.  hole_centers keeps the 3-D world centres for subsumption
+        // (the dedupe matches on those, independent of the local frame).
         json centers = json::array();
-        for (const auto& c : line) centers.push_back({ c.x, c.y });
-        const double pitch = xDominant ? meanGap : 0.0;
-        const double pitchY = xDominant ? 0.0 : meanGap;
+        for (const auto& p : line) centers.push_back({ p.c->x, p.c->y, p.c->z });
+        // start = the sorted-front hole's (u,v) offset from the group origin o.
+        const double startU = line.front().u;
+        const double startV = line.front().v;
         bestRecovered = {
-            { "hole_dia_mm",   2.0 * line[0].radius },
-            { "hole_depth_mm", 0.0 },
-            { "count_x",       xDominant ? static_cast<int>(line.size()) : 1 },
-            { "pitch_x_mm",    pitch },
-            { "count_y",       xDominant ? 1 : static_cast<int>(line.size()) },
-            { "pitch_y_mm",    pitchY },
-            { "start_x_mm",    line.front().x },
-            { "start_y_mm",    line.front().y },
-            { "hole_centers",  centers },     // for pattern subsumption
+            { "hole_dia_mm",   2.0 * line[0].c->radius },
+            { "hole_depth_mm", line[0].c->depth },   // recovered from cyl axial length
+            { "count_x",       uDominant ? static_cast<int>(line.size()) : 1 },
+            { "pitch_x_mm",    uDominant ? meanGap : 0.0 },
+            { "count_y",       uDominant ? 1 : static_cast<int>(line.size()) },
+            { "pitch_y_mm",    uDominant ? 0.0 : meanGap },
+            { "start_x_mm",    startU },
+            { "start_y_mm",    startV },
+            // Foreign recovery has no design face datum — carry the 3-D grid
+            // origin `o` (the group's first cylinder centre) + outward normal so
+            // apply() replays the grid in place.  start_x/start_y is the sorted
+            // front hole's (u,v) offset FROM o, so apply's world_o + start lands
+            // on the real first hole regardless of cylinder iteration order.
+            { "use_world",     true },
+            { "world_nx",      normal.X() },
+            { "world_ny",      normal.Y() },
+            { "world_nz",      normal.Z() },
+            { "world_ox_mm",   o.X() },
+            { "world_oy_mm",   o.Y() },
+            { "world_oz_mm",   o.Z() },
+            { "hole_centers",  centers },     // 3-D world centres for subsumption
         };
         bestMatched = {
             { "cyl_count",      static_cast<int>(line.size()) },
-            { "first_radius",   line[0].radius },
+            { "first_radius",   line[0].c->radius },
             { "pitch_mm",       meanGap },
             { "pitch_dev_frac", meanGap > 0 ? maxDev / meanGap : 0.0 },
+            { "axis_z",         normal.Z() },
         };
     }
 

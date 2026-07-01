@@ -13,6 +13,7 @@
 #include "skills/dome_boss.hpp"
 #include "skills/annular_groove.hpp"
 #include "skills/box_boss.hpp"
+#include "skills/linear_pattern.hpp"
 #include "skills/bolt_circle_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
 #include "skills/rectangular_hole_grid.hpp"
@@ -4346,6 +4347,36 @@ sk::revolve_boss::Input parseRevolveBoss(const json& p)
     return in;
 }
 
+sk::linear_pattern::Input parseLinearPattern(const json& p)
+{
+    sk::linear_pattern::Input in;
+    auto jint = [](const json& j, const char* k, int d) {
+        return (j.contains(k) && j[k].is_number()) ? j[k].get<int>() : d;
+    };
+    in.hole_dia_mm   = jdouble(p, "hole_dia_mm",   0.0);
+    in.hole_depth_mm = jdouble(p, "hole_depth_mm", 0.0);
+    in.count_x       = jint(p, "count_x", 1);
+    in.pitch_x_mm    = jdouble(p, "pitch_x_mm", 0.0);
+    in.count_y       = jint(p, "count_y", 1);
+    in.pitch_y_mm    = jdouble(p, "pitch_y_mm", 0.0);
+    in.start_x_mm    = jdouble(p, "start_x_mm", 0.0);
+    in.start_y_mm    = jdouble(p, "start_y_mm", 0.0);
+    // Foreign-recovery path: a recovered grid (esp. a side grille with no design
+    // datum) carries a world origin + outward normal.
+    if (p.value("use_world", false)) {
+        in.use_world  = true;
+        in.world_ox_mm = jdouble(p, "world_ox_mm", 0.0);
+        in.world_oy_mm = jdouble(p, "world_oy_mm", 0.0);
+        in.world_oz_mm = jdouble(p, "world_oz_mm", 0.0);
+        in.world_nx    = jdouble(p, "world_nx", 0.0);
+        in.world_ny    = jdouble(p, "world_ny", 0.0);
+        in.world_nz    = jdouble(p, "world_nz", 1.0);
+    } else {
+        in.face = parseFaceDatum(p);
+    }
+    return in;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Dispatch table
 // ─────────────────────────────────────────────────────────────────────────
@@ -4371,6 +4402,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::box_boss::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::box_boss::apply(wp, parseBoxBoss(p));
+    };
+    t[sk::linear_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::linear_pattern::apply(wp, parseLinearPattern(p));
     };
     t[sk::bolt_circle_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::bolt_circle_pattern::apply(wp, parseBoltCirclePattern(p));

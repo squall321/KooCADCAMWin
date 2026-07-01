@@ -217,26 +217,101 @@ TEST(SkillLinearPattern, PatternSubsumesIndividualDrills)
         << "the pattern must SUBSUME the individual drills (no leftover drill steps)";
 }
 
-// ─── 9. AXIS gate: a SIDE-bored row (axis along +X, not Z) must NOT be
-// recovered — recovered params assume a +Z XY grid, and a Z-stripped side grid
-// would replay / subsume incorrectly.  Drills bored along +X. ────────────────
-TEST(SkillLinearPattern, SideBoredRowIsNotRecovered)
+// ─── 9. SIDE grille (radial axis): a row bored into the +X face, stepping along
+// Y (axis = -X — a watch/phone speaker grille), is now recovered as ONE pattern
+// about its real axis, and regenerates in place from the recovered world grid. ─
+TEST(SkillLinearPattern, SideBoredRowRecognisesAndRegenerates)
+{
+    // Stock corner at origin: x in [0,40], y in [0,120], z in [0,30].  Build the
+    // side grille with linear_pattern's OWN world path (axis -X into the +X face):
+    // a 4-hole row stepping along Y, centred on the +X face at z=15.  This drives
+    // both apply()'s arbitrary-axis placement and recognize()'s arbitrary-axis
+    // recovery — drill_hole itself does not support a Z-free (side) axis.
+    auto stock = skill::createCuboidStock(40.0, 120.0, 30.0);
+    const double vStock = volumeOf(stock->shape());
+
+    skill::linear_pattern::Input build;
+    build.use_world     = true;
+    build.world_ox_mm   = 40.0;                 // on the +X face
+    build.world_oy_mm   = 42.0;                 // first hole y
+    build.world_oz_mm   = 15.0;                 // mid-height
+    build.world_nx      = 1.0;                  // OUTWARD normal = +X (cut goes -X)
+    build.world_ny      = 0.0;
+    build.world_nz      = 0.0;
+    build.hole_dia_mm   = 2.0;                  // a realistic small grille hole (<= 3mm)
+    build.hole_depth_mm = 6.0;
+    build.count_x       = 4;                    // 4 holes along the face-local u axis
+    build.pitch_x_mm    = 8.0;
+    build.count_y       = 1;
+    build.start_x_mm    = 0.0;
+    build.start_y_mm    = 0.0;
+    auto builtWp = skill::linear_pattern::apply(*stock, build).workpiece;
+    const double vBored = volumeOf(builtWp->shape());
+    ASSERT_LT(vBored, vStock) << "the side grille must remove material";
+
+    skill::Workpiece foreign(builtWp->shape());
+    const auto cands = skill::linear_pattern::recognize(foreign);
+    ASSERT_GE(cands.size(), 1u) << "a side grille must now be recovered as a pattern";
+    const auto& p = cands[0].recovered_params;
+    EXPECT_EQ(std::max(p.value("count_x", 0), p.value("count_y", 0)), 4)
+        << "all 4 side holes counted";
+    EXPECT_NEAR(p.value("hole_dia_mm", 0.0), 2.0, 0.1);
+    ASSERT_TRUE(p.value("use_world", false)) << "side grille carries a world placement";
+    // Recovered axis must be ~ +/-X (the bore axis), not +/-Z.
+    EXPECT_NEAR(std::abs(p.value("world_nx", 0.0)), 1.0, 1e-3) << "axis is +/-X";
+    EXPECT_NEAR(p.value("world_nz", 9.0), 0.0, 1e-3);
+    // Depth MUST be recovered (>0) — a 0 depth would abort the Executor replay
+    // via validate()'s DFM-INPUT gate.
+    EXPECT_NEAR(p.value("hole_depth_mm", 0.0), 6.0, 0.5) << "hole depth recovered from cyl length";
+
+    // REGENERATE from the recovered world grid onto a fresh stock, USING THE
+    // RECOVERED DEPTH (not a hard-coded value) → same removed volume in place.
+    skill::linear_pattern::Input in;
+    in.use_world     = true;
+    in.hole_dia_mm   = p.value("hole_dia_mm", 0.0);
+    in.hole_depth_mm = p.value("hole_depth_mm", 0.0);
+    in.count_x       = p.value("count_x", 1);
+    in.pitch_x_mm    = p.value("pitch_x_mm", 0.0);
+    in.count_y       = p.value("count_y", 1);
+    in.pitch_y_mm    = p.value("pitch_y_mm", 0.0);
+    in.start_x_mm    = p.value("start_x_mm", 0.0);
+    in.start_y_mm    = p.value("start_y_mm", 0.0);
+    in.world_ox_mm   = p.value("world_ox_mm", 0.0);
+    in.world_oy_mm   = p.value("world_oy_mm", 0.0);
+    in.world_oz_mm   = p.value("world_oz_mm", 0.0);
+    in.world_nx      = p.value("world_nx", 0.0);
+    in.world_ny      = p.value("world_ny", 0.0);
+    in.world_nz      = p.value("world_nz", 1.0);
+
+    auto regen = skill::linear_pattern::apply(*skill::createCuboidStock(40.0, 120.0, 30.0), in);
+    ASSERT_FALSE(regen.workpiece->shape().IsNull());
+    const double vRegen = volumeOf(regen.workpiece->shape());
+    EXPECT_NEAR(vStock - vRegen, vStock - vBored, (vStock - vBored) * 0.10)
+        << "the recovered side grille must regenerate the same removed volume";
+}
+
+// ─── 9b. SIDE-AXIS SIZE gate: a row of LARGE side bores (dowel pins / oil
+// galleries — 8 mm) is functionally NOT a grille and must NOT be over-unified
+// into one editable pattern (which would then subsume the real bores).  Small
+// grille holes on a side face still recover (test 9); large ones do not. ───────
+TEST(SkillLinearPattern, LargeSideBoreRowIsNotAGrille)
 {
     auto stock = skill::createCuboidStock(40.0, 120.0, 30.0);
-    // Bore 4 holes into the +X face, stepping along Y — axis = -X.
-    std::shared_ptr<skill::Workpiece> wp = stock;
-    for (int i = 0; i < 4; ++i) {
-        skill::drill_hole::Input h;
-        h.position_x_mm = 20.0;                 // on the +X face
-        h.position_y_mm = -18.0 + i * 12.0;     // step along Y
-        h.axis_dir      = gp_Dir(-1, 0, 0);     // bore along -X (side)
-        h.diameter_mm   = 4.0; h.depth_mm = 6.0;
-        wp = skill::drill_hole::apply(*wp, h).workpiece;
-    }
-    skill::Workpiece foreign(wp->shape());
-    auto cands = skill::linear_pattern::recognize(foreign);
+    skill::linear_pattern::Input build;
+    build.use_world     = true;
+    build.world_ox_mm   = 40.0; build.world_oy_mm = 42.0; build.world_oz_mm = 15.0;
+    build.world_nx      = 1.0;  build.world_ny = 0.0; build.world_nz = 0.0;
+    build.hole_dia_mm   = 8.0;                  // large structural bore (> 3 mm)
+    build.hole_depth_mm = 10.0;
+    build.count_x       = 4;
+    build.pitch_x_mm    = 16.0;
+    build.count_y       = 1;
+    auto builtWp = skill::linear_pattern::apply(*stock, build).workpiece;
+
+    skill::Workpiece foreign(builtWp->shape());
+    const auto cands = skill::linear_pattern::recognize(foreign);
     EXPECT_TRUE(cands.empty())
-        << "a side-bored (non-Z-axis) row must not be recovered as a +Z pattern";
+        << "a large-diameter side bore row must not be recognised as a grille pattern";
 }
 
 // ─── 10. n=3 is below the geometric floor: three collinear, evenly-spaced

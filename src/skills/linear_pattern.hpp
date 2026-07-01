@@ -44,6 +44,15 @@ struct Input
     double      pitch_y_mm     = 0.0;
     double      start_x_mm     = 0.0;
     double      start_y_mm     = 0.0;
+
+    // Direct world placement (the foreign-recovery path, like box_boss).  When
+    // `use_world` is set the grid is laid out about `world_origin` in the plane
+    // whose OUTWARD normal is `world_axis`, instead of resolving `face`.  The
+    // (start/pitch) offsets are the same face-local (u,v) as the datum path, so a
+    // side grille (axis along +/-X or +/-Y) replays in place.
+    bool        use_world    = false;
+    double      world_ox_mm = 0.0, world_oy_mm = 0.0, world_oz_mm = 0.0;  // grid origin
+    double      world_nx = 0.0, world_ny = 0.0, world_nz = 1.0;          // outward normal
 };
 
 SkillOutput apply   (const Workpiece& wp, const Input& in);
