@@ -28,9 +28,11 @@
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
 
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Cylinder.hxx>
 
 #include <nlohmann/json.hpp>
 
@@ -267,4 +269,51 @@ TEST(WatchFullRoundtrip, CrownKnobRoundTripsAsRadialRevolve)
     EXPECT_LT(drift, 0.15)
         << "the crown-knob watch must round-trip to <15% (the additive knob is "
            "now recovered by the radial cone-meridian path)";
+}
+
+// ── 4. Speaker GRILLE (radial hole grid) diagnostic ────────────────────────
+//
+// The side speaker grille is a radial-axis hole grid.  linear_pattern now
+// recovers such grids (single-feature test passes), but it does NOT yet surface
+// on the full watch.  This test isolates WHY: build a grille-only watch, STEP
+// round-trip it, and report how many small cylinders survive and whether
+// linear_pattern recovers them — the printed table drives the next fix.
+TEST(WatchFullRoundtrip, SpeakerGrilleRecognitionDiagnostic)
+{
+    // Strip only the OPTIONAL features (same safe set the StrictFidelity test
+    // uses) so buildAll stays valid; keep the speaker grille.  The bezel /
+    // display pocket remain, but they are large distinct radii, easy to tell
+    // apart from the sub-mm grille holes in the printed table.
+    json spec = engine::WatchFrontModel::defaultSpec();
+    for (const char* k : { "crown_cavity", "side_buttons", "rear_sensors", "lugs",
+                           "secondary_fillets" })
+        spec.erase(k);
+
+    auto re_ = buildAndReimport(spec, "grille_only");
+    ASSERT_NE(re_.foreign, nullptr);
+
+    std::map<int, int> byRad;   // radius*100 -> count
+    for (int i = 0; i < re_.foreign->faceCount(); ++i)
+        if (re_.foreign->isFaceCylinder(i)) {
+            BRepAdaptor_Surface s(re_.foreign->face(i));
+            const double r = s.Cylinder().Radius();
+            byRad[static_cast<int>(r * 100)]++;
+        }
+    std::printf("\n[GRILLE] faces=%d cylinder faces by radius:\n",
+                re_.foreign->faceCount());
+    for (const auto& [r, n] : byRad)
+        std::printf("    r=%.2fmm x%d\n", r / 100.0, n);
+
+    const auto cands = re::analyzeFiltered(*re_.foreign, 0.7);
+    std::map<std::string, int> byKind;
+    for (const auto& c : cands) byKind[c.skill_id]++;
+    std::printf("[GRILLE] recognised kinds:");
+    for (const auto& [k, n] : byKind) std::printf(" %s x%d", k.c_str(), n);
+    std::printf("\n");
+
+    // The 2x6 side speaker grille must now surface as ONE linear_pattern (a 2-D
+    // grid about the radial axis) — proving the arbitrary-axis + 2-D grid path
+    // works end-to-end on a real product, not just the single-feature unit test.
+    EXPECT_GE(byKind["linear_pattern"], 1)
+        << "the side speaker grille must be recovered as a linear_pattern grid";
 }

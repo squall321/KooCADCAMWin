@@ -335,26 +335,64 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         const double spanU = maxU - minU, spanV = maxV - minV;
         const bool uDominant = spanU >= spanV;
 
-        std::vector<UV> line = pts;
-        std::sort(line.begin(), line.end(),
-            [uDominant](const UV& a, const UV& b) {
-                return uDominant ? a.u < b.u : a.v < b.v;
-            });
-        const double onSpan  = uDominant ? spanU : spanV;
-        const double offSpan = uDominant ? spanV : spanU;
-        if (onSpan < grp[0].radius) continue;            // degenerate
-        if (offSpan > 0.10 * onSpan) continue;           // not collinear
+        (void)uDominant;
+        if (spanU < grp[0].radius && spanV < grp[0].radius) continue;  // degenerate
 
-        std::vector<double> gaps;
-        for (size_t k = 1; k < line.size(); ++k)
-            gaps.push_back(uDominant ? (line[k].u - line[k-1].u)
-                                     : (line[k].v - line[k-1].v));
-        const double meanGap =
-            std::accumulate(gaps.begin(), gaps.end(), 0.0) / gaps.size();
-        if (meanGap < 2.0 * grp[0].radius) continue;     // overlapping / bogus
-        double maxDev = 0.0;
-        for (double gp : gaps) maxDev = std::max(maxDev, std::abs(gp - meanGap));
-        if (maxDev / meanGap > 0.05) continue;           // not equally spaced
+        // GRID detection (1-D row OR 2-D RECTANGULAR grid): cluster the (u,v)
+        // coords along each axis into equally-spaced "tracks".  A speaker grille
+        // is a 2-D rows x cols grid; the old code only accepted a 1-D collinear
+        // line (it rejected any off-axis spread), so a 2x6 grille never recovered.
+        // LIMITATION: only ALIGNED rectangular grids recover — a half-pitch
+        // brick/HEX-staggered grille (common on phones) yields pts != cX*cY and is
+        // dropped below.  A staggered-lattice model is a follow-up.
+        // clusterAxis returns the distinct coordinate values (track centres) if
+        // they are equally spaced within tolerance, else empty.
+        auto clusterAxis = [&](bool useU) -> std::vector<double> {
+            std::vector<double> vals;
+            for (const auto& p : pts) vals.push_back(useU ? p.u : p.v);
+            std::sort(vals.begin(), vals.end());
+            std::vector<double> tracks;
+            std::vector<int> trackN;    // holes accumulated per track (running mean)
+            const double tol = std::max(0.05, grp[0].radius);  // same-track band
+            for (double v : vals) {
+                if (tracks.empty() || std::abs(v - tracks.back()) > tol) {
+                    tracks.push_back(v); trackN.push_back(1);
+                } else {
+                    // true running mean, not a pairwise EWMA (which would bias the
+                    // centre toward later points when a track holds >2 holes).
+                    const int n = trackN.back();
+                    tracks.back() = (tracks.back() * n + v) / (n + 1);
+                    trackN.back() = n + 1;
+                }
+            }
+            if (tracks.size() >= 2) {   // check equal spacing between tracks
+                std::vector<double> g;
+                for (size_t k = 1; k < tracks.size(); ++k) g.push_back(tracks[k] - tracks[k-1]);
+                const double mg = std::accumulate(g.begin(), g.end(), 0.0) / g.size();
+                if (mg < 2.0 * grp[0].radius) return {};          // overlapping tracks
+                double dev = 0.0; for (double x : g) dev = std::max(dev, std::abs(x - mg));
+                if (mg <= 0.0 || dev / mg > 0.05) return {};      // not equally spaced
+            }
+            return tracks;
+        };
+        const std::vector<double> uTracks = clusterAxis(true);
+        const std::vector<double> vTracks = clusterAxis(false);
+        if (uTracks.empty() || vTracks.empty()) continue;
+        const int cX = static_cast<int>(uTracks.size());
+        const int cY = static_cast<int>(vTracks.size());
+        // Grid completeness: every (u-track, v-track) cell must hold a hole, so
+        // the count matches cX*cY exactly (an incomplete/blob set is not a grid).
+        if (static_cast<int>(pts.size()) != cX * cY) continue;
+        // Pattern floor: at least one axis must have >= 3 tracks.  A bare 2x2
+        // (cX==cY==2) is too weak — it also matches the four corner fillets of a
+        // rectangular pocket, so it would false-fire on machined parts.  A real
+        // grille/hole-array has a run of >= 3 along at least one axis (a 1-D row
+        // is cX>=4, cY==1; a grid is >=2 x >=3).  Total must also be >= 4.
+        if (cX * cY < 4) continue;
+        if (std::max(cX, cY) < 3) continue;
+
+        const double pitchX = cX > 1 ? (uTracks.back() - uTracks.front()) / (cX - 1) : 0.0;
+        const double pitchY = cY > 1 ? (vTracks.back() - vTracks.front()) / (cY - 1) : 0.0;
 
         // SIDE-AXIS SIZE gate: recognising ANY-axis grids (not just +/-Z) newly
         // exposes functional SIDE bore rows — cross-drilled oil galleries, dowel-
@@ -365,30 +403,36 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         // grids (bolt/mounting grids) keep the legacy behaviour (no size cap).
         const bool verticalAxis = std::abs(normal.Z()) > 0.99;
         if (!verticalAxis && 2.0 * grp[0].radius > 3.0) continue;
+        // A 2-D +Z grid of LARGE holes is a structural bolt/dowel array, not a
+        // hole GRILLE — unifying it into one pattern would erase per-hole
+        // tolerance identity.  The legacy un-capped path only ever accepted 1-D
+        // +Z rows; extend a size ceiling to the NEW 2-D +Z case (a 1-D row stays
+        // un-capped, and small mounting-hole grids <=6mm stay editable).
+        if (verticalAxis && cX > 1 && cY > 1 && 2.0 * grp[0].radius > 6.0) continue;
 
         // A recovered hole must carry a positive depth (apply/validate reject
         // depth<=0).  A cylinder face always has axial extent, but guard anyway.
-        if (line[0].c->depth <= 0.0) continue;
+        if (grp[0].depth <= 0.0) continue;
 
-        if (line.size() <= bestCount) continue;
-        bestCount = line.size();
+        if (pts.size() <= bestCount) continue;
+        bestCount = pts.size();
 
         // Recovered params are face-local (u,v) offsets FROM THE GROUP ORIGIN o;
         // the pattern axis/origin carry the 3-D placement so apply() replays it
         // in-plane.  hole_centers keeps the 3-D world centres for subsumption
         // (the dedupe matches on those, independent of the local frame).
         json centers = json::array();
-        for (const auto& p : line) centers.push_back({ p.c->x, p.c->y, p.c->z });
-        // start = the sorted-front hole's (u,v) offset from the group origin o.
-        const double startU = line.front().u;
-        const double startV = line.front().v;
+        for (const auto& p : pts) centers.push_back({ p.c->x, p.c->y, p.c->z });
+        // start = the first track corner's (u,v) offset from the group origin o.
+        const double startU = uTracks.front();
+        const double startV = vTracks.front();
         bestRecovered = {
-            { "hole_dia_mm",   2.0 * line[0].c->radius },
-            { "hole_depth_mm", line[0].c->depth },   // recovered from cyl axial length
-            { "count_x",       uDominant ? static_cast<int>(line.size()) : 1 },
-            { "pitch_x_mm",    uDominant ? meanGap : 0.0 },
-            { "count_y",       uDominant ? 1 : static_cast<int>(line.size()) },
-            { "pitch_y_mm",    uDominant ? 0.0 : meanGap },
+            { "hole_dia_mm",   2.0 * grp[0].radius },
+            { "hole_depth_mm", grp[0].depth },       // recovered from cyl axial length
+            { "count_x",       cX },
+            { "pitch_x_mm",    pitchX },
+            { "count_y",       cY },
+            { "pitch_y_mm",    pitchY },
             { "start_x_mm",    startU },
             { "start_y_mm",    startV },
             // Foreign recovery has no design face datum — carry the 3-D grid
@@ -406,10 +450,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "hole_centers",  centers },     // 3-D world centres for subsumption
         };
         bestMatched = {
-            { "cyl_count",      static_cast<int>(line.size()) },
-            { "first_radius",   line[0].c->radius },
-            { "pitch_mm",       meanGap },
-            { "pitch_dev_frac", meanGap > 0 ? maxDev / meanGap : 0.0 },
+            { "cyl_count",      static_cast<int>(pts.size()) },
+            { "first_radius",   grp[0].radius },
+            { "count_x",        cX },
+            { "count_y",        cY },
+            { "pitch_x_mm",     pitchX },
+            { "pitch_y_mm",     pitchY },
             { "axis_z",         normal.Z() },
         };
     }

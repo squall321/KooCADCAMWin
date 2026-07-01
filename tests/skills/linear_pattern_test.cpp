@@ -170,6 +170,95 @@ TEST(SkillLinearPattern, RecognizeFromForeignGeometry)
     EXPECT_EQ(p["hole_centers"].size(), 4u) << "centres emitted for subsumption";
 }
 
+// ─── 6b. 2-D GRID recognition: a 2x3 grid (a speaker-grille shape) is recovered
+// as ONE pattern with count_x/count_y and both pitches — not just a 1-D row. ───
+TEST(SkillLinearPattern, RecognizeTwoDGrid)
+{
+    auto stock = skill::createCuboidStock(80.0, 60.0, 10.0);
+    skill::linear_pattern::Input in;
+    in.face          = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in.hole_dia_mm   = 3.0;
+    in.hole_depth_mm = 4.0;
+    in.count_x       = 3;
+    in.pitch_x_mm    = 10.0;
+    in.count_y       = 2;
+    in.pitch_y_mm    = 12.0;
+    in.start_x_mm    = -10.0;
+    in.start_y_mm    = -6.0;
+    auto built = skill::linear_pattern::apply(*stock, in);
+
+    skill::Workpiece foreign(built.workpiece->shape());   // NO feature history
+    auto cands = skill::linear_pattern::recognize(foreign);
+    ASSERT_GE(cands.size(), 1u) << "a 2x3 grid must be recognised as one pattern";
+    const auto& p = cands[0].recovered_params;
+    const int cx = p.value("count_x", 0), cy = p.value("count_y", 0);
+    EXPECT_EQ(cx * cy, 6) << "all 6 grid holes counted (cx*cy)";
+    EXPECT_EQ(std::min(cx, cy), 2) << "the short axis has 2 holes";
+    EXPECT_EQ(std::max(cx, cy), 3) << "the long axis has 3 holes";
+    ASSERT_TRUE(p.contains("hole_centers"));
+    EXPECT_EQ(p["hole_centers"].size(), 6u) << "6 centres emitted for subsumption";
+    // Both pitches recovered (order-independent: one axis 10mm, the other 12mm).
+    const double px = p.value("pitch_x_mm", 0.0), py = p.value("pitch_y_mm", 0.0);
+    EXPECT_NEAR(std::max(px, py), 12.0, 0.5);
+    EXPECT_NEAR(std::min(px, py), 10.0, 0.5);
+}
+
+// ─── 6c. A bare 2x2 is NOT a grid: it also matches the four corner fillets of a
+// rectangular pocket, so a grid needs a run of >= 3 on at least one axis. ──────
+TEST(SkillLinearPattern, TwoByTwoIsNotAGrid)
+{
+    auto stock = skill::createCuboidStock(80.0, 80.0, 10.0);
+    skill::linear_pattern::Input in;
+    in.face          = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in.hole_dia_mm   = 3.0;
+    in.hole_depth_mm = 4.0;
+    in.count_x       = 2;
+    in.pitch_x_mm    = 20.0;
+    in.count_y       = 2;
+    in.pitch_y_mm    = 20.0;
+    in.start_x_mm    = -10.0;
+    in.start_y_mm    = -10.0;
+    auto built = skill::linear_pattern::apply(*stock, in);
+
+    skill::Workpiece foreign(built.workpiece->shape());
+    auto cands = skill::linear_pattern::recognize(foreign);
+    EXPECT_TRUE(cands.empty())
+        << "a 2x2 is too weak to be a grid (matches pocket corner fillets)";
+}
+
+// ─── 6d. A +Z 2-D grid of LARGE holes is a structural bolt/dowel array, NOT a
+// grille — it must not be unified into one pattern (which would erase per-hole
+// tolerance identity).  Small +Z grids (mounting holes) still recover. ────────
+TEST(SkillLinearPattern, LargeVerticalGridIsNotAGrille)
+{
+    auto stock = skill::createCuboidStock(80.0, 80.0, 10.0);
+    skill::linear_pattern::Input in;
+    in.face          = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in.hole_dia_mm   = 10.0;                    // structural bolt hole (> 6 mm)
+    in.hole_depth_mm = 6.0;
+    in.count_x       = 3;
+    in.pitch_x_mm    = 20.0;
+    in.count_y       = 3;
+    in.pitch_y_mm    = 20.0;
+    in.start_x_mm    = -20.0;
+    in.start_y_mm    = -20.0;
+    auto built = skill::linear_pattern::apply(*stock, in);
+
+    skill::Workpiece foreign(built.workpiece->shape());
+    auto cands = skill::linear_pattern::recognize(foreign);
+    EXPECT_TRUE(cands.empty())
+        << "a large-hole +Z 2-D grid (bolt/dowel array) must not unify into a grille";
+
+    // A SMALL-hole +Z grid (mounting holes) still recovers as one pattern.
+    skill::linear_pattern::Input small = in;
+    small.hole_dia_mm = 3.0;
+    auto builtSmall = skill::linear_pattern::apply(
+        *skill::createCuboidStock(80.0, 80.0, 10.0), small);
+    skill::Workpiece foreignSmall(builtSmall.workpiece->shape());
+    EXPECT_GE(skill::linear_pattern::recognize(foreignSmall).size(), 1u)
+        << "a small-hole +Z grid still recovers (mounting-hole array)";
+}
+
 // ─── 7. NO false pattern: two unrelated holes must NOT be read as a pattern. ──
 TEST(SkillLinearPattern, TwoHolesAreNotAPattern)
 {
