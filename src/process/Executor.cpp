@@ -14,6 +14,7 @@
 #include "skills/annular_groove.hpp"
 #include "skills/box_boss.hpp"
 #include "skills/linear_pattern.hpp"
+#include "skills/circular_pattern.hpp"
 #include "skills/bolt_circle_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
 #include "skills/rectangular_hole_grid.hpp"
@@ -4377,6 +4378,28 @@ sk::linear_pattern::Input parseLinearPattern(const json& p)
     return in;
 }
 
+sk::circular_pattern::Input parseCircularPattern(const json& p)
+{
+    sk::circular_pattern::Input in;
+    auto vec3 = [](const json& j, const char* key, std::array<double, 3> dflt) {
+        if (j.contains(key) && j[key].is_array() && j[key].size() == 3 &&
+            j[key][0].is_number() && j[key][1].is_number() && j[key][2].is_number())
+            return std::array<double, 3>{ j[key][0].get<double>(),
+                                          j[key][1].get<double>(),
+                                          j[key][2].get<double>() };
+        return dflt;
+    };
+    in.axis_origin_xyz  = vec3(p, "axis_origin_xyz", { 0.0, 0.0, 0.0 });
+    in.axis_dir_xyz     = vec3(p, "axis_dir_xyz", { 0.0, 0.0, 1.0 });
+    in.hole_dia_mm      = jdouble(p, "hole_dia_mm", 0.0);
+    in.hole_depth_mm    = jdouble(p, "hole_depth_mm", 0.0);
+    in.radial_offset_mm = jdouble(p, "radial_offset_mm", 0.0);
+    in.count            = (p.contains("count") && p["count"].is_number())
+                          ? p["count"].get<int>() : 1;
+    in.total_angle_deg  = jdouble(p, "total_angle_deg", 360.0);
+    return in;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Dispatch table
 // ─────────────────────────────────────────────────────────────────────────
@@ -4405,6 +4428,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::linear_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::linear_pattern::apply(wp, parseLinearPattern(p));
+    };
+    t[sk::circular_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::circular_pattern::apply(wp, parseCircularPattern(p));
     };
     t[sk::bolt_circle_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::bolt_circle_pattern::apply(wp, parseBoltCirclePattern(p));

@@ -7,7 +7,9 @@
 #include "engine/primitives/Tools.hpp"
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <Bnd_Box.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
@@ -219,7 +221,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     }
     if (!out.empty()) return out;
 
-    struct C { double x, y, z, r; };
+    struct C { double x, y, z, r, depth, entryZ; int faceId; };
     std::vector<C> all;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFaceCylinder(i)) continue;
@@ -232,8 +234,21 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             // hole_centers (XY only) would mismatch the drills in subsumption, so
             // recover ONLY vertical-axis bolt circles (a 3-D variant is a follow-up).
             if (std::abs(gc.Axis().Direction().Z()) < 0.99) continue;
+            // Recover the hole DEPTH from the cylinder face's axial extent AND the
+            // ENTRY-Z (the top of the face) — the old code hard-coded depth 0 (which
+            // aborted the plan) and origin Z=0 (which placed the regenerated circle
+            // at the wrong height, cutting into air instead of the real entry
+            // plane).  apply() bores from axis_origin.Z along -Z, so the origin Z
+            // must be the hole entry plane, and depth must be positive.
+            double depth = 0.0, entryZ = 0.0;
+            Bnd_Box fb; BRepBndLib::Add(wp.face(i), fb);
+            if (!fb.IsVoid()) {
+                double z0, z1, x0, x1, y0, y1; fb.Get(x0, y0, z0, x1, y1, z1);
+                depth = z1 - z0;   // axis is ~+/-Z (gated above), so extent = z-span
+                entryZ = z1;       // the top of the cylinder = where the drill enters
+            }
             all.push_back(C{ gc.Location().X(), gc.Location().Y(),
-                             gc.Location().Z(), gc.Radius() });
+                             gc.Location().Z(), gc.Radius(), depth, entryZ, i });
         } catch (...) {}
     }
     if (all.size() < 3) return out;
@@ -252,7 +267,14 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                 if (!used[k] && std::abs(all[k].r - all[g].r) < 1e-2) {
                     grp.push_back(all[k]); used[k] = true;
                 }
-            if (grp.size() > cyls.size()) cyls = grp;
+            // Prefer the larger group; on a TIE (e.g. a counterbored bolt circle
+            // with N pilot + N seat cylinders) prefer the SMALLER radius — that is
+            // the pilot bore = the true drill diameter, so subsumption drops the
+            // matching-diameter drills correctly instead of the oversized seats.
+            if (grp.size() > cyls.size() ||
+                (grp.size() == cyls.size() && !cyls.empty() &&
+                 grp.front().r < cyls.front().r))
+                cyls = grp;
         }
     }
     if (cyls.size() < 3) return out;
@@ -289,24 +311,39 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     // Allow up to 25 % of the nominal step (a partial arc still reads as even).
     if (meanA > 1e-6 && maxADev / meanA > 0.25) return out;
 
+    // A recovered hole must carry a positive depth (apply/validate reject
+    // depth<=0).  A cylinder face always has axial extent, but guard anyway.
+    if (cyls.front().depth <= 0.0) return out;
+
     json centers = json::array();
     for (const auto& c : cyls) centers.push_back({ c.x, c.y });
     json recovered = {
-        { "axis_origin_xyz",  { mx, my, 0.0 } },
+        { "axis_origin_xyz",  { mx, my, cyls.front().entryZ } },  // real entry plane, not Z=0
         { "axis_dir_xyz",     { 0.0, 0.0, 1.0 } },
         { "hole_dia_mm",      2.0 * cyls.front().r },
-        { "hole_depth_mm",    0.0 },
+        { "hole_depth_mm",    cyls.front().depth },   // recovered from cyl axial length
         { "radial_offset_mm", meanD },
         { "count",            static_cast<int>(cyls.size()) },
         { "total_angle_deg",  360.0 },
         { "hole_centers",     centers },     // for pattern subsumption
     };
+    // Emit the constituent cylinder FACE IDs so dedupe (collectFaceIds) can
+    // arbitrate this candidate against the grammar's bolt_circle_pattern for the
+    // SAME holes — without a face-id key both dedupe paths are no-ops and the two
+    // patterns survive as duplicate steps (which diverge under an edited replay).
+    json cylFaceIds = json::array();
+    for (const auto& c : cyls) cylFaceIds.push_back(c.faceId);
     json matched = {
         { "cyl_count",  static_cast<int>(cyls.size()) },
         { "mean_radius", meanD },
         { "max_radial_deviation", maxDev },
+        { "cyl_face_ids", cylFaceIds },   // for dedupe face-id subsumption
     };
-    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.65, matched });
+    // 0.7 (reaches the Executor): with depth now recovered the pattern is
+    // regeneratable, and the co-radial + even-angular gates make a false bolt
+    // circle unlikely.  (Was 0.65 — sub-threshold — which, combined with the
+    // zero-depth abort, made the whole path dead.)
+    out.push_back(RecognizedFeature{ kSkillId, recovered, 0.7, matched });
     return out;
 }
 
