@@ -125,6 +125,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const int total = in.count_x * in.count_y;
     std::vector<TopoDS_Shape> cutters;
     cutters.reserve(static_cast<size_t>(total));
+    json entryCenters = json::array();   // 3-D entry point of every hole (for CAM)
 
     // The face center is on the entry plane.  Start each cylinder slightly
     // outside the face along +normal, then sweep INTO the body for toolLen.
@@ -136,6 +137,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
                 center.X() + uDir.X() * du + vDir.X() * dv,
                 center.Y() + uDir.Y() * du + vDir.Y() * dv,
                 center.Z() + uDir.Z() * du + vDir.Z() * dv);
+            entryCenters.push_back({ entryOnPlane.X(), entryOnPlane.Y(), entryOnPlane.Z() });
             // Lift slightly along +normal to start the cylinder above the face.
             const gp_Pnt cylStart(
                 entryOnPlane.X() + normal.X() * kOverhang,
@@ -161,6 +163,8 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "pitch_y_mm",     in.pitch_y_mm },
         { "start_x_mm",     in.start_x_mm },
         { "start_y_mm",     in.start_y_mm },
+        { "hole_centers",   entryCenters },                       // 3-D entry points (CAM)
+        { "face_normal",    { normal.X(), normal.Y(), normal.Z() } },  // for the CAM axis guard
     };
     json pattern = {
         { "kind",                 kSkillId },

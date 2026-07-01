@@ -147,7 +147,7 @@ double entryZ(const nlohmann::json& params, const char* key = "position_z_mm")
 // `axis_dir` (drill/bore/pocket) or `face_normal` (box_pocket/box_boss).
 bool cutAxisIsZ(const nlohmann::json& params)
 {
-    for (const char* key : { "axis_dir", "face_normal" }) {
+    for (const char* key : { "axis_dir", "face_normal", "axis_dir_xyz" }) {
         if (params.contains(key) && params[key].is_array() && params[key].size() == 3) {
             const auto& a = params[key];
             const double z = a[2].get<double>();
@@ -467,6 +467,172 @@ Toolpath boxPocketToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── hole-pattern toolpath (linear_pattern / circular_pattern) ──────────────
+// A drilled grid / bolt circle: plunge at each recovered hole centre.  The skills
+// emit `hole_centers` (a 3-D entry point per hole) + a cut axis; on the 3-axis-Z
+// post only a ±Z pattern is machinable (a side grille is guarded out upstream).
+Toolpath holePatternToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double depth = sig.params.value("hole_depth_mm", 0.0);
+    const double feed  = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                sig.tooling.feed_per_tooth_mm);
+
+    if (!sig.params.contains("hole_centers") || !sig.params["hole_centers"].is_array()) {
+        spdlog::warn("cam: '{}' has no hole_centers — emitting empty toolpath",
+                     sig.skill_id);
+        return tp;
+    }
+    using M = PathSegment::Move;
+    for (const auto& hc : sig.params["hole_centers"]) {
+        if (!hc.is_array() || hc.size() < 2) continue;
+        const double x = hc[0].get<double>();
+        const double y = hc[1].get<double>();
+        const double zTop = (hc.size() >= 3) ? hc[2].get<double>() : 0.0;   // entry Z
+        const double safe_z = zTop + kSafeZAboveStock_mm;
+        const double cut_z  = zTop - depth;
+        // Per-hole: rapid over, plunge to depth, retract.
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z), 0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(x, y, cut_z),  feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z), 0.0,  0, 0, 0 });
+    }
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── counterbore toolpath ──────────────────────────────────────────────────
+// A counterbore is a narrow deep PILOT hole with a wider shallow flat-bottomed
+// SEAT coaxial on top (the seat clears a socket-head-cap-screw head).  On the
+// 3-axis-Z post this is two coaxial plunges at the same (x, y): the pilot to
+// pilot_depth_mm, then the seat (a wider tool) to seat_depth_mm.  Params
+// (apply + recovered): position_x/y_mm, position_z_mm (entry), axis_dir,
+// pilot_dia_mm, pilot_depth_mm, seat_dia_mm, seat_depth_mm.
+Toolpath counterboreToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double x         = sig.params.value("position_x_mm", 0.0);
+    const double y         = sig.params.value("position_y_mm", 0.0);
+    const double zTop      = entryZ(sig.params);   // "position_z_mm", default 0
+    const double pilotDep  = sig.params.value("pilot_depth_mm", 0.0);
+    const double seatDep   = sig.params.value("seat_depth_mm", 0.0);
+    const double feed      = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                    sig.tooling.feed_per_tooth_mm);
+
+    const double safe_z = zTop + kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    // Seat first (the wide, shallow spot-face that a counterbore tool cuts),
+    // then the pilot to full depth — machining order for a piloted counterbore
+    // is pilot-drill THEN counterbore, but for a re-synthesised toolpath the
+    // depth-covering geometry is what matters: two coaxial plunges.
+    // [pilot] plunge to pilot_depth.
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),            0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - pilotDep),  feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),            0.0,  0, 0, 0 });
+    // [seat] plunge to the (shallower) seat depth.
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),            0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - seatDep),   feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),            0.0,  0, 0, 0 });
+
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── countersink toolpath ──────────────────────────────────────────────────
+// A countersink is a PILOT hole with a CONICAL seat (a chamfered mouth for a
+// flat-head screw).  On the 3-axis-Z post: plunge the pilot to pilot_depth_mm,
+// then plunge a countersink (chamfer) tool to cone_depth_mm.  Params:
+// position_x/y_mm, position_z_mm, axis_dir, pilot_dia/depth_mm, cone_top_dia_mm,
+// cone_angle_deg, cone_depth_mm.
+Toolpath countersinkToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double x        = sig.params.value("position_x_mm", 0.0);
+    const double y        = sig.params.value("position_y_mm", 0.0);
+    const double zTop     = entryZ(sig.params);
+    const double pilotDep = sig.params.value("pilot_depth_mm", 0.0);
+    const double coneDep  = sig.params.value("cone_depth_mm", 0.0);
+    const double feed     = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                   sig.tooling.feed_per_tooth_mm);
+
+    const double safe_z = zTop + kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    // [pilot] plunge to full pilot depth.
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),           0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - pilotDep), feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),           0.0,  0, 0, 0 });
+    // [chamfer] plunge the countersink tool to the cone depth (the tool's cone
+    // half-angle equals cone_angle_deg/2; the toolpath just carries the tip Z).
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),           0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - coneDep),  feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),           0.0,  0, 0, 0 });
+
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── ream toolpath ─────────────────────────────────────────────────────────
+// A ream is a single finishing pass that enlarges an existing bore to a precise
+// diameter.  One plunge along the bore axis to the bore extent.  Unlike the
+// hole family, ream carries `axis_location` (a 3-D point ON the axis) rather
+// than position_x/y/z, and `extent_mm` (bore length) rather than a depth.
+Toolpath reamToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    // Entry point: prefer entry_*_mm (the true bore-surface end the tool enters
+    // from), which the ream skill recovers from the actual bore-face span.  Fall
+    // back to axis_location only for legacy signatures — note axis_location is the
+    // raw OCCT cylinder-axis BASE (a construction artefact offset from the real
+    // surface by the cutter overhang, and unbounded for foreign geometry), so it
+    // is NOT the entry plane.
+    double x = 0.0, y = 0.0, zTop = 0.0;
+    if (sig.params.contains("entry_z_mm")) {
+        x    = sig.params.value("entry_x_mm", 0.0);
+        y    = sig.params.value("entry_y_mm", 0.0);
+        zTop = sig.params.value("entry_z_mm", 0.0);
+    } else if (sig.params.contains("axis_location") && sig.params["axis_location"].is_array()
+               && sig.params["axis_location"].size() == 3) {
+        const auto& p = sig.params["axis_location"];
+        x = p[0].get<double>(); y = p[1].get<double>(); zTop = p[2].get<double>();
+    }
+    const double extent = sig.params.value("extent_mm", 0.0);
+    const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                 sig.tooling.feed_per_tooth_mm);
+
+    const double safe_z = zTop + kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    // Single finishing plunge the length of the bore, then retract.
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),          0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - extent),  feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),          0.0,  0, 0, 0 });
+
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── Dispatcher ───────────────────────────────────────────────────────────
 
 std::vector<Toolpath> generateAllToolpaths(
@@ -482,6 +648,8 @@ std::vector<Toolpath> generateAllToolpaths(
         static const std::set<std::string> kZAxisGuarded = {
             "drill_hole", "drill_through_hole", "spot_drill", "spot_face",
             "bore_cylindrical", "mill_circular_pocket", "mill_rect_pocket", "mill_slot",
+            "linear_pattern", "circular_pattern",
+            "counterbore", "countersink", "ream",
         };
         if (kZAxisGuarded.count(sig.skill_id) && !cutAxisIsZ(sig.params)) {
             out.push_back(emptyRadialToolpath(sig));
@@ -497,15 +665,23 @@ std::vector<Toolpath> generateAllToolpaths(
             out.push_back(millSlotToolpath(sig));
         } else if (sig.skill_id == "box_pocket") {
             out.push_back(boxPocketToolpath(sig));
+        } else if (sig.skill_id == "linear_pattern" ||
+                   sig.skill_id == "circular_pattern") {
+            out.push_back(holePatternToolpath(sig));
         } else if (sig.skill_id == "bore_cylindrical"   ||
                    sig.skill_id == "drill_through_hole" ||
                    sig.skill_id == "spot_drill"         ||
                    sig.skill_id == "spot_face") {
             // The plain-hole bore/drill family is a plunge at a position to a
             // depth — the drill_hole toolpath shape covers them directly (they
-            // carry position_x/y + depth + diameter).  counterbore/countersink/
-            // ream (pilot+seat / no depth) need their own generators — follow-up.
+            // carry position_x/y + depth + diameter).
             out.push_back(drillHoleToolpath(sig));
+        } else if (sig.skill_id == "counterbore") {
+            out.push_back(counterboreToolpath(sig));
+        } else if (sig.skill_id == "countersink") {
+            out.push_back(countersinkToolpath(sig));
+        } else if (sig.skill_id == "ream") {
+            out.push_back(reamToolpath(sig));
         } else {
             spdlog::warn("cam::generateAllToolpaths: no generator for skill_id '{}'; "
                          "emitting empty toolpath", sig.skill_id);

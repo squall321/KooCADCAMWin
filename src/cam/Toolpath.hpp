@@ -106,6 +106,20 @@ Toolpath millSlotToolpath(const skill::FeatureSignature& sig);
 // axis the post does not have, so it emits an empty toolpath + a warning.
 Toolpath boxPocketToolpath(const skill::FeatureSignature& sig);
 
+// linear_pattern / circular_pattern → a drilled grid or bolt circle: a plunge at
+// each recovered hole centre (the skills emit `hole_centers`).  Only a ±Z pattern
+// is machinable on the 3-axis-Z post (a radial side grille is guarded out).
+Toolpath holePatternToolpath(const skill::FeatureSignature& sig);
+
+// counterbore → two coaxial plunges (pilot to pilot_depth_mm, then a wider seat
+// to seat_depth_mm).  countersink → pilot plunge + a chamfer-tool plunge to
+// cone_depth_mm.  ream → a single finishing plunge along the bore axis to
+// extent_mm (anchored on `axis_location`, not position_x/y/z).  All three are
+// ±Z-only on the 3-axis post (radial variants are guarded out to empty).
+Toolpath counterboreToolpath(const skill::FeatureSignature& sig);
+Toolpath countersinkToolpath(const skill::FeatureSignature& sig);
+Toolpath reamToolpath(const skill::FeatureSignature& sig);
+
 // ── Multi-feature dispatcher ─────────────────────────────────────────────
 
 // Generate toolpaths for ALL features in a vector of signatures (e.g.,

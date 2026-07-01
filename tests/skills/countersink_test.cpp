@@ -382,3 +382,39 @@ TEST(SkillCountersink, RejectsConvexConeBossAsCountersink)
     EXPECT_TRUE(candidates.empty())
         << "a convex pointed cone boss must NOT be recognized as a countersink";
 }
+
+// ─── 9. Tilted-axis apply() must actually CUT (general-branch regression) ───
+//
+// A non-±Z axis takes apply()'s general branch, where the cutter launch point is
+// pulled back by a whole bboxDiag.  A prior bug set the cone/pilot origin to that
+// launch point (bboxDiag BEHIND the part), so a tilted countersink removed almost
+// no material AND stamped a garbage entry Z.  Assert (a) real volume is removed
+// and (b) the stamped position_z_mm lands on the part, not tens of mm away.
+TEST(SkillCountersink, TiltedAxisApplyRemovesMaterialAndStampsSaneEntryZ)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 60.0);
+    const double v0 = volumeOf(stock->shape());
+
+    skill::countersink::Input in;
+    in.entry_face      = skill::FaceByNormal{ gp_Dir(0, 0, 1) };   // +Z top face
+    in.position_x_mm   = 30.0; in.position_y_mm = 30.0;
+    // A genuinely tilted axis (nonzero X): forces the general (non-shortcut) path.
+    in.axis_dir        = gp_Dir(0.25, 0.0, -1.0);
+    in.pilot_dia_mm    = 5.0;  in.pilot_depth_mm = 10.0;
+    in.cone_top_dia_mm = 10.0; in.cone_angle_deg = 90.0;
+
+    auto out = skill::countersink::apply(*stock, in);
+    const double removed = v0 - volumeOf(out.workpiece->shape());
+    // Pilot alone (Ø5 × 10) is ~196 mm³; a floating cutter removes ~0.  Require a
+    // substantial cut to prove the cutter actually reached the material.
+    EXPECT_GT(removed, 100.0)
+        << "a tilted countersink must remove real material, not float behind the part";
+
+    // The stamped entry Z must be ON the block (0..60), near the top (~60) since
+    // the axis enters the +Z face — NOT (zMid − bboxDiag) tens of mm away.
+    const auto& p = out.signature.params;
+    ASSERT_TRUE(p.contains("position_z_mm"));
+    const double zEntry = p["position_z_mm"].get<double>();
+    EXPECT_GT(zEntry, 40.0) << "entry Z must be near the +Z top face, not a launch point far below";
+    EXPECT_LE(zEntry, 60.0 + 1e-6);
+}

@@ -163,6 +163,16 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     // 5) Build signature.  Recover the entry XY from the existing bore so
     //    downstream tools (CAM) can recompute coolant / feed-direction.
+    // entry point = the bore end the tool enters from = the span end furthest
+    // AGAINST the drilling direction adir (smaller projection along adir).  Here
+    // the cutter advances from centerLow along +adir, so the entry is centerLow;
+    // we compute it by projection to stay robust to span ordering.  axis_location
+    // is the raw OCCT cylinder-axis base (a construction artefact ~overhang off
+    // the real surface, unbounded for foreign geometry) — CAM prefers entry_*_mm.
+    const gp_Vec adv(adir.X(), adir.Y(), adir.Z());
+    const double projH = gp_Vec(span.centerHigh.XYZ()).Dot(adv);
+    const double projL = gp_Vec(span.centerLow.XYZ()).Dot(adv);
+    const gp_Pnt entryPt = (projH <= projL) ? span.centerHigh : span.centerLow;
     json params = {
         { "existing_hole_face_id", *cylId },
         { "old_radius_mm",         oldRadius },
@@ -172,6 +182,9 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "axis_location",         { span.axis.Location().X(),
                                      span.axis.Location().Y(),
                                      span.axis.Location().Z() } },
+        { "entry_x_mm",            entryPt.X() },
+        { "entry_y_mm",            entryPt.Y() },
+        { "entry_z_mm",            entryPt.Z() },
         { "extent_mm",             extent },
     };
     // The PATTERN.kind tag is what distinguishes a ream from a drill_hole in
@@ -259,6 +272,14 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         // Confidence is intentionally low — ream looks like drill_hole.
         const double conf = 0.35;
 
+        // Entry point = the span end the tool enters from = the end furthest
+        // AGAINST the drilling direction (dirVec).  Pick the endpoint with the
+        // smaller projection along dirVec.  (Robust to which end is high/low —
+        // here dirVec = centerHigh→centerLow, so the entry is centerHigh.)
+        const gp_Vec dv(dirVec.X(), dirVec.Y(), dirVec.Z());
+        const double projHigh = gp_Vec(span.centerHigh.XYZ()).Dot(dv);
+        const double projLow  = gp_Vec(span.centerLow.XYZ()).Dot(dv);
+        const gp_Pnt entryPt  = (projHigh <= projLow) ? span.centerHigh : span.centerLow;
         json recovered = {
             { "existing_hole_face_id", fIdx },
             { "old_radius_mm",         span.radius - assumedEnlarge },
@@ -268,6 +289,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "axis_location",         { span.axis.Location().X(),
                                          span.axis.Location().Y(),
                                          span.axis.Location().Z() } },
+            { "entry_x_mm",            entryPt.X() },
+            { "entry_y_mm",            entryPt.Y() },
+            { "entry_z_mm",            entryPt.Z() },
             { "extent_mm",             extent },
         };
         json matched = {

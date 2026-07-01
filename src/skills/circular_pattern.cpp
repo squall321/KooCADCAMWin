@@ -138,7 +138,10 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     std::vector<TopoDS_Shape> cutters;
     cutters.reserve(static_cast<size_t>(in.count));
+    json holeCenters = json::array();   // 3-D entry point of every hole (for CAM)
     const double stepDeg = in.total_angle_deg / in.count;
+    // The entry-plane radial direction at theta=0 (radialDir), rotated per hole.
+    const gp_Vec vy = gp_Vec(axisDir).Crossed(gp_Vec(radialDir));  // second in-plane axis
     for (int i = 0; i < in.count; ++i) {
         const double angleRad = i * stepDeg * M_PI / 180.0;
         gp_Trsf rot;
@@ -147,6 +150,12 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         if (!xform.IsDone())
             throw SkillError("circular_pattern: transform failed");
         cutters.push_back(xform.Shape());
+        // Entry centre = axisOrg + (radialDir*cos + vy*sin) * radial_offset.
+        const double cph = std::cos(angleRad), sph = std::sin(angleRad);
+        holeCenters.push_back({
+            axisOrg.X() + (radialDir.X() * cph + vy.X() * sph) * in.radial_offset_mm,
+            axisOrg.Y() + (radialDir.Y() * cph + vy.Y() * sph) * in.radial_offset_mm,
+            axisOrg.Z() + (radialDir.Z() * cph + vy.Z() * sph) * in.radial_offset_mm });
     }
 
     const TopoDS_Shape newShape = pr::cutMany(wp.shape(), cutters);
@@ -162,6 +171,7 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "radial_offset_mm", in.radial_offset_mm },
         { "count",            in.count },
         { "total_angle_deg",  in.total_angle_deg },
+        { "hole_centers",     holeCenters },   // 3-D entry points (CAM)
     };
     json pattern = {
         { "kind",           kSkillId },

@@ -25,6 +25,11 @@
 #include "skills/mill_rect_pocket.hpp"
 #include "skills/box_pocket.hpp"
 #include "skills/bore_cylindrical.hpp"
+#include "skills/linear_pattern.hpp"
+#include "skills/circular_pattern.hpp"
+#include "skills/counterbore.hpp"
+#include "skills/countersink.hpp"
+#include "skills/ream.hpp"
 #include "cam/Toolpath.hpp"
 
 #include <string>
@@ -145,6 +150,162 @@ TEST(ReToGCodeE2E, RadialBoreYieldsEmptyToolpath)
     ASSERT_NE(b, nullptr);
     EXPECT_EQ(b->segments.size(), 0u)
         << "a radial bore must be an empty toolpath (deferred), not a wrong plunge";
+}
+
+// A +Z linear hole pattern (a top-face drilled grid / mounting holes) must
+// produce a toolpath that plunges at EVERY hole — not the empty fallback.
+TEST(ReToGCodeE2E, TopFaceLinearPatternDrillsEveryHole)
+{
+    auto stock = skill::createCuboidStock(80.0, 60.0, 10.0);
+    skill::linear_pattern::Input in;
+    in.face          = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in.hole_dia_mm   = 4.0; in.hole_depth_mm = 5.0;
+    in.count_x = 4; in.pitch_x_mm = 12.0; in.count_y = 1;
+    in.start_x_mm = -18.0;
+    auto part = skill::linear_pattern::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* lp = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "linear_pattern") { lp = &t; break; }
+    ASSERT_NE(lp, nullptr) << "a linear_pattern must reach the pattern toolpath generator";
+    // 4 holes x 3 segments (rapid over / plunge / retract) = 12 segments.
+    EXPECT_EQ(lp->segments.size(), 12u) << "one plunge per hole (4 holes)";
+}
+
+// A +Z circular pattern (a bolt circle) must plunge at every hole.
+TEST(ReToGCodeE2E, BoltCirclePatternDrillsEveryHole)
+{
+    auto stock = skill::createCylindricalStock(80.0, 10.0);
+    skill::circular_pattern::Input in;
+    in.axis_origin_xyz = { 0.0, 0.0, 10.0 };
+    in.axis_dir_xyz    = { 0.0, 0.0, 1.0 };
+    in.hole_dia_mm = 5.0; in.hole_depth_mm = 6.0;
+    in.radial_offset_mm = 30.0; in.count = 6; in.total_angle_deg = 360.0;
+    auto part = skill::circular_pattern::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* cp = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "circular_pattern") { cp = &t; break; }
+    ASSERT_NE(cp, nullptr);
+    EXPECT_EQ(cp->segments.size(), 18u) << "one plunge per hole (6 holes x 3 segments)";
+}
+
+// A RADIAL side grille (a linear_pattern about ±X) must yield an empty toolpath —
+// the same 3-axis-Z limitation as the radial pocket/bore.
+TEST(ReToGCodeE2E, RadialGrillePatternYieldsEmptyToolpath)
+{
+    auto stock = skill::createCuboidStock(40.0, 60.0, 30.0);
+    skill::linear_pattern::Input build;
+    build.use_world   = true;
+    build.world_ox_mm = 40.0; build.world_oy_mm = 42.0; build.world_oz_mm = 15.0;
+    build.world_nx = 1.0; build.world_ny = 0.0; build.world_nz = 0.0;   // +X side
+    build.hole_dia_mm = 2.0; build.hole_depth_mm = 6.0;
+    build.count_x = 4; build.pitch_x_mm = 8.0; build.count_y = 1;
+    auto part = skill::linear_pattern::apply(*stock, build).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* lp = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "linear_pattern") { lp = &t; break; }
+    ASSERT_NE(lp, nullptr);
+    EXPECT_EQ(lp->segments.size(), 0u)
+        << "a radial side grille is not machinable on the 3-axis-Z post";
+}
+
+// A counterbore (socket-head-cap-screw seat) must produce a TWO-plunge toolpath
+// (pilot to pilot_depth + seat to seat_depth) — not the empty fallback and not a
+// single drill plunge.
+TEST(ReToGCodeE2E, CounterboreProducesTwoCoaxialPlunges)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    skill::counterbore::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 30; in.position_y_mm = 30; in.axis_dir = gp_Dir(0, 0, -1);
+    in.pilot_dia_mm = 6; in.pilot_depth_mm = 12; in.seat_dia_mm = 12; in.seat_depth_mm = 4;
+    auto part = skill::counterbore::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* cb = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "counterbore") { cb = &t; break; }
+    ASSERT_NE(cb, nullptr) << "a counterbore must reach counterboreToolpath";
+    // pilot (3 segs) + seat (3 segs) = 6.
+    EXPECT_EQ(cb->segments.size(), 6u) << "pilot plunge + seat plunge";
+    // A Linear (cutting) segment must reach the deeper pilot Z (20 - 12 = 8).
+    bool reachesPilotDepth = false;
+    for (const auto& s : cb->segments)
+        if (s.move == cam::PathSegment::Move::Linear &&
+            std::abs(s.end_point.Z() - (20.0 - 12.0)) < 1e-6) reachesPilotDepth = true;
+    EXPECT_TRUE(reachesPilotDepth) << "one plunge must reach the full pilot depth";
+}
+
+// A countersink (flat-head screw seat) must produce a pilot plunge + a chamfer
+// plunge to the cone depth.
+TEST(ReToGCodeE2E, CountersinkProducesPilotPlusChamferPlunge)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    skill::countersink::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 30; in.position_y_mm = 30; in.axis_dir = gp_Dir(0, 0, -1);
+    in.pilot_dia_mm = 5; in.pilot_depth_mm = 10; in.cone_top_dia_mm = 10; in.cone_angle_deg = 90;
+    auto part = skill::countersink::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* cs = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "countersink") { cs = &t; break; }
+    ASSERT_NE(cs, nullptr) << "a countersink must reach countersinkToolpath";
+    EXPECT_EQ(cs->segments.size(), 6u) << "pilot plunge + chamfer plunge";
+}
+
+// A ream (finishing an existing bore to a precise dia) must produce a single
+// finishing plunge along the bore axis.
+TEST(ReToGCodeE2E, ReamProducesSingleFinishingPlunge)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    // A BLIND bore (not through) so the reamed cylinder's span is exact and the
+    // entry-Z assertion is precise: top at Z=20, floor at Z=20-12=8.
+    skill::drill_hole::Input dh;
+    dh.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    dh.position_x_mm = 30; dh.position_y_mm = 30;
+    dh.axis_dir = gp_Dir(0, 0, -1); dh.diameter_mm = 10; dh.depth_mm = 12; dh.through_hole = false;
+    auto drilled = skill::drill_hole::apply(*stock, dh).workpiece;
+
+    skill::ream::Input in;
+    in.existing_hole_datum = skill::FaceCylinderByAxis{
+        gp_Ax1(gp_Pnt(30, 30, 20), gp_Dir(0, 0, -1)), 5.0 };
+    in.enlarge_by_mm = 0.10;
+    auto part = skill::ream::apply(*drilled, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* rm = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "ream") { rm = &t; break; }
+    ASSERT_NE(rm, nullptr) << "a ream must reach reamToolpath";
+    EXPECT_EQ(rm->segments.size(), 3u) << "one finishing plunge (rapid/plunge/retract)";
+    // The entry reference must be the REAL bore top (Z=20), not the OCCT
+    // cylinder-axis BASE (Z=20.05, the cutter-overhang artefact).  segments[0] is
+    // the rapid to safe_z = entryZ + 5, so entryZ = segments[0].Z - 5.
+    ASSERT_GE(rm->segments.size(), 1u);
+    const double entryZ = rm->segments[0].end_point.Z() - 5.0;  // safe_z − clearance
+    EXPECT_NEAR(entryZ, 20.0, 0.02)
+        << "ream entry must be the true bore top (20), not the axis-base artefact (20.05)";
+}
+
+// A RADIAL counterbore (a side-face screw seat, axis along +X) must yield an
+// empty toolpath — the same 3-axis-Z limitation as the radial pocket/bore.
+TEST(ReToGCodeE2E, RadialCounterboreYieldsEmptyToolpath)
+{
+    // Hand-build a counterbore signature with a +X (radial) axis and route it
+    // through the dispatcher directly — the axis guard must refuse it.
+    skill::FeatureSignature sig;
+    sig.skill_id = "counterbore";
+    sig.params = {
+        { "position_x_mm", 0.0 }, { "position_y_mm", 30.0 }, { "position_z_mm", 10.0 },
+        { "axis_dir", { 1.0, 0.0, 0.0 } },           // +X → radial
+        { "pilot_dia_mm", 6.0 }, { "pilot_depth_mm", 12.0 },
+        { "seat_dia_mm", 12.0 }, { "seat_depth_mm", 4.0 },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    EXPECT_EQ(tps[0].segments.size(), 0u)
+        << "a radial counterbore is not machinable on the 3-axis-Z post";
 }
 
 // A bare stock travels the same chain and yields an EMPTY-but-valid program

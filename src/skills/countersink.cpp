@@ -12,6 +12,7 @@
 #include <TopoDS.hxx>
 #include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Vec.hxx>
 
 #include <nlohmann/json.hpp>
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace koocadcam::skill::countersink {
 
@@ -125,6 +127,34 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         (yMax - yMin) * (yMax - yMin) +
         (zMax - zMin) * (zMax - zMin));
 
+    // True entry point = where the tool axis pierces the resolved entry-face
+    // plane.  For a tilted axis the XY of that piercing differs from
+    // (position_x, position_y), so we intersect the axis line with the face
+    // plane rather than guessing from the bbox.  Falls back to std::nullopt for
+    // a non-planar entry face (then the ±Z / general heuristics below apply).
+    std::optional<gp_Pnt> entryOnFace;
+    {
+        const TopoDS_Face& ef = wp.face(*entryId);
+        BRepAdaptor_Surface efs(ef);
+        if (efs.GetType() == GeomAbs_Plane) {
+            const gp_Pln pln = efs.Plane();
+            const gp_Pnt p0  = pln.Location();
+            const gp_Dir n   = pln.Axis().Direction();
+            // Line: L(t) = a0 + t*adir, with a0 a point on the axis at bbox mid.
+            const gp_Pnt a0(in.position_x_mm, in.position_y_mm, (zMin + zMax) / 2.0);
+            const gp_Dir ad = in.axis_dir;
+            const double denom = n.Dot(ad);
+            if (std::abs(denom) > 1e-9) {
+                // Use gp_Vec dot for the (a0→p0) term: gp_Dir::Dot(gp_Vec) would
+                // implicitly normalise the vector and discard its magnitude.
+                const double t = gp_Vec(n).Dot(gp_Vec(a0, p0)) / denom;
+                entryOnFace = gp_Pnt(a0.X() + ad.X() * t,
+                                     a0.Y() + ad.Y() * t,
+                                     a0.Z() + ad.Z() * t);
+            }
+        }
+    }
+
     const double kEntryOverhang = 0.05;
     const gp_Dir adir = in.axis_dir;
 
@@ -134,10 +164,24 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         in.position_x_mm - adir.X() * (bboxDiag + kEntryOverhang),
         in.position_y_mm - adir.Y() * (bboxDiag + kEntryOverhang),
         (zMin + zMax) / 2.0 - adir.Z() * (bboxDiag + kEntryOverhang));
-    gp_Pnt entryPlanePoint(toolStartCyl);
+    // The entry-plane point is where the axis crosses the entry SURFACE.  Prefer
+    // the exact axis∩face-plane intersection computed above; it is correct for
+    // ANY axis.  (A prior bug used a copy of toolStartCyl — a whole bboxDiag
+    // behind the part — so a tilted countersink cut NOTHING and stamped garbage.)
+    gp_Pnt entryPlanePoint = entryOnFace.value_or(gp_Pnt(
+        toolStartCyl.X() + adir.X() * (bboxDiag + kEntryOverhang),
+        toolStartCyl.Y() + adir.Y() * (bboxDiag + kEntryOverhang),
+        toolStartCyl.Z() + adir.Z() * (bboxDiag + kEntryOverhang)));
+    // The cutter launch point sits kEntryOverhang OUTSIDE the entry surface,
+    // back along -adir from the true entry point.
+    toolStartCyl = gp_Pnt(entryPlanePoint.X() - adir.X() * kEntryOverhang,
+                          entryPlanePoint.Y() - adir.Y() * kEntryOverhang,
+                          entryPlanePoint.Z() - adir.Z() * kEntryOverhang);
 
-    // Common-case shortcut: drilling along ±Z, planar entry face.
-    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6) {
+    // Common-case shortcut: drilling along ±Z, planar entry face — keep the exact
+    // top/bottom Z (the axis∩plane result already equals this, but pin it for the
+    // no-entryOnFace fallback path).
+    if (std::abs(adir.X()) < 1e-6 && std::abs(adir.Y()) < 1e-6 && !entryOnFace) {
         const double entryZ = (adir.Z() < 0) ? zMax : zMin;
         toolStartCyl     = gp_Pnt(in.position_x_mm, in.position_y_mm,
                                   entryZ - adir.Z() * kEntryOverhang);
@@ -171,12 +215,15 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const TopoDS_Shape fusedCutter = pr::fuse(pilotTool, coneTool);
     const TopoDS_Shape newShape    = pr::cut(wp.shape(), fusedCutter);
 
-    // 6) Build signature
+    // 6) Build signature.  Stamp the entry-plane Z (entryPlanePoint is the exact
+    //    surface point where the axis crosses the entry face) so downstream CAM
+    //    machines from the real surface, not Z=0.
     json params = {
         { "entry_face_kind",  "resolved_id" },
         { "entry_face_id",    *entryId },
         { "position_x_mm",    in.position_x_mm },
         { "position_y_mm",    in.position_y_mm },
+        { "position_z_mm",    entryPlanePoint.Z() },
         { "axis_dir",         { adir.X(), adir.Y(), adir.Z() } },
         { "pilot_dia_mm",     in.pilot_dia_mm },
         { "pilot_depth_mm",   in.pilot_depth_mm },
