@@ -23,6 +23,9 @@
 #include "skills/Workpiece.hpp"
 #include "skills/drill_hole.hpp"
 #include "skills/mill_rect_pocket.hpp"
+#include "skills/box_pocket.hpp"
+#include "skills/bore_cylindrical.hpp"
+#include "cam/Toolpath.hpp"
 
 #include <string>
 
@@ -82,6 +85,66 @@ TEST(ReToGCodeE2E, MachinedPartProducesRunnableProgram)
     EXPECT_NE(gcode.find("M30"), std::string::npos) << "program end";
     // A real program has substantive body, not just headers.
     EXPECT_GT(gcode.size(), 200u) << "the program must contain real motion blocks";
+}
+
+// A TOP-FACE box_pocket (a phone camera island / watch top pocket) is machinable
+// on the 3-axis-Z post: it must produce a real toolpath with cutting moves.
+TEST(ReToGCodeE2E, TopFaceBoxPocketProducesToolpath)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    skill::box_pocket::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };  // +Z top
+    in.length_mm = 14.0; in.width_mm = 10.0; in.depth_mm = 3.0;
+    auto part = skill::box_pocket::apply(*stock, in).workpiece;
+
+    // Generate toolpaths directly from the feature signature (a +Z box_pocket).
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* bp = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "box_pocket") { bp = &t; break; }
+    ASSERT_NE(bp, nullptr) << "a box_pocket feature must reach a toolpath generator";
+    EXPECT_GT(bp->segments.size(), 2u)
+        << "a +Z box_pocket must produce a real cutting path (not the empty fallback)";
+}
+
+// A RADIAL box_pocket (a side button, face_normal = +X) is NOT machinable on the
+// 3-axis-Z post — it must yield an EMPTY toolpath (a loud deferral), NOT a
+// plausible-but-wrong vertical plunge.
+TEST(ReToGCodeE2E, RadialBoxPocketYieldsEmptyToolpath)
+{
+    auto stock = skill::createCuboidStock(40.0, 60.0, 30.0);
+    skill::box_pocket::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(1, 0, 0), 5.0, "largest" };  // +X side
+    in.length_mm = 10.0; in.width_mm = 5.0; in.depth_mm = 2.0;
+    auto part = skill::box_pocket::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* bp = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "box_pocket") { bp = &t; break; }
+    ASSERT_NE(bp, nullptr);
+    EXPECT_EQ(bp->segments.size(), 0u)
+        << "a radial (side-face) box_pocket must NOT be machined on the 3-axis-Z "
+           "post — it must be an empty toolpath, not a wrong vertical plunge";
+}
+
+// A RADIAL bore_cylindrical (a crown side stem, axis -X) must likewise yield an
+// empty toolpath — the axis guard stops the Z drill generator from emitting a
+// wrong vertical plunge at the bore's XY.
+TEST(ReToGCodeE2E, RadialBoreYieldsEmptyToolpath)
+{
+    auto stock = skill::createCuboidStock(40.0, 60.0, 30.0);
+    skill::bore_cylindrical::Input in;
+    in.entry_face    = skill::FaceByNormal{ gp_Dir(1, 0, 0), 5.0, "largest" };
+    in.position_x_mm = 40.0; in.position_y_mm = 30.0; in.position_z_mm = 15.0;
+    in.axis_dir      = gp_Dir(-1, 0, 0);
+    in.diameter_mm   = 12.0; in.depth_mm = 10.0;
+    auto part = skill::bore_cylindrical::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* b = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "bore_cylindrical") { b = &t; break; }
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(b->segments.size(), 0u)
+        << "a radial bore must be an empty toolpath (deferred), not a wrong plunge";
 }
 
 // A bare stock travels the same chain and yields an EMPTY-but-valid program

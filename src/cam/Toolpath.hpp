@@ -99,6 +99,13 @@ Toolpath millCircularPocketToolpath(const skill::FeatureSignature& sig);
 Toolpath millRectPocketToolpath(const skill::FeatureSignature& sig);
 Toolpath millSlotToolpath(const skill::FeatureSignature& sig);
 
+// box_pocket → a sharp-corner rect recess.  On the 3-axis-Z post this is
+// machinable ONLY when its face_normal is +Z (a top-face pocket: phone camera
+// island, watch top pocket) — the same perimeter contour as mill_rect_pocket.
+// A RADIAL box_pocket (side button, face_normal ±X/±Y) needs a re-setup / 4th
+// axis the post does not have, so it emits an empty toolpath + a warning.
+Toolpath boxPocketToolpath(const skill::FeatureSignature& sig);
+
 // ── Multi-feature dispatcher ─────────────────────────────────────────────
 
 // Generate toolpaths for ALL features in a vector of signatures (e.g.,

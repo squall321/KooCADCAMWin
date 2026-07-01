@@ -22,7 +22,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <sstream>
+#include <string>
 
 namespace koocadcam::cam {
 
@@ -135,6 +137,41 @@ double estimateCycleTime_s(const std::vector<PathSegment>& segs, double fallback
 double entryZ(const nlohmann::json& params, const char* key = "position_z_mm")
 {
     return params.value(key, 0.0);
+}
+
+// The 3-axis-Z post can only machine a feature whose cut axis is global ±Z.  A
+// recovered RADIAL feature (side bore/pocket/button — axis along ±X/±Y) needs a
+// re-setup or a 4th axis the post does not have; routing it through a Z generator
+// would emit a plausible-but-WRONG path (a vertical plunge at (x,y) instead of
+// into the side face).  So detect a non-Z cut axis and refuse.  The axis lives in
+// `axis_dir` (drill/bore/pocket) or `face_normal` (box_pocket/box_boss).
+bool cutAxisIsZ(const nlohmann::json& params)
+{
+    for (const char* key : { "axis_dir", "face_normal" }) {
+        if (params.contains(key) && params[key].is_array() && params[key].size() == 3) {
+            const auto& a = params[key];
+            const double z = a[2].get<double>();
+            const double x = a[0].get<double>(), y = a[1].get<double>();
+            const double n = std::sqrt(x * x + y * y + z * z);
+            if (n > 1e-9) return std::abs(z / n) > 0.999;   // ~parallel to ±Z
+        }
+    }
+    return true;   // no axis authored → the legacy ±Z assumption
+}
+
+// An empty toolpath for a feature the 3-axis-Z post cannot machine, with a loud
+// warning — so a radial feature FAILS VISIBLY instead of shipping a wrong path.
+Toolpath emptyRadialToolpath(const skill::FeatureSignature& sig)
+{
+    spdlog::warn("cam: '{}' has a non-Z (radial/side) cut axis — not machinable on "
+                 "the 3-axis-Z post (needs a re-setup or a 4th axis); emitting an "
+                 "empty toolpath", sig.skill_id);
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    return tp;
 }
 
 }  // namespace
@@ -386,6 +423,50 @@ Toolpath millSlotToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── box_pocket toolpath ───────────────────────────────────────────────────
+// A sharp-corner rect recess.  On a +Z (top-face) box_pocket this is the same
+// perimeter-contour path as mill_rect_pocket.  A radial (±X/±Y) box_pocket is
+// not machinable on the 3-axis-Z post → empty toolpath + warning.
+Toolpath boxPocketToolpath(const skill::FeatureSignature& sig)
+{
+    if (!cutAxisIsZ(sig.params)) return emptyRadialToolpath(sig);
+
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double cx    = sig.params.value("center_x_mm", 0.0);
+    const double cy    = sig.params.value("center_y_mm", 0.0);
+    const double L     = sig.params.value("length_mm", 10.0);
+    const double W     = sig.params.value("width_mm", 10.0);
+    const double depth = sig.params.value("depth_mm", 1.0);
+    const double toolD = (sig.tooling.tool_dia_mm > 0.0)
+                       ? sig.tooling.tool_dia_mm : std::min(L, W) * 0.4;
+    const double toolR = toolD * 0.5;
+
+    const double work_z_top = entryZ(sig.params, "center_z_mm");
+    const double safe_z = work_z_top + kSafeZAboveStock_mm;
+    const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                 sig.tooling.feed_per_tooth_mm);
+    const double hx = std::max(0.1, L / 2.0 - toolR);
+    const double hy = std::max(0.1, W / 2.0 - toolR);
+    const double zc = work_z_top - depth;
+
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // plunge
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy - hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy + hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy + hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // close
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── Dispatcher ───────────────────────────────────────────────────────────
 
 std::vector<Toolpath> generateAllToolpaths(
@@ -394,6 +475,18 @@ std::vector<Toolpath> generateAllToolpaths(
     std::vector<Toolpath> out;
     out.reserve(sigs.size());
     for (const auto& sig : sigs) {
+        // Guard: a recovered RADIAL (non-Z cut axis) hole/pocket cannot be
+        // machined on the 3-axis-Z post.  Refuse it BEFORE a Z generator turns it
+        // into a plausible-but-wrong vertical plunge.  (box_pocket carries its own
+        // guard inside boxPocketToolpath.)
+        static const std::set<std::string> kZAxisGuarded = {
+            "drill_hole", "drill_through_hole", "spot_drill", "spot_face",
+            "bore_cylindrical", "mill_circular_pocket", "mill_rect_pocket", "mill_slot",
+        };
+        if (kZAxisGuarded.count(sig.skill_id) && !cutAxisIsZ(sig.params)) {
+            out.push_back(emptyRadialToolpath(sig));
+            continue;
+        }
         if (sig.skill_id == "drill_hole") {
             out.push_back(drillHoleToolpath(sig));
         } else if (sig.skill_id == "mill_circular_pocket") {
@@ -402,6 +495,8 @@ std::vector<Toolpath> generateAllToolpaths(
             out.push_back(millRectPocketToolpath(sig));
         } else if (sig.skill_id == "mill_slot") {
             out.push_back(millSlotToolpath(sig));
+        } else if (sig.skill_id == "box_pocket") {
+            out.push_back(boxPocketToolpath(sig));
         } else if (sig.skill_id == "bore_cylindrical"   ||
                    sig.skill_id == "drill_through_hole" ||
                    sig.skill_id == "spot_drill"         ||
