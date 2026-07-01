@@ -724,6 +724,7 @@ std::vector<Toolpath> generateAllToolpaths(
             "linear_pattern", "circular_pattern",
             "counterbore", "countersink", "ream",
             "bore_with_shelf", "multi_step_bore",
+            "micro_drill", "gun_drill",
         };
         if (kZAxisGuarded.count(sig.skill_id) && !cutAxisIsZ(sig.params)) {
             out.push_back(emptyRadialToolpath(sig));
@@ -745,10 +746,13 @@ std::vector<Toolpath> generateAllToolpaths(
         } else if (sig.skill_id == "bore_cylindrical"   ||
                    sig.skill_id == "drill_through_hole" ||
                    sig.skill_id == "spot_drill"         ||
-                   sig.skill_id == "spot_face") {
+                   sig.skill_id == "spot_face"          ||
+                   sig.skill_id == "micro_drill"        ||
+                   sig.skill_id == "gun_drill") {
             // The plain-hole bore/drill family is a plunge at a position to a
             // depth — the drill_hole toolpath shape covers them directly (they
-            // carry position_x/y + depth + diameter).
+            // carry position_x/y + depth + diameter).  micro_drill (sub-mm) and
+            // gun_drill (deep-hole) differ only in tool/strategy, not path shape.
             out.push_back(drillHoleToolpath(sig));
         } else if (sig.skill_id == "counterbore") {
             out.push_back(counterboreToolpath(sig));

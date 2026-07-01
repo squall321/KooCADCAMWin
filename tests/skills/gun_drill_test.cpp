@@ -131,6 +131,11 @@ TEST(SkillGunDrill, RecognizeFindsDeepHole)
     EXPECT_NEAR(c.confidence, 0.6, 1e-6);     // ambiguous w/ drill_hole etc.
     EXPECT_NEAR(c.recovered_params["diameter_mm"].get<double>(), 3.0, 1e-3);
     EXPECT_NEAR(c.recovered_params["depth_mm"].get<double>(),    45.0, 1e-3);
+    // Entry Z must be the MOUTH (top face Z=70), NOT the blind bottom (Z=25) —
+    // adjacency resolution, not axis-projection extreme.
+    ASSERT_TRUE(c.recovered_params.contains("position_z_mm"));
+    EXPECT_NEAR(c.recovered_params["position_z_mm"].get<double>(), 70.0, 1e-3)
+        << "recovered entry Z must be the mouth (70), not the blind bottom (25)";
     EXPECT_GE(c.matched_geometry["depth_dia_ratio"].get<double>(), 10.0);
 }
 

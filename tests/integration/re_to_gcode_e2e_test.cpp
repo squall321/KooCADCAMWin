@@ -32,6 +32,8 @@
 #include "skills/ream.hpp"
 #include "skills/bore_with_shelf.hpp"
 #include "skills/multi_step_bore.hpp"
+#include "skills/micro_drill.hpp"
+#include "skills/gun_drill.hpp"
 #include "cam/Toolpath.hpp"
 
 #include <string>
@@ -363,6 +365,53 @@ TEST(ReToGCodeE2E, MultiStepBorePlungesEveryStepCumulatively)
             if (std::abs(s.end_point.Z() - 22.0) < 1e-6) z22 = true;
         }
     EXPECT_TRUE(z34 && z28 && z22) << "plunges at cumulative depths 34/28/22";
+}
+
+// A micro_drill (sub-mm hole) is a plain plunge — it must reuse the drill_hole
+// toolpath (4 segments), plunging from the real entry surface.
+TEST(ReToGCodeE2E, MicroDrillProducesPlungeToolpath)
+{
+    auto stock = skill::createCuboidStock(20.0, 20.0, 10.0);   // top face Z=10
+    skill::micro_drill::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 10; in.position_y_mm = 10; in.axis_dir = gp_Dir(0, 0, -1);
+    in.diameter_mm = 0.5; in.depth_mm = 2.0; in.through_hole = false;
+    auto part = skill::micro_drill::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* md = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "micro_drill") { md = &t; break; }
+    ASSERT_NE(md, nullptr) << "a micro_drill must reach the drill toolpath, not empty";
+    EXPECT_EQ(md->segments.size(), 4u) << "drill plunge (rapid/rapid/plunge/retract)";
+    // Plunge floor = entry(10) - depth(2) = 8.
+    bool reaches8 = false;
+    for (const auto& s : md->segments)
+        if (s.move == cam::PathSegment::Move::Linear &&
+            std::abs(s.end_point.Z() - 8.0) < 1e-6) reaches8 = true;
+    EXPECT_TRUE(reaches8) << "micro_drill plunge must reach the real depth (Z=8), not from Z=0";
+}
+
+// A gun_drill (deep-hole) is likewise a plain plunge reusing the drill toolpath.
+TEST(ReToGCodeE2E, GunDrillProducesPlungeToolpath)
+{
+    auto stock = skill::createCuboidStock(30.0, 30.0, 50.0);   // top face Z=50
+    skill::gun_drill::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.position_x_mm = 15; in.position_y_mm = 15; in.axis_dir = gp_Dir(0, 0, -1);
+    in.diameter_mm = 3.0; in.depth_mm = 40.0; in.through_hole = false;   // ratio 13.3
+    auto part = skill::gun_drill::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* gd = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "gun_drill") { gd = &t; break; }
+    ASSERT_NE(gd, nullptr) << "a gun_drill must reach the drill toolpath, not empty";
+    EXPECT_EQ(gd->segments.size(), 4u);
+    // Plunge floor = entry(50) - depth(40) = 10.
+    bool reaches10 = false;
+    for (const auto& s : gd->segments)
+        if (s.move == cam::PathSegment::Move::Linear &&
+            std::abs(s.end_point.Z() - 10.0) < 1e-6) reaches10 = true;
+    EXPECT_TRUE(reaches10) << "gun_drill plunge must reach the real depth (Z=10)";
 }
 
 // A bare stock travels the same chain and yields an EMPTY-but-valid program

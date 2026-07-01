@@ -139,6 +139,12 @@ TEST(SkillMicroDrill, RecognizeFindsSubMmHole)
     EXPECT_NEAR(c.confidence, 0.85, 1e-6);
     EXPECT_NEAR(c.recovered_params["diameter_mm"].get<double>(), 0.6, 1e-3);
     EXPECT_NEAR(c.recovered_params["depth_mm"].get<double>(),    2.0, 1e-3);
+    // Entry Z must be the MOUTH (top face Z=5), NOT the blind bottom (Z=3).
+    // OCCT stores the drilled cylinder axis pointing -Z, so a max-projection pick
+    // would wrongly stamp the bottom; entry must be resolved by adjacency.
+    ASSERT_TRUE(c.recovered_params.contains("position_z_mm"));
+    EXPECT_NEAR(c.recovered_params["position_z_mm"].get<double>(), 5.0, 1e-3)
+        << "recovered entry Z must be the mouth (5), not the blind bottom (3)";
 }
 
 // ─── 4. STEP round-trip ──────────────────────────────────────────────────
