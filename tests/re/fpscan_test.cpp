@@ -72,6 +72,7 @@ const std::set<std::string>& preciseTier()
         // fires on a filleted rect_pocket panel part (a rect pocket IS a rect
         // pocket), so it is exempt from the domain-compound cap invariant here.
         "box_pocket",
+        "crown_knurl",   // precise-tier radial notch ring (anchored on a cone knob)
     };
     return k;
 }

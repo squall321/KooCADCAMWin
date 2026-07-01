@@ -185,6 +185,7 @@
 #include "skills/annular_groove.hpp"
 #include "skills/box_boss.hpp"
 #include "skills/box_pocket.hpp"
+#include "skills/crown_knurl.hpp"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -442,6 +443,10 @@ std::vector<RecognizeFn> buildRegistry()
     // planar FLOOR bounded by 3-4 INWARD-facing walls, recessed below the entry
     // plane.  Complements mill_rect_pocket (Z-only, keyed on corner fillets).
     reg.emplace_back(&skill::box_pocket::recognize);
+    // CROWN KNURL — a ring of N radial notches around a cone knob (watch crown
+    // grip).  Anchored on the knob cone; the perpendicular-axis + even-spacing +
+    // count>=3 gates reject the axial crown shaft and the non-uniform side buttons.
+    reg.emplace_back(&skill::crown_knurl::recognize);
 
     return reg;
 }
@@ -469,6 +474,7 @@ Group classify(std::string_view skillId)
         "profile_milling",
         "mill_rect_pocket",
         "box_pocket",           // sharp-corner arbitrary-axis rect pocket (side button)
+        "crown_knurl",          // radial notch ring on a crown knob
         "mill_circular_pocket",
         "mill_slot",
         "mill_keyway",
@@ -567,6 +573,10 @@ const std::unordered_set<std::string>& preciseRecognizers()
         // the entry plane (recess gate) with a compact footprint (aspect/min-dim)
         // — the inverse-convexity + recess gates make it specific on foreign CAD.
         "box_pocket",
+        // Crown knurl: N equal-radius radial notch cylinders (axes perpendicular
+        // to a cone-knob axis) evenly spaced around it — a very specific ring
+        // signature anchored on the knob cone.
+        "crown_knurl",
     };
     return kPrecise;
 }

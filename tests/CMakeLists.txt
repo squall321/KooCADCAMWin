@@ -931,6 +931,7 @@ koo_add_skill_test(dome_boss)
 koo_add_skill_test(annular_groove)
 koo_add_skill_test(box_boss)
 koo_add_skill_test(box_pocket)
+koo_add_skill_test(crown_knurl)
 
 # slice 11 — SolidWorks-style body management (5)
 koo_add_skill_test(move_face_along_direction)

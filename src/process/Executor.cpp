@@ -14,6 +14,7 @@
 #include "skills/annular_groove.hpp"
 #include "skills/box_boss.hpp"
 #include "skills/box_pocket.hpp"
+#include "skills/crown_knurl.hpp"
 #include "skills/linear_pattern.hpp"
 #include "skills/circular_pattern.hpp"
 #include "skills/bolt_circle_pattern.hpp"
@@ -4375,6 +4376,24 @@ sk::box_pocket::Input parseBoxPocket(const json& p)
     return in;
 }
 
+sk::crown_knurl::Input parseCrownKnurl(const json& p)
+{
+    sk::crown_knurl::Input in;
+    auto vec3 = [&](const char* key, double& a, double& b, double& c) {
+        if (p.contains(key) && p[key].is_array() && p[key].size() == 3 &&
+            p[key][0].is_number() && p[key][1].is_number() && p[key][2].is_number()) {
+            a = p[key][0].get<double>(); b = p[key][1].get<double>(); c = p[key][2].get<double>();
+        }
+    };
+    vec3("world_center", in.world_cx_mm, in.world_cy_mm, in.world_cz_mm);
+    vec3("world_axis",   in.world_ax,    in.world_ay,    in.world_az);
+    in.knob_radius_mm  = jdouble(p, "knob_radius_mm",  0.0);
+    in.notch_radius_mm = jdouble(p, "notch_radius_mm", 0.0);
+    in.count           = (p.contains("count") && p["count"].is_number())
+                         ? p["count"].get<int>() : 0;
+    return in;
+}
+
 sk::revolve_boss::Input parseRevolveBoss(const json& p)
 {
     sk::revolve_boss::Input in;
@@ -4473,6 +4492,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::box_pocket::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::box_pocket::apply(wp, parseBoxPocket(p));
+    };
+    t[sk::crown_knurl::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::crown_knurl::apply(wp, parseCrownKnurl(p));
     };
     t[sk::linear_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::linear_pattern::apply(wp, parseLinearPattern(p));

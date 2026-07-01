@@ -317,3 +317,42 @@ TEST(WatchFullRoundtrip, SpeakerGrilleRecognitionDiagnostic)
     EXPECT_GE(byKind["linear_pattern"], 1)
         << "the side speaker grille must be recovered as a linear_pattern grid";
 }
+
+// ── 5. Crown KNURL diagnostic: how do the N radial notches survive STEP? ────
+TEST(WatchFullRoundtrip, CrownKnurlGeometryDiagnostic)
+{
+    json spec = engine::WatchFrontModel::defaultSpec();
+    spec.erase("side_buttons"); spec.erase("speaker_grille");
+    spec.erase("rear_sensors"); spec.erase("lugs"); spec.erase("secondary_fillets");
+    // Opt in to a KNURLED protruding crown knob.
+    spec["crown_cavity"]["body_protrusion_mm"] = 2.0;
+    spec["crown_cavity"]["body_dia_mm"]        = 3.5;
+    spec["crown_cavity"]["knurl_count"]        = 8;
+
+    auto re_ = buildAndReimport(spec, "crown_knurl");
+    ASSERT_NE(re_.foreign, nullptr);
+
+    std::map<int, int> byRad;
+    int coneCount = 0;
+    for (int i = 0; i < re_.foreign->faceCount(); ++i) {
+        BRepAdaptor_Surface s(re_.foreign->face(i));
+        if (s.GetType() == GeomAbs_Cone) ++coneCount;
+        if (re_.foreign->isFaceCylinder(i))
+            byRad[static_cast<int>(s.Cylinder().Radius() * 100)]++;
+    }
+    std::printf("\n[KNURL] faces=%d coneFaces=%d cylinder faces by radius:\n",
+                re_.foreign->faceCount(), coneCount);
+    for (const auto& [r, n] : byRad)
+        std::printf("    r=%.2fmm x%d\n", r / 100.0, n);
+
+    // The 8-notch crown knurl must now surface as ONE crown_knurl feature (a
+    // radial notch ring anchored on the knob cone), end-to-end on the real watch.
+    const auto cands = re::analyzeFiltered(*re_.foreign, 0.7);
+    std::map<std::string, int> byKind;
+    for (const auto& c : cands) byKind[c.skill_id]++;
+    std::printf("[KNURL] recognised kinds:");
+    for (const auto& [k, n] : byKind) std::printf(" %s x%d", k.c_str(), n);
+    std::printf("\n");
+    EXPECT_GE(byKind["crown_knurl"], 1)
+        << "the crown knurl must be recovered as a crown_knurl notch ring";
+}

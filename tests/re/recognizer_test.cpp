@@ -20,10 +20,18 @@
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
 #include "skills/chamfer_edge.hpp"
+#include "skills/crown_knurl.hpp"
 #include "skills/drill_hole.hpp"
 #include "skills/fillet_edge.hpp"   // for EdgesAtZBand selector
 #include "skills/hollow_cavity.hpp"
 
+#include "engine/primitives/Tools.hpp"
+#include "engine/primitives/Cuts.hpp"
+
+#include <gp_Ax2.hxx>
+
+#include <cmath>
+#include <map>
 #include <string>
 
 using namespace koocadcam;
@@ -264,4 +272,53 @@ TEST(Recognizer, LiftRecoveredStepPassesThroughNonEdge)
     const auto s = re::liftRecoveredStep(step);
     EXPECT_EQ(s.params, step.params);   // untouched
     EXPECT_FALSE(s.params.contains("edges_at_z_mm"));
+}
+
+// ─── VERIFIER: crown_knurl duplicate-drill / double-cut path (finding #2) ────
+// A crown_knurl emits NO face-id key and is NOT in the hole-pattern subsumption
+// set, so if its notch cylinders ALSO pass drill_hole's ring+wrap gates, the
+// inferred plan carries BOTH a crown_knurl step AND N drill_hole steps for the
+// same notches — re-execution double-cuts them.  Build a knurl with LARGE, DEEP
+// notches (big enough to present >=2 rings and a >81 deg wall arc) to probe
+// whether the double-cut path is reachable through the FULL inferProcessPlan.
+TEST(Recognizer, CrownKnurlNotchesDoNotSurviveAsDuplicateDrills)
+{
+    namespace pr = koocadcam::engine::prim;
+    auto stock = skill::createCuboidStock(40.0, 40.0, 14.0);
+    // A larger cone knob (radius 6) at the top centre.
+    const gp_Ax2 knobAx(gp_Pnt(20, 20, 14), gp_Dir(0, 0, 1));
+    TopoDS_Shape s = pr::fuse(stock->shape(),
+        pr::coneFrustum(knobAx, 6.0, 6.0 * 0.85, 4.0));
+    // 6 LARGE, DEEP radial notches (r=1.2, length 5 -> penetrate well past the
+    // rim, presenting a full cylindrical wall + entry + far ring).
+    for (int i = 0; i < 6; ++i) {
+        const double phi = 2.0 * M_PI * i / 6;
+        const gp_Pnt c(20 + std::cos(phi) * 6.0, 20 + std::sin(phi) * 6.0, 16.0);
+        const gp_Dir inDir(-std::cos(phi), -std::sin(phi), 0);
+        s = pr::cut(s, pr::cylinder(gp_Ax2(c, inDir), 1.2, 5.0));
+    }
+    skill::Workpiece foreign(s);
+
+    // Raw recognizer view: does drill_hole independently claim the notches?
+    const auto drills = skill::drill_hole::recognize(foreign);
+    std::printf("[KnurlDup] raw drill_hole candidates on notch ring = %zu\n",
+                drills.size());
+
+    // Full pipeline: what steps does the recovered plan carry?
+    auto plan = re::inferProcessPlan(foreign, 0.7);
+    std::map<std::string, int> byKind;
+    for (const auto& st : plan.steps()) byKind[st.skill_id]++;
+    std::printf("[KnurlDup] plan steps:");
+    for (const auto& [k, n] : byKind) std::printf(" %s x%d", k.c_str(), n);
+    std::printf("\n");
+
+    const int knurl = byKind["crown_knurl"];
+    const int drill = byKind["drill_hole"] + byKind["drill_through_hole"];
+    // If BOTH a knurl AND per-notch drills survive, the plan double-cuts on
+    // regeneration — the finding-#2 failure mode.  This EXPECT documents the
+    // actual reachability of that path.
+    EXPECT_FALSE(knurl >= 1 && drill >= 1)
+        << "DOUBLE-CUT PATH REACHABLE: plan carries crown_knurl x" << knurl
+        << " AND drill_hole x" << drill
+        << " for the same notch ring (no subsumption, no face-id dedupe)";
 }
