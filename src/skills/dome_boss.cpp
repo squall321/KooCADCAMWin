@@ -97,13 +97,16 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
     const double vol = sphericalCapVolume(in.base_radius_mm, in.height_mm);
 
     json params = {
-        { "entry_face_id",  faceId },
-        { "center_x_mm",    in.center_x_mm },
-        { "center_y_mm",    in.center_y_mm },
-        { "base_radius_mm", in.base_radius_mm },
-        { "height_mm",      in.height_mm },
-        { "sections",       in.sections },
-        { "face_normal",    { normal.X(), normal.Y(), normal.Z() } },
+        { "entry_face_id",     faceId },
+        { "center_x_mm",       in.center_x_mm },
+        { "center_y_mm",       in.center_y_mm },
+        { "center_x_world_mm", base.X() },
+        { "center_y_world_mm", base.Y() },
+        { "center_z_world_mm", base.Z() },     // the base plane the field is cleared to
+        { "base_radius_mm",    in.base_radius_mm },
+        { "height_mm",         in.height_mm },
+        { "sections",          in.sections },
+        { "face_normal",       { normal.X(), normal.Y(), normal.Z() } },
     };
     json pattern = {
         { "kind",               kSkillId },
@@ -273,6 +276,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         { "height_mm",      rise },
         { "sections",       6 },
         { "world_center",   { baseCenter.X(), baseCenter.Y() } },
+        // Base-plane centre + normal for CAM: baseCenter is the fitted base ring
+        // (the plane the field is cleared to); domeAxis is the outward rise dir.
+        { "center_x_world_mm", baseCenter.X() },
+        { "center_y_world_mm", baseCenter.Y() },
+        { "center_z_world_mm", baseCenter.Z() },
+        { "face_normal",       { domeAxis.X(), domeAxis.Y(), domeAxis.Z() } },
     };
     json matched = {
         { "source",          "geometry" },

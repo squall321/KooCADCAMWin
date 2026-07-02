@@ -110,13 +110,23 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     const double vol = in.length_mm * in.width_mm * in.height_mm;
 
+    // World boss-base centre (origin + face-local offset).  center_[xyz]_world_mm
+    // gives CAM the machining frame directly: the base plane is at *_z_world and
+    // the boss stands height_mm above it — clear the field down to that plane.
+    const gp_Pnt baseCtr(origin.X() + cx * vx.X() + cy * vy.X(),
+                         origin.Y() + cx * vx.Y() + cy * vy.Y(),
+                         origin.Z() + cx * vx.Z() + cy * vy.Z());
+
     json params = {
-        { "center_x_mm",   in.center_x_mm },
-        { "center_y_mm",   in.center_y_mm },
-        { "length_mm",     in.length_mm },
-        { "width_mm",      in.width_mm },
-        { "height_mm",     in.height_mm },
-        { "face_normal",   { normal.X(), normal.Y(), normal.Z() } },
+        { "center_x_mm",       in.center_x_mm },
+        { "center_y_mm",       in.center_y_mm },
+        { "center_x_world_mm", baseCtr.X() },
+        { "center_y_world_mm", baseCtr.Y() },
+        { "center_z_world_mm", baseCtr.Z() },     // the base plane the field is cleared to
+        { "length_mm",         in.length_mm },
+        { "width_mm",          in.width_mm },
+        { "height_mm",         in.height_mm },
+        { "face_normal",       { normal.X(), normal.Y(), normal.Z() } },
     };
     json pattern = {
         { "kind",               kSkillId },
@@ -313,6 +323,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         if (aspect > 12.0) continue;                  // a rib / slot land, not a pad
         if (std::min(length, width) < 0.8) continue;  // too sliver to be a boss
 
+        // Base plane = the cap centre pulled INBOARD by height along -normal (the
+        // cap is the boss top; the field is cleared down to this base plane).
+        const gp_Pnt baseCtr(cap.c.X() - cap.n.X() * height,
+                             cap.c.Y() - cap.n.Y() * height,
+                             cap.c.Z() - cap.n.Z() * height);
         json recovered = {
             { "length_mm",    length },
             { "width_mm",     width },
@@ -323,6 +338,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             // datum (a lug sits on the curved case side — no face to resolve).
             { "use_world",    true },
             { "world_center", { cap.c.X(), cap.c.Y(), cap.c.Z() } },
+            // Base-plane centre for CAM (the field is cleared to this Z).
+            { "center_x_world_mm", baseCtr.X() },
+            { "center_y_world_mm", baseCtr.Y() },
+            { "center_z_world_mm", baseCtr.Z() },
         };
         json wallIds = json::array();
         for (int wid : walls) wallIds.push_back(wid);

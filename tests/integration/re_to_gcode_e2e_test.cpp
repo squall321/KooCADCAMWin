@@ -34,6 +34,8 @@
 #include "skills/multi_step_bore.hpp"
 #include "skills/micro_drill.hpp"
 #include "skills/gun_drill.hpp"
+#include "skills/box_boss.hpp"
+#include "skills/dome_boss.hpp"
 #include "cam/Toolpath.hpp"
 
 #include <string>
@@ -412,6 +414,73 @@ TEST(ReToGCodeE2E, GunDrillProducesPlungeToolpath)
         if (s.move == cam::PathSegment::Move::Linear &&
             std::abs(s.end_point.Z() - 10.0) < 1e-6) reaches10 = true;
     EXPECT_TRUE(reaches10) << "gun_drill plunge must reach the real depth (Z=10)";
+}
+
+// A box_boss (raised rectangular island) is machined by clearing the field
+// around it down to its base plane — a rectangular profile contour offset OUTWARD
+// by the tool radius, at the base Z.
+TEST(ReToGCodeE2E, BoxBossProducesOutwardContourAtBasePlane)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);   // top face Z=20
+    skill::box_boss::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.center_x_mm = 0.0; in.center_y_mm = 0.0;   // face-local: at the face centre
+    in.length_mm = 20.0; in.width_mm = 12.0; in.height_mm = 6.0;
+    auto part = skill::box_boss::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* bb = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "box_boss") { bb = &t; break; }
+    ASSERT_NE(bb, nullptr) << "a box_boss must reach boxBossToolpath, not empty";
+    // rapid-approach + plunge + 4 contour edges + retract = 7 segments.
+    EXPECT_EQ(bb->segments.size(), 7u) << "rectangular contour (approach/plunge/4 edges/retract)";
+    // The contour cuts at the base plane Z=20 (the top face the boss stands on).
+    bool atBaseZ = false;
+    for (const auto& s : bb->segments)
+        if (s.move == cam::PathSegment::Move::Linear &&
+            std::abs(s.end_point.Z() - 20.0) < 1e-6) atBaseZ = true;
+    EXPECT_TRUE(atBaseZ) << "the field-clearing contour runs at the base plane (Z=20)";
+}
+
+// A dome_boss (raised spherical cap) is machined by a circular profile contour
+// around its base circle, offset outward by the tool radius, at the base plane.
+TEST(ReToGCodeE2E, DomeBossProducesCircularContourAtBasePlane)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    skill::dome_boss::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    in.center_x_mm = 0.0; in.center_y_mm = 0.0;
+    in.base_radius_mm = 8.0; in.height_mm = 5.0;
+    auto part = skill::dome_boss::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* db = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "dome_boss") { db = &t; break; }
+    ASSERT_NE(db, nullptr) << "a dome_boss must reach domeBossToolpath, not empty";
+    // approach + plunge + 4 ArcCCW quarter-turns + retract = 7 segments.
+    EXPECT_EQ(db->segments.size(), 7u);
+    int arcs = 0;
+    for (const auto& s : db->segments)
+        if (s.move == cam::PathSegment::Move::ArcCCW) ++arcs;
+    EXPECT_EQ(arcs, 4) << "full circle as four ArcCCW quarter-turns";
+}
+
+// A RADIAL box_boss (a lug on a side face, normal ±X) is not machinable on the
+// 3-axis-Z post → empty toolpath via the axis guard.
+TEST(ReToGCodeE2E, RadialBoxBossYieldsEmptyToolpath)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "box_boss";
+    sig.params = {
+        { "center_x_world_mm", 30.0 }, { "center_y_world_mm", 0.0 },
+        { "center_z_world_mm", 10.0 },
+        { "length_mm", 10.0 }, { "width_mm", 8.0 }, { "height_mm", 4.0 },
+        { "face_normal", { 1.0, 0.0, 0.0 } },   // +X → radial
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    EXPECT_EQ(tps[0].segments.size(), 0u)
+        << "a radial (side-face) boss is not machinable on the 3-axis-Z post";
 }
 
 // A bare stock travels the same chain and yields an EMPTY-but-valid program

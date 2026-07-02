@@ -77,6 +77,12 @@ TEST(SkillBoxBoss, RecognizesForeignBoxBoss)
     EXPECT_NEAR(std::max(L, W), 12.0, 0.5);
     EXPECT_NEAR(std::min(L, W), 8.0, 0.5);
     EXPECT_NEAR(g->recovered_params.value("height_mm", 0.0), 3.0, 0.5);
+    // The base-plane Z the CAM field is cleared to must be the host top face
+    // (Z=10), NOT the boss cap (Z=13) and NOT Z=0.  cap.c is at the top; the base
+    // is height inboard.
+    ASSERT_TRUE(g->recovered_params.contains("center_z_world_mm"));
+    EXPECT_NEAR(g->recovered_params["center_z_world_mm"].get<double>(), 10.0, 0.5)
+        << "recovered boss base plane must be the host top (10), not the cap (13)";
 }
 
 // ─── 3. round-trip by volume ───────────────────────────────────────────────

@@ -127,6 +127,14 @@ Toolpath reamToolpath(const skill::FeatureSignature& sig);
 Toolpath boreWithShelfToolpath(const skill::FeatureSignature& sig);
 Toolpath multiStepBoreToolpath(const skill::FeatureSignature& sig);
 
+// box_boss / dome_boss → a raised island (the INVERSE of a pocket): a finishing
+// profile contour offset OUTWARD by the tool radius, at the base plane, that
+// clears the surrounding field and leaves the boss standing.  box_boss traces a
+// rectangle (length+2·toolR × width+2·toolR); dome_boss a circle (base_radius +
+// toolR).  Only a +Z-normal (top-face) boss is machinable; radial is guarded out.
+Toolpath boxBossToolpath(const skill::FeatureSignature& sig);
+Toolpath domeBossToolpath(const skill::FeatureSignature& sig);
+
 // ── Multi-feature dispatcher ─────────────────────────────────────────────
 
 // Generate toolpaths for ALL features in a vector of signatures (e.g.,

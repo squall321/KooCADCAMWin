@@ -706,6 +706,104 @@ Toolpath multiStepBoreToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── box_boss toolpath ─────────────────────────────────────────────────────
+// A raised rectangular island: the INVERSE of box_pocket.  Instead of cutting a
+// recess, we clear the surrounding field down to the boss base plane, leaving the
+// boss standing.  Slice-1 minimum-viable = a single finishing profile contour
+// that traces the boss footprint offset OUTWARD by the tool radius, at the base
+// plane depth (the tool skirts the wall, removing the adjacent field).  The boss
+// stands height_mm above center_z_world_mm; stock top = base + height.
+Toolpath boxBossToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double cx     = sig.params.value("center_x_world_mm", 0.0);
+    const double cy     = sig.params.value("center_y_world_mm", 0.0);
+    const double baseZ  = sig.params.value("center_z_world_mm", 0.0);
+    const double L      = sig.params.value("length_mm", 10.0);
+    const double W      = sig.params.value("width_mm", 10.0);
+    const double height = sig.params.value("height_mm", 1.0);
+    const double toolD  = (sig.tooling.tool_dia_mm > 0.0)
+                        ? sig.tooling.tool_dia_mm : std::min(L, W) * 0.4;
+    const double toolR  = toolD * 0.5;
+    const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                 sig.tooling.feed_per_tooth_mm);
+
+    // Stock top is at the boss top; retract above it.
+    const double safe_z = baseZ + height + kSafeZAboveStock_mm;
+    // Contour OUTSIDE the boss wall by the tool radius (skirts the wall).
+    const double hx = L / 2.0 + toolR;
+    const double hy = W / 2.0 + toolR;
+    const double zc = baseZ;   // clear the field down to the base plane
+
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // plunge
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy - hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy + hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy + hy, zc),     feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // close
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── dome_boss toolpath ────────────────────────────────────────────────────
+// A raised spherical-cap island.  Slice-1 minimum-viable = a circular profile
+// contour around the dome footprint (base circle) offset OUTWARD by the tool
+// radius, at the base plane, traced as four ArcCCW quarter-turns.  (A true dome
+// surface needs a 3-D finishing pass / ball-nose stepover — a follow-up; this
+// pass at least clears the field and defines the boss footprint.)
+Toolpath domeBossToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double cx     = sig.params.value("center_x_world_mm", 0.0);
+    const double cy     = sig.params.value("center_y_world_mm", 0.0);
+    const double baseZ  = sig.params.value("center_z_world_mm", 0.0);
+    const double baseR  = sig.params.value("base_radius_mm", 5.0);
+    const double height = sig.params.value("height_mm", 1.0);
+    const double toolD  = (sig.tooling.tool_dia_mm > 0.0)
+                        ? sig.tooling.tool_dia_mm : baseR * 0.4;
+    const double toolR  = toolD * 0.5;
+    const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                 sig.tooling.feed_per_tooth_mm);
+
+    const double safe_z = baseZ + height + kSafeZAboveStock_mm;
+    const double r      = baseR + toolR;   // skirt the base circle by the tool radius
+    const double zc     = baseZ;
+
+    using M = PathSegment::Move;
+    // Approach the contour start at (cx + r, cy) and plunge to the base plane.
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx + r, cy, safe_z), 0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx + r, cy, zc),     feed, 0, 0, 0 }); // plunge
+    // Full circle as four ArcCCW quarter-turns; I/J = centre offset from the
+    // segment start (centre is (cx, cy)).
+    gp_Pnt cur(cx + r, cy, zc);
+    const double quarter[4][2] = { {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}, {1.0, 0.0} };
+    for (int q = 0; q < 4; ++q) {
+        const double nx = cx + r * quarter[q][0];
+        const double ny = cy + r * quarter[q][1];
+        const double ic = cx - cur.X();   // centre - start
+        const double jc = cy - cur.Y();
+        tp.segments.push_back({ M::ArcCCW, gp_Pnt(nx, ny, zc), feed, ic, jc, 0.0 });
+        cur = gp_Pnt(nx, ny, zc);
+    }
+    tp.segments.push_back({ M::Rapid, gp_Pnt(cur.X(), cur.Y(), safe_z), 0.0, 0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── Dispatcher ───────────────────────────────────────────────────────────
 
 std::vector<Toolpath> generateAllToolpaths(
@@ -725,6 +823,7 @@ std::vector<Toolpath> generateAllToolpaths(
             "counterbore", "countersink", "ream",
             "bore_with_shelf", "multi_step_bore",
             "micro_drill", "gun_drill",
+            "box_boss", "dome_boss",
         };
         if (kZAxisGuarded.count(sig.skill_id) && !cutAxisIsZ(sig.params)) {
             out.push_back(emptyRadialToolpath(sig));
@@ -740,6 +839,10 @@ std::vector<Toolpath> generateAllToolpaths(
             out.push_back(millSlotToolpath(sig));
         } else if (sig.skill_id == "box_pocket") {
             out.push_back(boxPocketToolpath(sig));
+        } else if (sig.skill_id == "box_boss") {
+            out.push_back(boxBossToolpath(sig));
+        } else if (sig.skill_id == "dome_boss") {
+            out.push_back(domeBossToolpath(sig));
         } else if (sig.skill_id == "linear_pattern" ||
                    sig.skill_id == "circular_pattern") {
             out.push_back(holePatternToolpath(sig));
