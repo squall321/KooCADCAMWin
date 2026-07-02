@@ -38,6 +38,8 @@
 #include "skills/dome_boss.hpp"
 #include "cam/Toolpath.hpp"
 
+#include <cmath>
+#include <set>
 #include <string>
 
 using namespace koocadcam;
@@ -117,6 +119,34 @@ TEST(ReToGCodeE2E, TopFaceBoxPocketProducesToolpath)
         << "a +Z box_pocket must produce a real cutting path (not the empty fallback)";
 }
 
+// A DEEP box_pocket is roughed in MULTIPLE axial passes: the cutting contour
+// repeats at several descending Z levels (each a fraction of the tool dia deep),
+// ending at the exact floor.  A shallow pocket collapses to a single pass.
+TEST(ReToGCodeE2E, DeepBoxPocketRoughsInMultiplePasses)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 30.0);   // top Z=30
+    skill::box_pocket::Input in;
+    in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in.length_mm = 20.0; in.width_mm = 16.0; in.depth_mm = 12.0;   // deep
+    auto part = skill::box_pocket::apply(*stock, in).workpiece;
+
+    const auto tps = cam::generateAllToolpaths(part->features());
+    const cam::Toolpath* bp = nullptr;
+    for (const auto& t : tps) if (t.feature_skill_id == "box_pocket") { bp = &t; break; }
+    ASSERT_NE(bp, nullptr);
+    // Collect the distinct cutting Z levels (Linear segments), rounded.
+    std::set<long> levels;
+    double deepest = 1e9;
+    for (const auto& s : bp->segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            levels.insert(std::lround(s.end_point.Z() * 100.0));
+            deepest = std::min(deepest, s.end_point.Z());
+        }
+    EXPECT_GE(levels.size(), 2u) << "a 12mm-deep pocket must rough in >=2 axial passes";
+    // The last pass lands on the exact floor: 30 - 12 = 18.
+    EXPECT_NEAR(deepest, 18.0, 1e-6) << "the final pass reaches the true pocket floor";
+}
+
 // A RADIAL box_pocket (a side button, face_normal = +X) is NOT machinable on the
 // 3-axis-Z post — it must yield an EMPTY toolpath (a loud deferral), NOT a
 // plausible-but-wrong vertical plunge.
@@ -137,10 +167,11 @@ TEST(ReToGCodeE2E, RadialBoxPocketYieldsEmptyToolpath)
            "post — it must be an empty toolpath, not a wrong vertical plunge";
 }
 
-// A RADIAL bore_cylindrical (a crown side stem, axis -X) must likewise yield an
-// empty toolpath — the axis guard stops the Z drill generator from emitting a
-// wrong vertical plunge at the bore's XY.
-TEST(ReToGCodeE2E, RadialBoreYieldsEmptyToolpath)
+// A RADIAL bore_cylindrical (a crown side stem, axis -X) built through the real
+// apply()/recognize chain is now machined in its OWN local work-plane frame — a
+// non-empty plunge flagged radial, NOT the empty fallback and NOT a wrong +Z
+// vertical plunge at the bore's XY.
+TEST(ReToGCodeE2E, RadialBoreMachinedInLocalFrame)
 {
     auto stock = skill::createCuboidStock(40.0, 60.0, 30.0);
     skill::bore_cylindrical::Input in;
@@ -154,8 +185,15 @@ TEST(ReToGCodeE2E, RadialBoreYieldsEmptyToolpath)
     const cam::Toolpath* b = nullptr;
     for (const auto& t : tps) if (t.feature_skill_id == "bore_cylindrical") { b = &t; break; }
     ASSERT_NE(b, nullptr);
-    EXPECT_EQ(b->segments.size(), 0u)
-        << "a radial bore must be an empty toolpath (deferred), not a wrong plunge";
+    EXPECT_EQ(b->segments.size(), 4u) << "a radial bore is a local-frame plunge, not empty";
+    EXPECT_TRUE(b->is_radial()) << "the toolpath is flagged radial";
+    EXPECT_NEAR(std::abs(b->work_depth_axis.X()), 1.0, 1e-6) << "depth axis is ±X (radial)";
+    // No wrong global +Z plunge: none of the local-frame moves are a vertical
+    // descent in world Z (all segment coords are LOCAL, u=v=0).
+    for (const auto& s : b->segments) {
+        EXPECT_NEAR(s.end_point.X(), 0.0, 1e-9);
+        EXPECT_NEAR(s.end_point.Y(), 0.0, 1e-9);
+    }
 }
 
 // A +Z linear hole pattern (a top-face drilled grid / mounting holes) must
@@ -442,11 +480,12 @@ TEST(ReToGCodeE2E, BoxBossProducesOutwardContourAtBasePlane)
     EXPECT_TRUE(atBaseZ) << "the field-clearing contour runs at the base plane (Z=20)";
 }
 
-// A dome_boss (raised spherical cap) is machined by a circular profile contour
-// around its base circle, offset outward by the tool radius, at the base plane.
-TEST(ReToGCodeE2E, DomeBossProducesCircularContourAtBasePlane)
+// A dome_boss (raised spherical cap) is finished with a ball-nose 3-D pass: a
+// stack of constant-Z rings from the apex down to the base (each a full circle at
+// the dome's surface radius for its height), plus a base skirt contour.
+TEST(ReToGCodeE2E, DomeBossProducesZLevelRingFinishing)
 {
-    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);   // top face Z=20
     skill::dome_boss::Input in;
     in.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
     in.center_x_mm = 0.0; in.center_y_mm = 0.0;
@@ -457,12 +496,22 @@ TEST(ReToGCodeE2E, DomeBossProducesCircularContourAtBasePlane)
     const cam::Toolpath* db = nullptr;
     for (const auto& t : tps) if (t.feature_skill_id == "dome_boss") { db = &t; break; }
     ASSERT_NE(db, nullptr) << "a dome_boss must reach domeBossToolpath, not empty";
-    // approach + plunge + 4 ArcCCW quarter-turns + retract = 7 segments.
-    EXPECT_EQ(db->segments.size(), 7u);
+
+    // Multiple Z-level rings → arcs are a multiple of 4 and well above one ring.
     int arcs = 0;
+    double minArcZ = 1e9, maxArcZ = -1e9;
     for (const auto& s : db->segments)
-        if (s.move == cam::PathSegment::Move::ArcCCW) ++arcs;
-    EXPECT_EQ(arcs, 4) << "full circle as four ArcCCW quarter-turns";
+        if (s.move == cam::PathSegment::Move::ArcCCW) {
+            ++arcs;
+            minArcZ = std::min(minArcZ, s.end_point.Z());
+            maxArcZ = std::max(maxArcZ, s.end_point.Z());
+        }
+    EXPECT_GT(arcs, 4) << "a 3-D finishing pass has more than one ring";
+    EXPECT_EQ(arcs % 4, 0) << "each ring is four ArcCCW quarter-turns";
+    // Rings span from near the apex (Z≈20+5) down to the base plane (Z=20).
+    EXPECT_NEAR(minArcZ, 20.0, 1e-6) << "the lowest ring is at the base plane";
+    EXPECT_GT(maxArcZ, 20.0 + 2.0)   << "the highest ring climbs well up the dome";
+    EXPECT_LE(maxArcZ, 20.0 + 5.0 + 1e-6) << "no ring exceeds the apex";
 }
 
 // A RADIAL box_boss (a lug on a side face, normal ±X) is not machinable on the
@@ -481,6 +530,41 @@ TEST(ReToGCodeE2E, RadialBoxBossYieldsEmptyToolpath)
     ASSERT_EQ(tps.size(), 1u);
     EXPECT_EQ(tps[0].segments.size(), 0u)
         << "a radial (side-face) boss is not machinable on the 3-axis-Z post";
+}
+
+// A RADIAL side bore (a crown-stem bore, axis +X) is a plain axial plunge — it is
+// now machined in the feature's OWN local work-plane frame (not the empty
+// fallback).  The toolpath is flagged radial, records the frame, and its G-code
+// carries a SETUP comment so a re-setup / post can reach it.
+TEST(ReToGCodeE2E, RadialSideBoreMachinedInLocalFrame)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "bore_cylindrical";
+    sig.params = {
+        { "position_x_mm", 40.0 }, { "position_y_mm", 20.0 }, { "position_z_mm", 15.0 },
+        { "axis_dir", { -1.0, 0.0, 0.0 } },   // bores in -X, into the +X side face
+        { "diameter_mm", 6.0 }, { "depth_mm", 8.0 },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+    // NON-empty: a plunge in the local frame (rapid/rapid/plunge/retract).
+    EXPECT_EQ(tp.segments.size(), 4u) << "a radial bore is a local-frame plunge, not empty";
+    EXPECT_TRUE(tp.is_radial()) << "the toolpath is flagged radial";
+    // The work-plane depth axis matches the cut axis (-X); the origin is the entry.
+    EXPECT_NEAR(tp.work_depth_axis.X(), -1.0, 1e-9);
+    EXPECT_NEAR(tp.work_origin.X(), 40.0, 1e-9);
+    EXPECT_NEAR(tp.work_origin.Z(), 15.0, 1e-9);
+    // The plunge reaches the depth in LOCAL coords (+depth along local Z).
+    bool reachesDepth = false;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::Linear &&
+            std::abs(s.end_point.Z() - 8.0) < 1e-6) reachesDepth = true;
+    EXPECT_TRUE(reachesDepth) << "the local-frame plunge reaches depth 8";
+    // The G-code flags the radial setup.
+    const std::string g = cam::toGCode(tp);
+    EXPECT_NE(g.find("SETUP: RADIAL"), std::string::npos)
+        << "radial G-code must carry a setup comment, not pretend it is a +Z plunge";
 }
 
 // A bare stock travels the same chain and yields an EMPTY-but-valid program

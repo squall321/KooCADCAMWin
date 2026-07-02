@@ -154,9 +154,14 @@ TEST(CamToolpath, GCodeOutput)
         << "expected Y coordinate '20' in g-code output";
     EXPECT_NE(gcode.find("Z"), std::string::npos);
 
-    // Header sanity.
+    // Header sanity — the elements that make the program actually runnable.
     EXPECT_NE(gcode.find("G21"), std::string::npos) << "expected G21 (metric)";
     EXPECT_NE(gcode.find("G90"), std::string::npos) << "expected G90 (absolute)";
+    EXPECT_NE(gcode.find("G17"), std::string::npos)
+        << "expected G17 (XY plane) so G2/G3 arc I/J are unambiguous";
+    EXPECT_NE(gcode.find("M3 S"), std::string::npos)
+        << "expected M3 S<rpm> spindle start — without it the tool does not cut";
+    EXPECT_NE(gcode.find("M5"), std::string::npos) << "expected M5 spindle stop before end";
 }
 
 // ─── 4. Path entirely above stock → no collisions ─────────────────────────

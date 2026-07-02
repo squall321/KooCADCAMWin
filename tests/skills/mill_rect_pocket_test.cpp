@@ -70,6 +70,11 @@ TEST(SkillMillRectPocket, RecognizeFinds)
     ASSERT_FALSE(cands.empty());
     EXPECT_NEAR(cands[0].recovered_params["corner_r_mm"].get<double>(), 1.0, 0.1);
     EXPECT_NEAR(cands[0].recovered_params["depth_mm"].get<double>(),     3.0, 0.1);
+    // The entry-plane Z must be recovered (top face Z=10) so CAM machines from the
+    // real surface, not Z=0.  (Previously omitted → a recovered pocket cut at Z=0.)
+    ASSERT_TRUE(cands[0].recovered_params.contains("center_z_mm"));
+    EXPECT_NEAR(cands[0].recovered_params["center_z_mm"].get<double>(), 10.0, 0.1)
+        << "recovered rect-pocket entry plane must be the top face (10), not Z=0";
 }
 
 // Rewritten recognize() now collapses STEP-roundtrip-split corner-fillet

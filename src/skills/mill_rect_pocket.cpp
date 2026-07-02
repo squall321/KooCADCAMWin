@@ -360,6 +360,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         json recovered = {
             { "center_x_mm",  cx },
             { "center_y_mm",  cy },
+            { "center_z_mm",  zHi },   // entry (top) plane Z — CAM machines from here, not Z=0
             { "axis_dir",     { 0.0, 0.0, -1.0 } },
             { "length_mm",    length },
             { "width_mm",     width },

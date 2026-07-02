@@ -113,9 +113,19 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
 
     const double vol = in.length_mm * in.width_mm * in.depth_mm;
 
+    // World pocket-mouth centre (origin + face-local offset).  center_[xyz]_world
+    // gives CAM the machining frame directly: the mouth (entry) plane is at
+    // *_z_world and the recess sinks depth_mm below it.
+    const gp_Pnt mouthCtr(origin.X() + cx * vx.X() + cy * vy.X(),
+                          origin.Y() + cx * vx.Y() + cy * vy.Y(),
+                          origin.Z() + cx * vx.Z() + cy * vy.Z());
+
     json params = {
-        { "center_x_mm",   in.center_x_mm },
-        { "center_y_mm",   in.center_y_mm },
+        { "center_x_mm",       in.center_x_mm },
+        { "center_y_mm",       in.center_y_mm },
+        { "center_x_world_mm", mouthCtr.X() },
+        { "center_y_world_mm", mouthCtr.Y() },
+        { "center_z_world_mm", mouthCtr.Z() },   // entry (mouth) plane; recess sinks below
         { "length_mm",     in.length_mm },
         { "width_mm",      in.width_mm },
         { "depth_mm",      in.depth_mm },
@@ -330,6 +340,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "face_xaxis",   { floorX.X(), floorX.Y(), floorX.Z() } },
             { "use_world",    true },
             { "world_center", { mouth.X(), mouth.Y(), mouth.Z() } },
+            // Mouth (entry) plane centre for CAM — the field/recess is cut below.
+            { "center_x_world_mm", mouth.X() },
+            { "center_y_world_mm", mouth.Y() },
+            { "center_z_world_mm", mouth.Z() },
         };
         json wallIds = json::array();
         for (int wid : walls) wallIds.push_back(wid);

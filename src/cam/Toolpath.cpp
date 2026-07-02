@@ -18,6 +18,10 @@
 
 #include "Toolpath.hpp"
 
+#include <gp.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Vec.hxx>
+
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -37,6 +41,22 @@ constexpr double kRapidFeed_mm_per_min = 10000.0;
 constexpr double kHelixTurnsPerDepth   = 1.0;   // 1 full helical turn per dia of climb (coarse)
 constexpr int    kHelixArcsPerTurn     = 8;     // 45° arc segments
 constexpr int    kSpiralRings          = 6;     // # of concentric spiral rings filling pocket
+constexpr double kAxialStepFraction    = 0.5;   // roughing depth of cut = 0.5 × tool dia per pass
+
+// The descending cut-plane Z levels for a multi-pass (roughing) pocket: from the
+// first axial step below the entry down to (and including) the full depth.  Each
+// level is a fraction of the tool diameter deep; the last entry is always the
+// exact floor so the finish pass lands on the true depth.  For a shallow pocket
+// (depth ≤ one step) this returns just the floor — i.e. the original single pass.
+std::vector<double> roughingLevels(double work_z_top, double depth, double toolD)
+{
+    const double step = std::max(0.2, kAxialStepFraction * (toolD > 0.0 ? toolD : depth));
+    std::vector<double> zs;
+    for (double d = step; d < depth - 1e-6; d += step)
+        zs.push_back(work_z_top - d);
+    zs.push_back(work_z_top - depth);   // final pass at the exact floor
+    return zs;
+}
 
 // Compute spindle RPM from surface feet per minute.
 // rpm = sfm × 12 / (π × dia_in) ; here we keep dia in mm but convert sfm→mm/min.
@@ -174,6 +194,20 @@ Toolpath emptyRadialToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// Read the cut axis (into the material) from the signature.  drill/bore emit
+// `axis_dir`; if absent, default -Z (legacy downward drill).
+gp_Dir cutAxisDir(const nlohmann::json& params)
+{
+    for (const char* key : { "axis_dir", "axis_dir_xyz" }) {
+        if (params.contains(key) && params[key].is_array() && params[key].size() == 3) {
+            const auto& a = params[key];
+            const double x = a[0].get<double>(), y = a[1].get<double>(), z = a[2].get<double>();
+            if (std::sqrt(x * x + y * y + z * z) > 1e-9) return gp_Dir(x, y, z);
+        }
+    }
+    return gp_Dir(0.0, 0.0, -1.0);
+}
+
 }  // namespace
 
 // ── drill_hole toolpath ──────────────────────────────────────────────────
@@ -228,6 +262,61 @@ Toolpath drillHoleToolpath(const skill::FeatureSignature& sig)
     // [3] Retract back to safe_z.
     tp.segments.push_back({PathSegment::Move::Rapid,
                            gp_Pnt(x, y, safe_z), 0.0, 0, 0, 0});
+
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── radial drill / bore toolpath (local-frame) ────────────────────────────
+// A side bore / side drill whose axis is NOT global ±Z.  A 3-axis-Z post cannot
+// reach it in the global frame, so we emit the plunge in the feature's OWN local
+// frame: origin = the entry point, depth axis = the cut axis, and the path is a
+// simple axial plunge in local (u, v, depth) — (0,0,-safe) → (0,0,+depth) →
+// retract.  The Toolpath records the work-plane frame so a re-setup / post can
+// rotate the local coords to world.  (This is the honest model: the geometry is
+// correct in its own frame, and the frame is carried for the post — no lie about
+// the part being machinable as-is on a pure 3-axis-Z setup.)
+Toolpath radialDrillToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double px    = sig.params.value("position_x_mm", 0.0);
+    const double py    = sig.params.value("position_y_mm", 0.0);
+    const double pz    = sig.params.value("position_z_mm", 0.0);
+    const double depth = sig.params.value("depth_mm", 0.0);
+    const bool   thru  = sig.params.value("through_hole", false);
+    const double feed  = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                sig.tooling.feed_per_tooth_mm);
+
+    const gp_Dir depthAxis = cutAxisDir(sig.params);   // into the material
+    // Build an orthonormal in-plane basis (u, v) perpendicular to the depth axis.
+    gp_Vec u(gp::DX());
+    if (std::abs(gp_Vec(depthAxis).Dot(u)) > 0.99) u = gp_Vec(gp::DY());
+    u = u - gp_Vec(depthAxis) * gp_Vec(depthAxis).Dot(u);
+    u.Normalize();
+    const gp_Vec v = gp_Vec(depthAxis).Crossed(u);
+
+    // Record the work-plane frame (origin = the entry point on the side face).
+    tp.work_origin     = gp_Pnt(px, py, pz);
+    tp.work_u_axis     = gp_Dir(u);
+    tp.work_v_axis     = gp_Dir(v);
+    tp.work_depth_axis = depthAxis;
+
+    // Emit the plunge in LOCAL coords: depth runs along +Z_local (into the
+    // material), u/v = 0 (a point plunge).  safe/approach are above the surface
+    // (negative local depth).
+    const double localCut  = thru ? depth + 2.0 : depth;
+    const double safeLocal = -kSafeZAboveStock_mm;   // above the entry surface
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(0.0, 0.0, safeLocal),               0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(0.0, 0.0, -kApproachClearance_mm),  0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(0.0, 0.0, localCut),                feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(0.0, 0.0, safeLocal),               0.0,  0, 0, 0 });
 
     tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
     return tp;
@@ -350,8 +439,10 @@ Toolpath millCircularPocketToolpath(const skill::FeatureSignature& sig)
 }
 
 // ── mill_rect_pocket toolpath ─────────────────────────────────────────────
-// A single finishing perimeter contour offset inward by the tool radius (a
-// real, collision-safe path; multi-pass roughing is a future refinement).
+// A perimeter contour offset inward by the tool radius, cut in MULTIPLE axial
+// passes (roughing): a plunge on the first level then a contour at each
+// descending Z, ending with a finish pass at the exact floor.  A shallow pocket
+// (depth ≤ one axial step) collapses to the original single pass.
 Toolpath millRectPocketToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
@@ -376,16 +467,18 @@ Toolpath millRectPocketToolpath(const skill::FeatureSignature& sig)
                                                  sig.tooling.feed_per_tooth_mm);
     const double hx = std::max(0.1, L / 2.0 - toolR);
     const double hy = std::max(0.1, W / 2.0 - toolR);
-    const double zc = work_z_top - depth;
 
     using M = PathSegment::Move;
-    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // plunge
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy - hy, zc),     feed, 0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy + hy, zc),     feed, 0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy + hy, zc),     feed, 0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // close
-    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 }); // retract
+    tp.segments.push_back({ M::Rapid, gp_Pnt(cx - hx, cy - hy, safe_z), 0.0, 0, 0, 0 });
+    for (double zc : roughingLevels(work_z_top, depth, toolD)) {
+        // Plunge (first level) / step down (subsequent) then trace the perimeter.
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy - hy, zc), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy + hy, zc), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy + hy, zc), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc), feed, 0, 0, 0 }); // close
+    }
+    tp.segments.push_back({ M::Rapid, gp_Pnt(cx - hx, cy - hy, safe_z), 0.0, 0, 0, 0 }); // retract
     tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
     return tp;
 }
@@ -438,8 +531,12 @@ Toolpath boxPocketToolpath(const skill::FeatureSignature& sig)
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
     tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
 
-    const double cx    = sig.params.value("center_x_mm", 0.0);
-    const double cy    = sig.params.value("center_y_mm", 0.0);
+    // Prefer the world mouth centre (correct for any entry-face position); fall
+    // back to the face-local center_*_mm for legacy signatures.
+    const double cx    = sig.params.value("center_x_world_mm",
+                         sig.params.value("center_x_mm", 0.0));
+    const double cy    = sig.params.value("center_y_world_mm",
+                         sig.params.value("center_y_mm", 0.0));
     const double L     = sig.params.value("length_mm", 10.0);
     const double W     = sig.params.value("width_mm", 10.0);
     const double depth = sig.params.value("depth_mm", 1.0);
@@ -447,22 +544,23 @@ Toolpath boxPocketToolpath(const skill::FeatureSignature& sig)
                        ? sig.tooling.tool_dia_mm : std::min(L, W) * 0.4;
     const double toolR = toolD * 0.5;
 
-    const double work_z_top = entryZ(sig.params, "center_z_mm");
+    const double work_z_top = entryZ(sig.params, "center_z_world_mm");
     const double safe_z = work_z_top + kSafeZAboveStock_mm;
     const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
                                                  sig.tooling.feed_per_tooth_mm);
     const double hx = std::max(0.1, L / 2.0 - toolR);
     const double hy = std::max(0.1, W / 2.0 - toolR);
-    const double zc = work_z_top - depth;
 
     using M = PathSegment::Move;
-    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // plunge
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy - hy, zc),     feed, 0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy + hy, zc),     feed, 0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy + hy, zc),     feed, 0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc),     feed, 0, 0, 0 }); // close
-    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx - hx, cy - hy, safe_z), 0.0,  0, 0, 0 }); // retract
+    tp.segments.push_back({ M::Rapid, gp_Pnt(cx - hx, cy - hy, safe_z), 0.0, 0, 0, 0 });
+    for (double zc : roughingLevels(work_z_top, depth, toolD)) {
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc), feed, 0, 0, 0 }); // plunge/step
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy - hy, zc), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx + hx, cy + hy, zc), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy + hy, zc), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(cx - hx, cy - hy, zc), feed, 0, 0, 0 }); // close
+    }
+    tp.segments.push_back({ M::Rapid, gp_Pnt(cx - hx, cy - hy, safe_z), 0.0, 0, 0, 0 }); // retract
     tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
     return tp;
 }
@@ -754,11 +852,18 @@ Toolpath boxBossToolpath(const skill::FeatureSignature& sig)
 }
 
 // ── dome_boss toolpath ────────────────────────────────────────────────────
-// A raised spherical-cap island.  Slice-1 minimum-viable = a circular profile
-// contour around the dome footprint (base circle) offset OUTWARD by the tool
-// radius, at the base plane, traced as four ArcCCW quarter-turns.  (A true dome
-// surface needs a 3-D finishing pass / ball-nose stepover — a follow-up; this
-// pass at least clears the field and defines the boss footprint.)
+// A raised spherical-cap island, finished with a ball-nose 3-D pass: a stack of
+// constant-Z rings (Z-level / waterline finishing) from the apex down to the
+// base, each ring at the dome's SURFACE radius for its height.  Below every ring
+// a final skirt contour offset OUTWARD by the tool radius clears the field and
+// defines the footprint.
+//
+// Geometry: the cap is a sphere of radius Rs = (r² + h²) / 2h whose apex is at
+// base_z + h and whose base circle (radius r) is at base_z.  At a cut height zc
+// (base_z ≤ zc ≤ base_z + h), let d = (base_z + h) − zc be the drop below the
+// apex; the surface radius is  rho(zc) = sqrt(Rs² − (Rs − d)²) = sqrt(2·Rs·d − d²).
+// (tip-contact approximation: the tool tip follows the surface radius; a true
+// ball-centre offset along the surface normal is a refinement.)
 Toolpath domeBossToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
@@ -780,26 +885,60 @@ Toolpath domeBossToolpath(const skill::FeatureSignature& sig)
                                                  sig.tooling.feed_per_tooth_mm);
 
     const double safe_z = baseZ + height + kSafeZAboveStock_mm;
-    const double r      = baseR + toolR;   // skirt the base circle by the tool radius
-    const double zc     = baseZ;
+    const double apexZ  = baseZ + height;
+    const double Rs     = (height > 1e-6) ? (baseR * baseR + height * height) / (2.0 * height)
+                                          : baseR;   // degenerate flat → treat as a disc
 
     using M = PathSegment::Move;
-    // Approach the contour start at (cx + r, cy) and plunge to the base plane.
-    tp.segments.push_back({ M::Rapid,  gp_Pnt(cx + r, cy, safe_z), 0.0,  0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(cx + r, cy, zc),     feed, 0, 0, 0 }); // plunge
-    // Full circle as four ArcCCW quarter-turns; I/J = centre offset from the
-    // segment start (centre is (cx, cy)).
-    gp_Pnt cur(cx + r, cy, zc);
-    const double quarter[4][2] = { {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}, {1.0, 0.0} };
-    for (int q = 0; q < 4; ++q) {
-        const double nx = cx + r * quarter[q][0];
-        const double ny = cy + r * quarter[q][1];
-        const double ic = cx - cur.X();   // centre - start
-        const double jc = cy - cur.Y();
-        tp.segments.push_back({ M::ArcCCW, gp_Pnt(nx, ny, zc), feed, ic, jc, 0.0 });
-        cur = gp_Pnt(nx, ny, zc);
+
+    // Emit one full circle (four ArcCCW quarter-turns) of radius `r` at height z,
+    // starting/ending at (cx + r, cy).  Assumes the tool is already positioned at
+    // the ring start; returns the final position.
+    auto emitRing = [&](double r, double z) {
+        const double quarter[4][2] = { {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}, {1.0, 0.0} };
+        gp_Pnt cur(cx + r, cy, z);
+        for (int q = 0; q < 4; ++q) {
+            const double nx = cx + r * quarter[q][0];
+            const double ny = cy + r * quarter[q][1];
+            const double ic = cx - cur.X();   // centre - start
+            const double jc = cy - cur.Y();
+            tp.segments.push_back({ M::ArcCCW, gp_Pnt(nx, ny, z), feed, ic, jc, 0.0 });
+            cur = gp_Pnt(nx, ny, z);
+        }
+    };
+
+    // Z-level rings from just below the apex down to the base.  Stepover = a
+    // quarter of the tool diameter (typical ball-nose finishing scallop).
+    const double stepover = std::max(0.2, toolD * 0.25);
+    const int    nLevels  = std::max(1, static_cast<int>(std::ceil(height / stepover)));
+
+    // Rapid to the first ring start above the apex, then descend ring by ring.
+    // Level k (1..nLevels) sits at zc = apexZ - k*(height/nLevels); the surface
+    // radius grows from ~0 at the apex to baseR at the base.
+    bool positioned = false;
+    for (int k = 1; k <= nLevels; ++k) {
+        const double zc  = apexZ - (height * static_cast<double>(k) / static_cast<double>(nLevels));
+        const double d   = apexZ - zc;                       // drop below apex
+        const double rho = std::sqrt(std::max(0.0, 2.0 * Rs * d - d * d));  // surface radius
+        const double r   = std::max(0.1, rho);
+        if (!positioned) {
+            tp.segments.push_back({ M::Rapid,  gp_Pnt(cx + r, cy, safe_z), 0.0,  0, 0, 0 });
+            tp.segments.push_back({ M::Linear, gp_Pnt(cx + r, cy, zc),     feed, 0, 0, 0 });
+            positioned = true;
+        } else {
+            // Move (at feed) out to this ring's radius on the +X spoke, at its Z.
+            tp.segments.push_back({ M::Linear, gp_Pnt(cx + r, cy, zc), feed, 0, 0, 0 });
+        }
+        emitRing(r, zc);
     }
-    tp.segments.push_back({ M::Rapid, gp_Pnt(cur.X(), cur.Y(), safe_z), 0.0, 0, 0, 0 }); // retract
+
+    // Final skirt contour at the base plane, offset OUTWARD by the tool radius —
+    // clears the surrounding field and defines the footprint.
+    const double skirtR = baseR + toolR;
+    tp.segments.push_back({ M::Linear, gp_Pnt(cx + skirtR, cy, baseZ), feed, 0, 0, 0 });
+    emitRing(skirtR, baseZ);
+
+    tp.segments.push_back({ M::Rapid, gp_Pnt(cx + skirtR, cy, safe_z), 0.0, 0, 0, 0 }); // retract
     tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
     return tp;
 }
@@ -812,22 +951,34 @@ std::vector<Toolpath> generateAllToolpaths(
     std::vector<Toolpath> out;
     out.reserve(sigs.size());
     for (const auto& sig : sigs) {
-        // Guard: a recovered RADIAL (non-Z cut axis) hole/pocket cannot be
-        // machined on the 3-axis-Z post.  Refuse it BEFORE a Z generator turns it
-        // into a plausible-but-wrong vertical plunge.  (box_pocket carries its own
-        // guard inside boxPocketToolpath.)
+        // Guard: a recovered RADIAL (non-Z cut axis) feature cannot be machined by
+        // a pure 3-axis-Z post in the GLOBAL frame.  Two responses by feature type:
+        //   - a plain axial hole/bore (a side bore, side drill) IS a simple plunge
+        //     — we emit it in the feature's LOCAL work-plane frame + record the
+        //     frame (radialDrillToolpath) so a re-setup / post can reach it;
+        //   - a radial pocket / pattern / boss needs an in-plane contour on a side
+        //     face — still deferred to an empty toolpath + warning.
+        static const std::set<std::string> kRadialDrillable = {
+            "drill_hole", "drill_through_hole", "spot_drill",
+            "bore_cylindrical", "micro_drill", "gun_drill",
+        };
         static const std::set<std::string> kZAxisGuarded = {
-            "drill_hole", "drill_through_hole", "spot_drill", "spot_face",
-            "bore_cylindrical", "mill_circular_pocket", "mill_rect_pocket", "mill_slot",
+            "spot_face",
+            "mill_circular_pocket", "mill_rect_pocket", "mill_slot",
             "linear_pattern", "circular_pattern",
             "counterbore", "countersink", "ream",
             "bore_with_shelf", "multi_step_bore",
-            "micro_drill", "gun_drill",
             "box_boss", "dome_boss",
         };
-        if (kZAxisGuarded.count(sig.skill_id) && !cutAxisIsZ(sig.params)) {
-            out.push_back(emptyRadialToolpath(sig));
-            continue;
+        if (!cutAxisIsZ(sig.params)) {
+            if (kRadialDrillable.count(sig.skill_id)) {
+                out.push_back(radialDrillToolpath(sig));
+                continue;
+            }
+            if (kZAxisGuarded.count(sig.skill_id)) {
+                out.push_back(emptyRadialToolpath(sig));
+                continue;
+            }
         }
         if (sig.skill_id == "drill_hole") {
             out.push_back(drillHoleToolpath(sig));
@@ -883,56 +1034,102 @@ std::vector<Toolpath> generateAllToolpaths(
 
 // ── G-code export ────────────────────────────────────────────────────────
 
-std::string toGCode(const Toolpath& path)
+// Emit ONE toolpath's setup + moves (tool comment, G21/G90/G17, M3 S, optional
+// radial SETUP banner, the G0/G1/G2/G3 blocks, M5).  NO program-end (M30) and no
+// %/program wrapper — so this composes into a multi-toolpath program.  A leading
+// M5 is emitted only when the spindle is on; the caller decides program framing.
+void emitToolpathBody(const Toolpath& path, std::ostringstream& s)
 {
-    std::ostringstream s;
-    s.setf(std::ios::fixed);
-    s.precision(3);
-
     // Header.
-    s << "(KooCADCAM slice-1 G-code — feature: " << path.feature_skill_id << ")\n";
+    s << "(feature: " << path.feature_skill_id << ")\n";
     s << "(TOOL: " << path.tool_id
       << "  dia=" << path.tool_dia_mm << "mm"
       << "  len=" << path.tool_length_mm << "mm)\n";
     s << "(SPINDLE: " << static_cast<long long>(std::llround(path.spindle_rpm)) << " rpm)\n";
     s << "G21\n";  // metric
     s << "G90\n";  // absolute
+    s << "G17\n";  // XY plane — REQUIRED so G2/G3 arc I/J are unambiguous
+    // Spindle on (clockwise) at the computed RPM.  Without M3 S the tool does not
+    // rotate and the program will not cut; emit it whenever we have a spindle speed.
+    if (path.spindle_rpm > 0.0)
+        s << "M3 S" << static_cast<long long>(std::llround(path.spindle_rpm)) << "\n";
+
+    // Radial / tilted feature: the coordinates below are in the feature's LOCAL
+    // work-plane frame, NOT world.  A re-setup / post must place the part on the
+    // work_origin with the recorded axes and apply the rotation.  We emit the
+    // frame as a comment (no dialect-specific G68.2/CYCL DEF 19 chosen here).
+    if (path.is_radial()) {
+        s << "(SETUP: RADIAL feature — LOCAL (u,v,depth) coordinates below)\n";
+        s << "(WORK_ORIGIN: X" << path.work_origin.X()
+          << " Y" << path.work_origin.Y() << " Z" << path.work_origin.Z() << ")\n";
+        s << "(WORK_U: " << path.work_u_axis.X() << " " << path.work_u_axis.Y()
+          << " " << path.work_u_axis.Z() << ")\n";
+        s << "(WORK_V: " << path.work_v_axis.X() << " " << path.work_v_axis.Y()
+          << " " << path.work_v_axis.Z() << ")\n";
+        s << "(WORK_DEPTH: " << path.work_depth_axis.X() << " " << path.work_depth_axis.Y()
+          << " " << path.work_depth_axis.Z() << ")\n";
+    }
 
     for (const auto& seg : path.segments) {
         switch (seg.move) {
-            case PathSegment::Move::Rapid:
-                s << "G0";
-                break;
-            case PathSegment::Move::Linear:
-                s << "G1";
-                break;
-            case PathSegment::Move::ArcCW:
-                s << "G2";
-                break;
-            case PathSegment::Move::ArcCCW:
-                s << "G3";
-                break;
+            case PathSegment::Move::Rapid:  s << "G0"; break;
+            case PathSegment::Move::Linear: s << "G1"; break;
+            case PathSegment::Move::ArcCW:  s << "G2"; break;
+            case PathSegment::Move::ArcCCW: s << "G3"; break;
         }
         s << " X" << seg.end_point.X()
           << " Y" << seg.end_point.Y()
           << " Z" << seg.end_point.Z();
         if (seg.move == PathSegment::Move::ArcCW ||
             seg.move == PathSegment::Move::ArcCCW) {
-            s << " I" << seg.arc_i
-              << " J" << seg.arc_j
-              << " K" << seg.arc_k;
+            s << " I" << seg.arc_i << " J" << seg.arc_j << " K" << seg.arc_k;
         }
         if (seg.move == PathSegment::Move::Linear ||
             seg.move == PathSegment::Move::ArcCW ||
             seg.move == PathSegment::Move::ArcCCW) {
-            if (seg.feed_mm_per_min > 0.0) {
-                s << " F" << seg.feed_mm_per_min;
-            }
+            if (seg.feed_mm_per_min > 0.0) s << " F" << seg.feed_mm_per_min;
         }
         s << "\n";
     }
 
+    if (path.spindle_rpm > 0.0) s << "M5\n";   // spindle off after this feature
+}
+
+std::string toGCode(const Toolpath& path)
+{
+    std::ostringstream s;
+    s.setf(std::ios::fixed);
+    s.precision(3);
+
+    s << "(KooCADCAM slice-1 G-code)\n";
+    emitToolpathBody(path, s);
     s << "M30\n";  // program end (used in place of M02 — both valid in ISO 6983)
+    return s.str();
+}
+
+std::string toGCodeProgram(const std::vector<Toolpath>& paths, bool ok, int collisionCount)
+{
+    std::ostringstream s;
+    s.setf(std::ios::fixed);
+    s.precision(3);
+
+    s << "%\n";
+    s << "(KooCADCAM G-code program — " << paths.size() << " toolpath(s)";
+    if (!ok) s << "; WARNING " << collisionCount << " collision(s)";
+    s << ")\n";
+    // Each toolpath's body (header + moves + its own M5); a (TOOLCHANGE ...) comment
+    // marks a change of tool between features so a post can insert T/M6.  A single
+    // program-end (M30) closes the WHOLE program — NOT one per toolpath (that would
+    // stop the machine at the first feature).
+    std::string prevTool;
+    for (const auto& tp : paths) {
+        if (!tp.tool_id.empty() && tp.tool_id != prevTool) {
+            s << "(TOOLCHANGE: " << tp.tool_id << ")\n";
+            prevTool = tp.tool_id;
+        }
+        emitToolpathBody(tp, s);
+    }
+    s << "M30\n%\n";
     return s.str();
 }
 

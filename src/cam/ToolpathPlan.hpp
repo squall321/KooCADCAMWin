@@ -51,20 +51,16 @@ inline ToolpathReport planAndVerify(const skill::Workpiece& wp,
     return report;
 }
 
-// Emit one runnable G-code PROGRAM for a whole report: a program-start (%),
-// every toolpath's blocks (each already carries its tool/spindle header and
-// G21/G90), then program-end (M30, %).  This is the deliverable a user exports
-// after a recognize -> execute -> verify pass.
+// Emit one runnable G-code PROGRAM for a whole report: a single %/header, every
+// toolpath's blocks (with a (TOOLCHANGE ...) comment on tool changes), then ONE
+// program-end (M30, %).  Delegates to cam::toGCodeProgram so the program is
+// terminated exactly once — concatenating per-toolpath toGCode() would emit an
+// M30 after each feature and halt the machine at the first one.  This is the
+// deliverable a user exports after a recognize -> execute -> verify pass.
 inline std::string toGCodeProgram(const ToolpathReport& report)
 {
-    std::ostringstream s;
-    s << "%\n";
-    s << "(KooCADCAM G-code program — " << report.toolpaths.size() << " toolpath(s)";
-    if (!report.ok) s << "; WARNING " << report.collisions.size() << " collision(s)";
-    s << ")\n";
-    for (const auto& tp : report.toolpaths) s << toGCode(tp) << '\n';
-    s << "M30\n%\n";
-    return s.str();
+    return toGCodeProgram(report.toolpaths, report.ok,
+                          static_cast<int>(report.collisions.size()));
 }
 
 }  // namespace koocadcam::cam

@@ -108,9 +108,41 @@ TEST(ToolpathPlan, EmitsRunnableGCodeProgram)
     EXPECT_NE(gcode.find("%"), std::string::npos)    << "program start";
     EXPECT_NE(gcode.find("G21"), std::string::npos)  << "metric units";
     EXPECT_NE(gcode.find("G90"), std::string::npos)  << "absolute mode";
+    EXPECT_NE(gcode.find("G17"), std::string::npos)  << "arc plane select";
     EXPECT_NE(gcode.find("G1"),  std::string::npos)  << "a feed move";
     EXPECT_NE(gcode.find("M30"), std::string::npos)  << "program end";
     EXPECT_NE(gcode.find("mill_rect_pocket"), std::string::npos) << "feature comment";
+}
+
+// A MULTI-feature program must be terminated EXACTLY ONCE (a single M30 at the
+// very end) — not one M30 per feature, which would halt the machine at the first
+// one.  A drill + a pocket (two different tools) also gets a (TOOLCHANGE ...)
+// marker between them.
+TEST(ToolpathPlan, MultiFeatureProgramEndsExactlyOnce)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    skill::drill_hole::Input dh;
+    dh.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    dh.position_x_mm = 15.0; dh.position_y_mm = 15.0;
+    dh.axis_dir = gp_Dir(0, 0, -1); dh.diameter_mm = 6.0; dh.depth_mm = 8.0;
+    auto w1 = skill::drill_hole::apply(*stock, dh);
+    skill::mill_rect_pocket::Input mp;
+    mp.entry_face = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    mp.center_x_mm = 40.0; mp.center_y_mm = 40.0;
+    mp.length_mm = 14.0; mp.width_mm = 10.0; mp.depth_mm = 4.0;
+    auto w2 = skill::mill_rect_pocket::apply(*w1.workpiece, mp);
+
+    const cam::ToolpathReport report = cam::planAndVerify(*w2.workpiece);
+    ASSERT_GE(report.toolpaths.size(), 2u) << "two machining features → two toolpaths";
+    const std::string g = cam::toGCodeProgram(report);
+
+    // Exactly ONE M30 (program end), at the end — not one per feature.
+    size_t m30count = 0;
+    for (size_t p = g.find("M30"); p != std::string::npos; p = g.find("M30", p + 1)) ++m30count;
+    EXPECT_EQ(m30count, 1u) << "a multi-feature program must end exactly once";
+    // A tool change is marked between the drill and the mill.
+    EXPECT_NE(g.find("TOOLCHANGE"), std::string::npos)
+        << "a change of tool between features must be marked";
 }
 
 // WORK OFFSET: a hole drilled into a stock whose top is NOT at Z=0 must get a

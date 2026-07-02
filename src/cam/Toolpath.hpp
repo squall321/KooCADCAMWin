@@ -27,8 +27,10 @@
 
 #include "skills/Skill.hpp"
 
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -59,6 +61,15 @@ struct PathSegment
 };
 
 // A full toolpath for one feature operation.
+//
+// Work-plane frame: a ±Z (top-face) feature machines in the global frame — its
+// segment coordinates ARE world XYZ and work_depth_axis = (0,0,-1) (or +1).  A
+// RADIAL / tilted feature (a side bore, a side button) cannot be machined by a
+// pure 3-axis-Z post in the global frame, so its generator emits the toolpath in
+// the feature's OWN local frame — segment coords are (u, v, depth) relative to
+// work_origin along (work_u_axis, work_v_axis, work_depth_axis) — and records
+// that frame here.  A post-processor / re-setup applies work_origin + the frame
+// rotation to recover world coordinates.  is_radial() distinguishes the two.
 struct Toolpath
 {
     std::string              feature_skill_id;   // skill_id of the source signature
@@ -69,6 +80,20 @@ struct Toolpath
     double                   coolant_pressure = 0.0;  // 0 = off
     std::vector<PathSegment> segments;
     double                   est_cycle_time_s = 0.0;  // wall-clock estimate
+
+    // Work-plane frame (defaults to the global/identity frame = a ±Z feature).
+    gp_Pnt  work_origin{ 0.0, 0.0, 0.0 };        // local-frame origin (entry point)
+    gp_Dir  work_u_axis{ 1.0, 0.0, 0.0 };        // in-plane axis 1
+    gp_Dir  work_v_axis{ 0.0, 1.0, 0.0 };        // in-plane axis 2
+    gp_Dir  work_depth_axis{ 0.0, 0.0, -1.0 };   // tool/plunge axis (into material)
+
+    // True when the plunge axis is NOT global ±Z — the segment coords are in the
+    // local (u, v, depth) frame and need the work-plane transform to reach world.
+    // The threshold MUST match the dispatcher's cutAxisIsZ (which treats |z/n| >
+    // 0.999 as ±Z), so is_radial() is its exact complement: |z| <= 0.999.  Using
+    // a strict `<` here would leave a hairline gap at exactly 0.999 where a path
+    // is routed radial (local coords) but the SETUP:RADIAL banner is skipped.
+    bool is_radial() const { return std::abs(work_depth_axis.Z()) <= 0.999; }
 };
 
 // ── Single-feature generators ────────────────────────────────────────────
@@ -81,6 +106,12 @@ struct Toolpath
 //   [2]  Linear   : (x, y, work_z - depth_mm)     ← plunge at programmed feed
 //   [3]  Rapid    : (x, y, safe_z)                ← retract
 Toolpath drillHoleToolpath(const skill::FeatureSignature& sig);
+
+// A radial (non-Z axis) side bore / side drill: an axial plunge emitted in the
+// feature's LOCAL work-plane frame (segment coords are (u, v, depth); the plunge
+// runs along +depth).  The returned Toolpath's work_* frame carries the transform
+// to world (is_radial() == true).  A post / re-setup applies it.
+Toolpath radialDrillToolpath(const skill::FeatureSignature& sig);
 
 // Build a toolpath for a single mill_circular_pocket feature.
 //
@@ -159,5 +190,13 @@ std::vector<Toolpath> generateAllToolpaths(
 // Move codes used:  G0 (Rapid), G1 (Linear), G2 (ArcCW), G3 (ArcCCW).
 // G2/G3 emit I/J/K arc-center offsets relative to the segment start.
 std::string toGCode(const Toolpath& path);
+
+// Emit ONE runnable program for a whole set of toolpaths: a single %/header, each
+// toolpath's blocks (with a (TOOLCHANGE ...) comment when the tool changes), then
+// a SINGLE program-end (M30 %).  Unlike concatenating toGCode() per path, this
+// does NOT emit an M30 between features (which would halt the machine at the
+// first one).  `ok`/`collisionCount` annotate the header with any verify warning.
+std::string toGCodeProgram(const std::vector<Toolpath>& paths,
+                           bool ok = true, int collisionCount = 0);
 
 }  // namespace koocadcam::cam
