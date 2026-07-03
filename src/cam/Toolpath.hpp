@@ -125,6 +125,12 @@ Toolpath radialBoxPocketToolpath(const skill::FeatureSignature& sig);
 // projected onto the pattern's LOCAL (u, v) plane about the frame origin.
 Toolpath radialHolePatternToolpath(const skill::FeatureSignature& sig);
 
+// A radial (non-Z) round side pocket: an inward circular finishing contour in the
+// feature's LOCAL (u, v) plane at each depth level (the circular analogue of the
+// radial box pocket).  counterbore/countersink/ream handle their radial case
+// inside their own generators via a shared coaxial-plunge-in-local-frame helper.
+Toolpath radialCircularPocketToolpath(const skill::FeatureSignature& sig);
+
 // Build a toolpath for a single mill_circular_pocket feature.
 //
 // Structure:

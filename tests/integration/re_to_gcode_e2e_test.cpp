@@ -383,12 +383,11 @@ TEST(ReToGCodeE2E, ReamProducesSingleFinishingPlunge)
         << "ream entry must be the true bore top (20), not the axis-base artefact (20.05)";
 }
 
-// A RADIAL counterbore (a side-face screw seat, axis along +X) must yield an
-// empty toolpath — the same 3-axis-Z limitation as the radial pocket/bore.
-TEST(ReToGCodeE2E, RadialCounterboreYieldsEmptyToolpath)
+// A RADIAL counterbore (a side-face screw seat, axis along +X) is now machined in
+// its own local work-plane frame: two coaxial plunges (pilot + seat) at local
+// (0,0,depth), flagged radial — NOT the empty fallback.
+TEST(ReToGCodeE2E, RadialCounterboreMachinedInLocalFrame)
 {
-    // Hand-build a counterbore signature with a +X (radial) axis and route it
-    // through the dispatcher directly — the axis guard must refuse it.
     skill::FeatureSignature sig;
     sig.skill_id = "counterbore";
     sig.params = {
@@ -399,8 +398,41 @@ TEST(ReToGCodeE2E, RadialCounterboreYieldsEmptyToolpath)
     };
     const auto tps = cam::generateAllToolpaths({ sig });
     ASSERT_EQ(tps.size(), 1u);
-    EXPECT_EQ(tps[0].segments.size(), 0u)
-        << "a radial counterbore is not machinable on the 3-axis-Z post";
+    const cam::Toolpath& tp = tps[0];
+    // Two coaxial plunges → 2 × (rapid/rapid/plunge/rapid) = 8 segments.
+    EXPECT_EQ(tp.segments.size(), 8u) << "pilot + seat coaxial plunges in the local frame";
+    EXPECT_TRUE(tp.is_radial()) << "flagged radial";
+    EXPECT_NEAR(std::abs(tp.work_depth_axis.X()), 1.0, 1e-6) << "depth axis ±X (radial)";
+    // Local depths: a plunge reaches +12 (pilot) and another +4 (seat).
+    bool pilot = false, seat = false;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            if (std::abs(s.end_point.Z() - 12.0) < 1e-6) pilot = true;
+            if (std::abs(s.end_point.Z() -  4.0) < 1e-6) seat  = true;
+        }
+    EXPECT_TRUE(pilot && seat) << "local-frame plunges reach pilot(12) and seat(4) depths";
+}
+
+// A RADIAL mill_circular_pocket (a round side recess, axis +X) is machined as an
+// inward circular contour in its local frame (ArcCCW rings), NOT empty.
+TEST(ReToGCodeE2E, RadialCircularPocketMachinedInLocalFrame)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "mill_circular_pocket";
+    sig.params = {
+        { "position_x_mm", 40.0 }, { "position_y_mm", 30.0 }, { "position_z_mm", 15.0 },
+        { "axis_dir", { -1.0, 0.0, 0.0 } },          // into the +X side face
+        { "diameter_mm", 12.0 }, { "depth_mm", 4.0 },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+    EXPECT_TRUE(tp.is_radial()) << "flagged radial";
+    int arcs = 0;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::ArcCCW) ++arcs;
+    EXPECT_GT(arcs, 0) << "an inward circular contour (ArcCCW rings) in the local frame";
+    EXPECT_EQ(arcs % 4, 0) << "each ring is four ArcCCW quarter-turns";
 }
 
 // A bore_with_shelf (a stepped counterbore-class bore) must plunge to the shelf

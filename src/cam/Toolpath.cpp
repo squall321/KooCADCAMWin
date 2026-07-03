@@ -236,6 +236,34 @@ void buildInPlaneBasis(const gp_Dir& depthAxis, const gp_Vec& preferU,
     v_out = gp_Dir(dv.Crossed(u));     // right-handed
 }
 
+// Emit N coaxial plunges in a feature's LOCAL work-plane frame: build (u, v)
+// from the depth axis, record the frame on `tp`, then for each depth d plunge
+// from above the surface (negative local depth) down to +d (into the material),
+// u = v = 0 (a point plunge on the axis).  Shared by the radial drill / bore /
+// counterbore / countersink / ream generators — a radial hole family feature is
+// just one or more coaxial axial plunges in its own frame.
+void emitCoaxialPlungesInLocalFrame(Toolpath& tp, const gp_Pnt& origin,
+                                    const gp_Dir& depthAxis,
+                                    const std::vector<double>& depths, double feed)
+{
+    gp_Dir u, v;
+    buildInPlaneBasis(depthAxis, gp_Vec(0, 0, 0), u, v);
+    tp.work_origin     = origin;
+    tp.work_u_axis     = u;
+    tp.work_v_axis     = v;
+    tp.work_depth_axis = depthAxis;
+
+    const double safeLocal = -kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    for (double d : depths) {
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(0.0, 0.0, safeLocal),               0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(0.0, 0.0, -kApproachClearance_mm),  0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(0.0, 0.0, d),                       feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(0.0, 0.0, safeLocal),               0.0,  0, 0, 0 });
+    }
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+}
+
 }  // namespace
 
 // ── drill_hole toolpath ──────────────────────────────────────────────────
@@ -410,6 +438,63 @@ Toolpath radialBoxPocketToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── radial mill_circular_pocket toolpath (local-frame) ────────────────────
+// A round side pocket / side recess whose axis is NOT ±Z.  Emits an inward
+// circular finishing contour (radius = diameter/2 - toolR) in the feature's LOCAL
+// (u, v) plane at each descending depth level — the circular analogue of
+// radialBoxPocketToolpath's rectangle.  origin = the world entry, depth = axis_dir.
+Toolpath radialCircularPocketToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double px    = sig.params.value("position_x_mm", 0.0);
+    const double py    = sig.params.value("position_y_mm", 0.0);
+    const double pz    = sig.params.value("position_z_mm", 0.0);
+    const double diam  = sig.params.value("diameter_mm", 10.0);
+    const double depth = sig.params.value("depth_mm", 1.0);
+    const double toolD = (sig.tooling.tool_dia_mm > 0.0 && sig.tooling.tool_dia_mm < diam)
+                       ? sig.tooling.tool_dia_mm : diam * 0.5;
+    const double toolR = toolD * 0.5;
+    const double feed  = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                sig.tooling.feed_per_tooth_mm);
+
+    const gp_Dir depthAxis = cutAxisDir(sig.params);
+    gp_Dir u, v;
+    buildInPlaneBasis(depthAxis, gp_Vec(0, 0, 0), u, v);
+    tp.work_origin     = gp_Pnt(px, py, pz);
+    tp.work_u_axis     = u;
+    tp.work_v_axis     = v;
+    tp.work_depth_axis = depthAxis;
+
+    const double r = std::max(0.1, diam / 2.0 - toolR);   // inward finishing radius
+    const double safeLocal = -kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid, gp_Pnt(r, 0.0, safeLocal), 0.0, 0, 0, 0 });
+    // roughingLevels(0, depth, toolD) → 0 - d = -d; the local cut depth is +d.
+    const double quarter[4][2] = { {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}, {1.0, 0.0} };
+    for (double dLevel : roughingLevels(0.0, depth, toolD)) {
+        const double z = -dLevel;   // +depth into the material
+        tp.segments.push_back({ M::Linear, gp_Pnt(r, 0.0, z), feed, 0, 0, 0 }); // plunge/step to this level
+        gp_Pnt cur(r, 0.0, z);
+        for (int q = 0; q < 4; ++q) {
+            const double nu = r * quarter[q][0];
+            const double nv = r * quarter[q][1];
+            const double ic = 0.0 - cur.X();   // centre (local origin) - start
+            const double jc = 0.0 - cur.Y();
+            tp.segments.push_back({ M::ArcCCW, gp_Pnt(nu, nv, z), feed, ic, jc, 0.0 });
+            cur = gp_Pnt(nu, nv, z);
+        }
+    }
+    tp.segments.push_back({ M::Rapid, gp_Pnt(r, 0.0, safeLocal), 0.0, 0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── radial hole-pattern toolpath (local-frame) ────────────────────────────
 // A side grille / side bolt-circle whose axis is NOT ±Z.  Emits a per-hole plunge
 // like holePatternToolpath, but in the pattern's LOCAL (u, v, depth) frame: each
@@ -484,6 +569,11 @@ Toolpath millCircularPocketToolpath(const skill::FeatureSignature& sig)
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
     tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
     tp.coolant_pressure = 0.0;
+
+    // A radial (side-face) circular pocket = an inward circular contour in the
+    // feature's local work-plane frame (the circular analogue of the side box
+    // pocket).  Route it before the +Z helix/spiral body.
+    if (!cutAxisIsZ(sig.params)) return radialCircularPocketToolpath(sig);
 
     const double x       = sig.params.value("position_x_mm", 0.0);
     const double y       = sig.params.value("position_y_mm", 0.0);
@@ -779,6 +869,14 @@ Toolpath counterboreToolpath(const skill::FeatureSignature& sig)
     const double feed      = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
                                                     sig.tooling.feed_per_tooth_mm);
 
+    // A radial (side-face) counterbore = the same pilot + seat coaxial plunges,
+    // emitted in the feature's own local work-plane frame.
+    if (!cutAxisIsZ(sig.params)) {
+        emitCoaxialPlungesInLocalFrame(tp, gp_Pnt(x, y, zTop), cutAxisDir(sig.params),
+                                       { pilotDep, seatDep }, feed);
+        return tp;
+    }
+
     const double safe_z = zTop + kSafeZAboveStock_mm;
     using M = PathSegment::Move;
     // Seat first (the wide, shallow spot-face that a counterbore tool cuts),
@@ -820,6 +918,14 @@ Toolpath countersinkToolpath(const skill::FeatureSignature& sig)
     const double coneDep  = sig.params.value("cone_depth_mm", 0.0);
     const double feed     = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
                                                    sig.tooling.feed_per_tooth_mm);
+
+    // A radial (side-face) countersink = pilot + chamfer coaxial plunges in the
+    // feature's local work-plane frame.
+    if (!cutAxisIsZ(sig.params)) {
+        emitCoaxialPlungesInLocalFrame(tp, gp_Pnt(x, y, zTop), cutAxisDir(sig.params),
+                                       { pilotDep, coneDep }, feed);
+        return tp;
+    }
 
     const double safe_z = zTop + kSafeZAboveStock_mm;
     using M = PathSegment::Move;
@@ -870,6 +976,14 @@ Toolpath reamToolpath(const skill::FeatureSignature& sig)
     const double extent = sig.params.value("extent_mm", 0.0);
     const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
                                                  sig.tooling.feed_per_tooth_mm);
+
+    // A radial (side-face) ream = a single finishing plunge along the bore axis in
+    // the feature's local work-plane frame.
+    if (!cutAxisIsZ(sig.params)) {
+        emitCoaxialPlungesInLocalFrame(tp, gp_Pnt(x, y, zTop), cutAxisDir(sig.params),
+                                       { extent }, feed);
+        return tp;
+    }
 
     const double safe_z = zTop + kSafeZAboveStock_mm;
     using M = PathSegment::Move;
@@ -1119,10 +1233,14 @@ std::vector<Toolpath> generateAllToolpaths(
         static const std::set<std::string> kRadialContour = {
             "linear_pattern", "circular_pattern",
         };
+        // counterbore/countersink/ream and mill_circular_pocket now handle their
+        // OWN radial case internally (routing to a local-frame generator), like
+        // box_pocket — so they are NOT in this deferred set.  What remains here
+        // genuinely has no radial generator yet (a side spot-face / rect-pocket /
+        // slot contour, a stepped/tapered side bore, an additive side boss).
         static const std::set<std::string> kZAxisGuarded = {
             "spot_face",
-            "mill_circular_pocket", "mill_rect_pocket", "mill_slot",
-            "counterbore", "countersink", "ream",
+            "mill_rect_pocket", "mill_slot",
             "bore_with_shelf", "multi_step_bore",
             "box_boss", "dome_boss",
         };
