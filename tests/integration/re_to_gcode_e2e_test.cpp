@@ -147,10 +147,10 @@ TEST(ReToGCodeE2E, DeepBoxPocketRoughsInMultiplePasses)
     EXPECT_NEAR(deepest, 18.0, 1e-6) << "the final pass reaches the true pocket floor";
 }
 
-// A RADIAL box_pocket (a side button, face_normal = +X) is NOT machinable on the
-// 3-axis-Z post — it must yield an EMPTY toolpath (a loud deferral), NOT a
-// plausible-but-wrong vertical plunge.
-TEST(ReToGCodeE2E, RadialBoxPocketYieldsEmptyToolpath)
+// A RADIAL box_pocket (a side button, face_normal = +X) is now machined in its
+// OWN local work-plane frame: a non-empty rectangular contour flagged radial,
+// with the local depth axis = -face_normal, NOT the empty fallback.
+TEST(ReToGCodeE2E, RadialBoxPocketMachinedInLocalFrame)
 {
     auto stock = skill::createCuboidStock(40.0, 60.0, 30.0);
     skill::box_pocket::Input in;
@@ -162,9 +162,22 @@ TEST(ReToGCodeE2E, RadialBoxPocketYieldsEmptyToolpath)
     const cam::Toolpath* bp = nullptr;
     for (const auto& t : tps) if (t.feature_skill_id == "box_pocket") { bp = &t; break; }
     ASSERT_NE(bp, nullptr);
-    EXPECT_EQ(bp->segments.size(), 0u)
-        << "a radial (side-face) box_pocket must NOT be machined on the 3-axis-Z "
-           "post — it must be an empty toolpath, not a wrong vertical plunge";
+    EXPECT_GT(bp->segments.size(), 2u)
+        << "a radial box_pocket is machined in its local frame (a real contour), not empty";
+    EXPECT_TRUE(bp->is_radial()) << "the toolpath is flagged radial";
+    // depth axis = -face_normal = -X (into the +X side face).
+    EXPECT_NEAR(bp->work_depth_axis.X(), -1.0, 1e-6) << "local depth axis is -X (into the side)";
+    // Segment coords are LOCAL: the contour lies in the (u,v) plane at local depth
+    // (Z_local > 0 into the material); the rectangle straddles the origin in u,v.
+    bool hasPosU = false, hasNegU = false;
+    for (const auto& s : bp->segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            if (s.end_point.X() > 0.1)  hasPosU = true;
+            if (s.end_point.X() < -0.1) hasNegU = true;
+        }
+    EXPECT_TRUE(hasPosU && hasNegU) << "the local contour straddles the pocket centre in u";
+    // The G-code flags the radial setup.
+    EXPECT_NE(cam::toGCode(*bp).find("SETUP: RADIAL"), std::string::npos);
 }
 
 // A RADIAL bore_cylindrical (a crown side stem, axis -X) built through the real
@@ -234,9 +247,9 @@ TEST(ReToGCodeE2E, BoltCirclePatternDrillsEveryHole)
     EXPECT_EQ(cp->segments.size(), 18u) << "one plunge per hole (6 holes x 3 segments)";
 }
 
-// A RADIAL side grille (a linear_pattern about ±X) must yield an empty toolpath —
-// the same 3-axis-Z limitation as the radial pocket/bore.
-TEST(ReToGCodeE2E, RadialGrillePatternYieldsEmptyToolpath)
+// A RADIAL side grille (a linear_pattern about ±X) is now machined in its local
+// work-plane frame: a per-hole plunge for every hole (NOT the empty fallback).
+TEST(ReToGCodeE2E, RadialGrillePatternMachinedInLocalFrame)
 {
     auto stock = skill::createCuboidStock(40.0, 60.0, 30.0);
     skill::linear_pattern::Input build;
@@ -251,8 +264,46 @@ TEST(ReToGCodeE2E, RadialGrillePatternYieldsEmptyToolpath)
     const cam::Toolpath* lp = nullptr;
     for (const auto& t : tps) if (t.feature_skill_id == "linear_pattern") { lp = &t; break; }
     ASSERT_NE(lp, nullptr);
-    EXPECT_EQ(lp->segments.size(), 0u)
-        << "a radial side grille is not machinable on the 3-axis-Z post";
+    // 4 holes x 3 segments (rapid/plunge/retract) = 12, in the local frame.
+    EXPECT_EQ(lp->segments.size(), 12u) << "one plunge per hole (4 holes), local frame";
+    EXPECT_TRUE(lp->is_radial()) << "the toolpath is flagged radial";
+    // The 4 holes are spread along the local u-axis (distinct u offsets).
+    std::set<long> uOffsets;
+    for (const auto& s : lp->segments)
+        if (s.move == cam::PathSegment::Move::Linear)
+            uOffsets.insert(std::lround(s.end_point.X() * 100.0));
+    EXPECT_GE(uOffsets.size(), 4u) << "4 holes at 4 distinct local-u positions";
+}
+
+// A RECOVERED-style radial grille signature (world_n* + face_normal + 3-D
+// hole_centers, NO axis_dir — the shape linear_pattern::recognize emits for a
+// foreign side grille) must be DETECTED as radial by the CAM axis guard and
+// machined in the local frame.  Without the face_normal key, cutAxisIsZ (which
+// only inspects axis_dir/face_normal/axis_dir_xyz, not world_n*) would miss the
+// radial axis and route it to the wrong +Z generator.
+TEST(ReToGCodeE2E, RecoveredRadialGrilleDetectedAsRadial)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "linear_pattern";
+    // Four holes along +Y on the +X side face at world X=40 (a recovered grille).
+    sig.params = {
+        { "use_world",   true },
+        { "world_nx",    1.0 }, { "world_ny", 0.0 }, { "world_nz", 0.0 },
+        { "face_normal", { 1.0, 0.0, 0.0 } },   // the fix: recognize now emits this
+        { "hole_dia_mm", 3.0 }, { "hole_depth_mm", 6.0 },
+        { "hole_centers", {
+            { 40.0, 20.0, 15.0 },
+            { 40.0, 28.0, 15.0 },
+            { 40.0, 36.0, 15.0 },
+            { 40.0, 44.0, 15.0 } } },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    // Detected radial → local-frame per-hole plunges (4 holes × 3 = 12), NOT empty
+    // and NOT a +Z generator (which would ignore the side face).
+    EXPECT_TRUE(tps[0].is_radial()) << "recovered radial grille must be flagged radial";
+    EXPECT_EQ(tps[0].segments.size(), 12u) << "4 holes machined in the local frame";
+    EXPECT_NEAR(std::abs(tps[0].work_depth_axis.X()), 1.0, 1e-6) << "depth axis is ±X (into the side)";
 }
 
 // A counterbore (socket-head-cap-screw seat) must produce a TWO-plunge toolpath

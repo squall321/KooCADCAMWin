@@ -130,6 +130,9 @@ SkillOutput apply(const Workpiece& wp, const Input& in)
         { "width_mm",      in.width_mm },
         { "depth_mm",      in.depth_mm },
         { "face_normal",   { normal.X(), normal.Y(), normal.Z() } },
+        // In-plane LENGTH direction (vx) — the local u-axis a RADIAL CAM contour
+        // orients the rectangle along.  (recognize already emits this.)
+        { "face_xaxis",    { vx.X(), vx.Y(), vx.Z() } },
     };
     json pattern = {
         { "kind",               kSkillId },

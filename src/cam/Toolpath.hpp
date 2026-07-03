@@ -113,6 +113,18 @@ Toolpath drillHoleToolpath(const skill::FeatureSignature& sig);
 // to world (is_radial() == true).  A post / re-setup applies it.
 Toolpath radialDrillToolpath(const skill::FeatureSignature& sig);
 
+// A radial (non-Z) side box_pocket (a side button): the inward-offset rectangular
+// finishing contour of the +Z box_pocket, emitted in the feature's LOCAL
+// (u, v, depth) frame (origin = world mouth centre, u = face_xaxis length dir,
+// v = normal × u, depth = -face_normal).  is_radial() == true; the work_* frame
+// is recorded for a re-setup / post.
+Toolpath radialBoxPocketToolpath(const skill::FeatureSignature& sig);
+
+// A radial (non-Z) hole pattern (a side grille / side bolt circle): a per-hole
+// plunge like holePatternToolpath, but with each recovered world hole centre
+// projected onto the pattern's LOCAL (u, v) plane about the frame origin.
+Toolpath radialHolePatternToolpath(const skill::FeatureSignature& sig);
+
 // Build a toolpath for a single mill_circular_pocket feature.
 //
 // Structure:

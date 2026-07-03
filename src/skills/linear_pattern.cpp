@@ -452,6 +452,10 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "world_oy_mm",   o.Y() },
             { "world_oz_mm",   o.Z() },
             { "hole_centers",  centers },     // 3-D world centres for subsumption
+            // Also emit the outward normal as face_normal so the CAM axis guard
+            // (cutAxisIsZ) DETECTS a recovered RADIAL grille and routes it to the
+            // local-frame generator — world_n* alone is invisible to that guard.
+            { "face_normal",   { normal.X(), normal.Y(), normal.Z() } },
         };
         bestMatched = {
             { "cyl_count",      static_cast<int>(pts.size()) },

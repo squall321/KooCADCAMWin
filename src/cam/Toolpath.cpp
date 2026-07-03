@@ -208,6 +208,34 @@ gp_Dir cutAxisDir(const nlohmann::json& params)
     return gp_Dir(0.0, 0.0, -1.0);
 }
 
+// Read a 3-vector param (e.g. face_normal, face_xaxis) as a gp_Vec, or a zero
+// vector when the key is missing/degenerate (caller falls back).
+gp_Vec readVec3(const nlohmann::json& params, const char* key)
+{
+    if (params.contains(key) && params[key].is_array() && params[key].size() == 3) {
+        const auto& a = params[key];
+        return gp_Vec(a[0].get<double>(), a[1].get<double>(), a[2].get<double>());
+    }
+    return gp_Vec(0.0, 0.0, 0.0);
+}
+
+// Build an orthonormal in-plane basis (u, v) perpendicular to `depthAxis`.  When
+// `preferU` is non-degenerate and not parallel to the axis it seeds u (so a
+// pocket's length direction lands on u); otherwise DX (or DY) is projected off
+// the axis.  Returns a right-handed (u, v, depthAxis) frame.
+void buildInPlaneBasis(const gp_Dir& depthAxis, const gp_Vec& preferU,
+                       gp_Dir& u_out, gp_Dir& v_out)
+{
+    const gp_Vec dv(depthAxis);
+    gp_Vec u = preferU;
+    if (u.Magnitude() < 1e-9 || std::abs(dv.Dot(gp_Vec(u.Normalized()))) > 0.999)
+        u = (std::abs(dv.Dot(gp_Vec(gp::DX()))) > 0.99) ? gp_Vec(gp::DY()) : gp_Vec(gp::DX());
+    u = u - dv * dv.Dot(u);            // project into the plane ⊥ depthAxis
+    u.Normalize();
+    u_out = gp_Dir(u);
+    v_out = gp_Dir(dv.Crossed(u));     // right-handed
+}
+
 }  // namespace
 
 // ── drill_hole toolpath ──────────────────────────────────────────────────
@@ -318,6 +346,129 @@ Toolpath radialDrillToolpath(const skill::FeatureSignature& sig)
     tp.segments.push_back({ M::Linear, gp_Pnt(0.0, 0.0, localCut),                feed, 0, 0, 0 });
     tp.segments.push_back({ M::Rapid,  gp_Pnt(0.0, 0.0, safeLocal),               0.0,  0, 0, 0 });
 
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── radial box_pocket toolpath (local-frame) ──────────────────────────────
+// A side button / side recess whose face_normal is NOT ±Z.  Emits the same
+// inward-offset rectangular finishing contour as the +Z box_pocket, but in the
+// feature's LOCAL (u, v, depth) frame: origin = the world mouth centre, u = the
+// in-plane length axis (face_xaxis), v = normal × u, depth = -face_normal (into
+// the material).  The Toolpath records the frame for a re-setup / post.
+Toolpath radialBoxPocketToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double ox    = sig.params.value("center_x_world_mm", 0.0);
+    const double oy    = sig.params.value("center_y_world_mm", 0.0);
+    const double oz    = sig.params.value("center_z_world_mm", 0.0);
+    const double L     = sig.params.value("length_mm", 10.0);
+    const double W     = sig.params.value("width_mm", 10.0);
+    const double depth = sig.params.value("depth_mm", 1.0);
+    const double toolD = (sig.tooling.tool_dia_mm > 0.0)
+                       ? sig.tooling.tool_dia_mm : std::min(L, W) * 0.4;
+    const double toolR = toolD * 0.5;
+    const double feed  = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                sig.tooling.feed_per_tooth_mm);
+
+    // depth axis = -face_normal (the outward normal points OUT of the face; the
+    // recess sinks in).  u = the in-plane length axis; v completes the frame.
+    const gp_Vec normal = readVec3(sig.params, "face_normal");
+    const gp_Dir depthAxis = (normal.Magnitude() > 1e-9)
+                           ? gp_Dir(-normal.X(), -normal.Y(), -normal.Z())
+                           : cutAxisDir(sig.params);
+    gp_Dir u, v;
+    buildInPlaneBasis(depthAxis, readVec3(sig.params, "face_xaxis"), u, v);
+
+    tp.work_origin     = gp_Pnt(ox, oy, oz);
+    tp.work_u_axis     = u;
+    tp.work_v_axis     = v;
+    tp.work_depth_axis = depthAxis;
+
+    // Inward-offset rectangle in LOCAL (u, v), at each descending depth level.
+    const double hu = std::max(0.1, L / 2.0 - toolR);
+    const double hv = std::max(0.1, W / 2.0 - toolR);
+    const double safeLocal = -kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid, gp_Pnt(-hu, -hv, safeLocal), 0.0, 0, 0, 0 });
+    for (double dLevel : roughingLevels(0.0, depth, toolD)) {
+        const double z = -dLevel;   // roughingLevels returns work_z_top - d = -d here (work_z_top=0)
+        tp.segments.push_back({ M::Linear, gp_Pnt(-hu, -hv, z), feed, 0, 0, 0 }); // plunge/step
+        tp.segments.push_back({ M::Linear, gp_Pnt( hu, -hv, z), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt( hu,  hv, z), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(-hu,  hv, z), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(-hu, -hv, z), feed, 0, 0, 0 }); // close
+    }
+    tp.segments.push_back({ M::Rapid, gp_Pnt(-hu, -hv, safeLocal), 0.0, 0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── radial hole-pattern toolpath (local-frame) ────────────────────────────
+// A side grille / side bolt-circle whose axis is NOT ±Z.  Emits a per-hole plunge
+// like holePatternToolpath, but in the pattern's LOCAL (u, v, depth) frame: each
+// recovered world hole centre is projected onto (u, v) about the frame origin
+// (the first hole centre), and plunged along +depth.
+Toolpath radialHolePatternToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double depth = sig.params.value("hole_depth_mm", 0.0);
+    const double feed  = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                sig.tooling.feed_per_tooth_mm);
+
+    if (!sig.params.contains("hole_centers") || !sig.params["hole_centers"].is_array()
+        || sig.params["hole_centers"].empty()) {
+        spdlog::warn("cam: radial '{}' has no hole_centers — emitting empty toolpath",
+                     sig.skill_id);
+        return tp;
+    }
+
+    // depth axis = the cut axis (into the material); for a pattern face_normal is
+    // the outward face dir, so prefer axis_dir/axis_dir_xyz, else -face_normal.
+    gp_Dir depthAxis = cutAxisDir(sig.params);
+    if (!sig.params.contains("axis_dir") && !sig.params.contains("axis_dir_xyz")) {
+        const gp_Vec n = readVec3(sig.params, "face_normal");
+        if (n.Magnitude() > 1e-9) depthAxis = gp_Dir(-n.X(), -n.Y(), -n.Z());
+    }
+    gp_Dir u, v;
+    buildInPlaneBasis(depthAxis, gp_Vec(0, 0, 0), u, v);
+
+    // Origin = the first hole centre; project every hole onto (u, v) about it.
+    const auto& centers = sig.params["hole_centers"];
+    const auto& c0 = centers[0];
+    const gp_Pnt origin(c0[0].get<double>(), c0[1].get<double>(),
+                        (c0.size() >= 3) ? c0[2].get<double>() : 0.0);
+    tp.work_origin     = origin;
+    tp.work_u_axis     = u;
+    tp.work_v_axis     = v;
+    tp.work_depth_axis = depthAxis;
+
+    const gp_Vec uv(u), vv(v);
+    const double safeLocal = -kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    for (const auto& hc : centers) {
+        if (!hc.is_array() || hc.size() < 2) continue;
+        const gp_Pnt hp(hc[0].get<double>(), hc[1].get<double>(),
+                        (hc.size() >= 3) ? hc[2].get<double>() : 0.0);
+        const gp_Vec rel(origin, hp);
+        const double uOff = rel.Dot(uv);
+        const double vOff = rel.Dot(vv);
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(uOff, vOff, safeLocal), 0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(uOff, vOff, depth),     feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(uOff, vOff, safeLocal), 0.0,  0, 0, 0 });
+    }
     tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
     return tp;
 }
@@ -518,11 +669,11 @@ Toolpath millSlotToolpath(const skill::FeatureSignature& sig)
 
 // ── box_pocket toolpath ───────────────────────────────────────────────────
 // A sharp-corner rect recess.  On a +Z (top-face) box_pocket this is the same
-// perimeter-contour path as mill_rect_pocket.  A radial (±X/±Y) box_pocket is
-// not machinable on the 3-axis-Z post → empty toolpath + warning.
+// perimeter-contour path as mill_rect_pocket.  A radial (±X/±Y) box_pocket (a
+// side button) is machined in its own LOCAL work-plane frame (radialBoxPocket).
 Toolpath boxPocketToolpath(const skill::FeatureSignature& sig)
 {
-    if (!cutAxisIsZ(sig.params)) return emptyRadialToolpath(sig);
+    if (!cutAxisIsZ(sig.params)) return radialBoxPocketToolpath(sig);
 
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
@@ -962,10 +1113,15 @@ std::vector<Toolpath> generateAllToolpaths(
             "drill_hole", "drill_through_hole", "spot_drill",
             "bore_cylindrical", "micro_drill", "gun_drill",
         };
+        // Radial patterns (side grille / side bolt circle) → per-hole plunges in
+        // the pattern's local work-plane frame.  (box_pocket routes its own radial
+        // case inside boxPocketToolpath → radialBoxPocketToolpath.)
+        static const std::set<std::string> kRadialContour = {
+            "linear_pattern", "circular_pattern",
+        };
         static const std::set<std::string> kZAxisGuarded = {
             "spot_face",
             "mill_circular_pocket", "mill_rect_pocket", "mill_slot",
-            "linear_pattern", "circular_pattern",
             "counterbore", "countersink", "ream",
             "bore_with_shelf", "multi_step_bore",
             "box_boss", "dome_boss",
@@ -973,6 +1129,10 @@ std::vector<Toolpath> generateAllToolpaths(
         if (!cutAxisIsZ(sig.params)) {
             if (kRadialDrillable.count(sig.skill_id)) {
                 out.push_back(radialDrillToolpath(sig));
+                continue;
+            }
+            if (kRadialContour.count(sig.skill_id)) {
+                out.push_back(radialHolePatternToolpath(sig));
                 continue;
             }
             if (kZAxisGuarded.count(sig.skill_id)) {
