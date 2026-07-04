@@ -131,6 +131,11 @@ Toolpath radialHolePatternToolpath(const skill::FeatureSignature& sig);
 // inside their own generators via a shared coaxial-plunge-in-local-frame helper.
 Toolpath radialCircularPocketToolpath(const skill::FeatureSignature& sig);
 
+// A radial (non-Z) side slot / side port (USB-C / SIM-tray cutout): the +Z slot
+// centreline traverse (start → end at depth) emitted in the feature's LOCAL
+// frame — origin = the world start, u = the centreline direction, depth = axis_dir.
+Toolpath radialSlotToolpath(const skill::FeatureSignature& sig);
+
 // Build a toolpath for a single mill_circular_pocket feature.
 //
 // Structure:

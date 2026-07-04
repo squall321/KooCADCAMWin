@@ -495,6 +495,55 @@ Toolpath radialCircularPocketToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── radial mill_slot toolpath (local-frame) ───────────────────────────────
+// A side slot / side port (a USB-C / SIM-tray cutout) whose cut axis is NOT ±Z.
+// The +Z millSlotToolpath is a centreline traverse (start → end at depth); the
+// radial version does the same in the feature's LOCAL frame: origin = the world
+// start point, depth = axis_dir (into the side face), u = the slot centreline
+// direction (end − start, which lies in the entry plane), v = depth × u.  The
+// centreline runs along +u at local depth, from local 0 to the slot length.
+Toolpath radialSlotToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const gp_Pnt start(sig.params.value("start_x_mm", 0.0),
+                       sig.params.value("start_y_mm", 0.0),
+                       sig.params.value("start_z_mm", 0.0));
+    const gp_Pnt end  (sig.params.value("end_x_mm", 0.0),
+                       sig.params.value("end_y_mm", 0.0),
+                       sig.params.value("end_z_mm", 0.0));
+    const double depth = sig.params.value("depth_mm", 1.0);
+    const double feed  = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                sig.tooling.feed_per_tooth_mm);
+
+    const gp_Dir depthAxis = cutAxisDir(sig.params);   // into the material
+    // Prefer the actual slot centreline (end − start) as the local u; buildInPlane
+    // projects it off the axis (it already lies in the entry plane) and normalises.
+    const gp_Vec span(start, end);
+    gp_Dir u, v;
+    buildInPlaneBasis(depthAxis, span, u, v);
+    tp.work_origin     = start;
+    tp.work_u_axis     = u;
+    tp.work_v_axis     = v;
+    tp.work_depth_axis = depthAxis;
+
+    // Slot length = the centreline span (v ≈ 0 since span ∥ u after projection).
+    const double slotLen = span.Magnitude();
+    const double safeLocal = -kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(0.0,     0.0, safeLocal), 0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(0.0,     0.0, depth),     feed, 0, 0, 0 }); // plunge
+    tp.segments.push_back({ M::Linear, gp_Pnt(slotLen, 0.0, depth),     feed, 0, 0, 0 }); // traverse
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(slotLen, 0.0, safeLocal), 0.0,  0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── radial hole-pattern toolpath (local-frame) ────────────────────────────
 // A side grille / side bolt-circle whose axis is NOT ±Z.  Emits a per-hole plunge
 // like holePatternToolpath, but in the pattern's LOCAL (u, v, depth) frame: each
@@ -729,6 +778,9 @@ Toolpath millRectPocketToolpath(const skill::FeatureSignature& sig)
 // its two end points + width, so the centreline IS the cutting path.
 Toolpath millSlotToolpath(const skill::FeatureSignature& sig)
 {
+    // A radial (side-face) slot / side port is machined in its own local frame.
+    if (!cutAxisIsZ(sig.params)) return radialSlotToolpath(sig);
+
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
     tp.tool_id          = makeToolId(sig.tooling);
@@ -1233,14 +1285,16 @@ std::vector<Toolpath> generateAllToolpaths(
         static const std::set<std::string> kRadialContour = {
             "linear_pattern", "circular_pattern",
         };
-        // counterbore/countersink/ream and mill_circular_pocket now handle their
-        // OWN radial case internally (routing to a local-frame generator), like
-        // box_pocket — so they are NOT in this deferred set.  What remains here
-        // genuinely has no radial generator yet (a side spot-face / rect-pocket /
-        // slot contour, a stepped/tapered side bore, an additive side boss).
+        // counterbore/countersink/ream, mill_circular_pocket and mill_slot now
+        // handle their OWN radial case internally (routing to a local-frame
+        // generator), like box_pocket — so they are NOT in this deferred set.
+        // What remains genuinely has no radial generator yet: a side spot-face, a
+        // side rect-pocket (mill_rect_pocket cannot even be AUTHORED radial — its
+        // apply() rejects a non-Z axis, and box_pocket already covers side
+        // rectangles), a stepped/tapered side bore, an additive side boss.
         static const std::set<std::string> kZAxisGuarded = {
             "spot_face",
-            "mill_rect_pocket", "mill_slot",
+            "mill_rect_pocket",
             "bore_with_shelf", "multi_step_bore",
             "box_boss", "dome_boss",
         };

@@ -435,6 +435,36 @@ TEST(ReToGCodeE2E, RadialCircularPocketMachinedInLocalFrame)
     EXPECT_EQ(arcs % 4, 0) << "each ring is four ArcCCW quarter-turns";
 }
 
+// A RADIAL mill_slot (a side port — USB-C / SIM-tray cutout, axis -X) is machined
+// as a centreline traverse in its own local frame, NOT the empty fallback.
+TEST(ReToGCodeE2E, RadialSlotMachinedInLocalFrame)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "mill_slot";
+    // A slot on the +X side face, centreline along +Y from (40,20,15) to (40,32,15).
+    sig.params = {
+        { "start_x_mm", 40.0 }, { "start_y_mm", 20.0 }, { "start_z_mm", 15.0 },
+        { "end_x_mm",   40.0 }, { "end_y_mm",   32.0 }, { "end_z_mm",   15.0 },
+        { "axis_dir", { -1.0, 0.0, 0.0 } },   // -X into the side face
+        { "width_mm", 3.0 }, { "depth_mm", 5.0 },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+    EXPECT_EQ(tp.segments.size(), 4u) << "rapid/plunge/traverse/retract centreline, local frame";
+    EXPECT_TRUE(tp.is_radial()) << "flagged radial";
+    EXPECT_NEAR(std::abs(tp.work_depth_axis.X()), 1.0, 1e-6) << "depth axis ±X (into the side)";
+    // The traverse runs the slot length (12 mm) along local +u at local depth 5.
+    bool traversedLen = false, atDepth = false;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            if (std::abs(s.end_point.X() - 12.0) < 1e-6) traversedLen = true;  // local u = slot length
+            if (std::abs(s.end_point.Z() -  5.0) < 1e-6) atDepth = true;       // local depth
+        }
+    EXPECT_TRUE(traversedLen) << "the centreline traverses the 12mm slot length in local u";
+    EXPECT_TRUE(atDepth) << "cut at local depth 5";
+}
+
 // A bore_with_shelf (a stepped counterbore-class bore) must plunge to the shelf
 // (upper_depth) and then to the full depth (upper + lower, since lower_depth is
 // measured from the shelf).
