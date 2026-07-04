@@ -1070,6 +1070,14 @@ Toolpath boreWithShelfToolpath(const skill::FeatureSignature& sig)
     const double feed     = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
                                                    sig.tooling.feed_per_tooth_mm);
 
+    // A radial (side-face) stepped bore = the upper + full-depth coaxial plunges
+    // emitted in the feature's own local work-plane frame.
+    if (!cutAxisIsZ(sig.params)) {
+        emitCoaxialPlungesInLocalFrame(tp, gp_Pnt(x, y, zTop), cutAxisDir(sig.params),
+                                       { upDep, upDep + loDep }, feed);
+        return tp;
+    }
+
     const double safe_z = zTop + kSafeZAboveStock_mm;
     using M = PathSegment::Move;
     // [upper] plunge to the shelf (upper_depth below entry).
@@ -1109,6 +1117,17 @@ Toolpath multiStepBoreToolpath(const skill::FeatureSignature& sig)
         spdlog::warn("cam: '{}' has no steps — emitting empty toolpath", sig.skill_id);
         return tp;
     }
+
+    // A radial (side-face) multi-step bore = one coaxial plunge per step at the
+    // CUMULATIVE depth, emitted in the feature's own local work-plane frame.
+    if (!cutAxisIsZ(sig.params)) {
+        std::vector<double> depths;
+        double cum = 0.0;
+        for (const auto& s : sig.params["steps"]) { cum += s.value("depth_mm", 0.0); depths.push_back(cum); }
+        emitCoaxialPlungesInLocalFrame(tp, gp_Pnt(x, y, zTop), cutAxisDir(sig.params), depths, feed);
+        return tp;
+    }
+
     using M = PathSegment::Move;
     double cumulative = 0.0;
     for (const auto& s : sig.params["steps"]) {
@@ -1285,17 +1304,17 @@ std::vector<Toolpath> generateAllToolpaths(
         static const std::set<std::string> kRadialContour = {
             "linear_pattern", "circular_pattern",
         };
-        // counterbore/countersink/ream, mill_circular_pocket and mill_slot now
+        // The hole/bore/pocket/slot family (counterbore/countersink/ream,
+        // mill_circular_pocket, mill_slot, bore_with_shelf, multi_step_bore) now
         // handle their OWN radial case internally (routing to a local-frame
         // generator), like box_pocket — so they are NOT in this deferred set.
-        // What remains genuinely has no radial generator yet: a side spot-face, a
-        // side rect-pocket (mill_rect_pocket cannot even be AUTHORED radial — its
+        // What remains genuinely has no radial generator: a side spot-face, a side
+        // rect-pocket (mill_rect_pocket cannot even be AUTHORED radial — its
         // apply() rejects a non-Z axis, and box_pocket already covers side
-        // rectangles), a stepped/tapered side bore, an additive side boss.
+        // rectangles), and an additive side boss (box_boss / dome_boss).
         static const std::set<std::string> kZAxisGuarded = {
             "spot_face",
             "mill_rect_pocket",
-            "bore_with_shelf", "multi_step_bore",
             "box_boss", "dome_boss",
         };
         if (!cutAxisIsZ(sig.params)) {

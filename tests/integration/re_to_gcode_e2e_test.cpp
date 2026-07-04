@@ -465,6 +465,63 @@ TEST(ReToGCodeE2E, RadialSlotMachinedInLocalFrame)
     EXPECT_TRUE(atDepth) << "cut at local depth 5";
 }
 
+// A RADIAL bore_with_shelf (a stepped side bore, axis -X) is machined in its own
+// local frame: two coaxial plunges (shelf then full depth) at local depth.
+TEST(ReToGCodeE2E, RadialBoreWithShelfMachinedInLocalFrame)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "bore_with_shelf";
+    sig.params = {
+        { "position_x_mm", 40.0 }, { "position_y_mm", 30.0 }, { "position_z_mm", 15.0 },
+        { "axis_dir", { -1.0, 0.0, 0.0 } },      // into the +X side face
+        { "upper_dia_mm", 8.0 }, { "upper_depth_mm", 10.0 },
+        { "lower_dia_mm", 16.0 }, { "lower_depth_mm", 8.0 },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+    EXPECT_EQ(tp.segments.size(), 8u) << "two coaxial plunges (shelf + full depth)";
+    EXPECT_TRUE(tp.is_radial());
+    EXPECT_NEAR(std::abs(tp.work_depth_axis.X()), 1.0, 1e-6) << "depth axis ±X";
+    bool shelf = false, full = false;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            if (std::abs(s.end_point.Z() - 10.0) < 1e-6) shelf = true;  // upper_depth
+            if (std::abs(s.end_point.Z() - 18.0) < 1e-6) full  = true;  // upper+lower
+        }
+    EXPECT_TRUE(shelf && full) << "local plunges reach the shelf (10) and full depth (18)";
+}
+
+// A RADIAL multi_step_bore (a stepped side bore, axis -X) is machined in its own
+// local frame: one coaxial plunge per step at the CUMULATIVE depth.
+TEST(ReToGCodeE2E, RadialMultiStepBoreMachinedInLocalFrame)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "multi_step_bore";
+    sig.params = {
+        { "position_x_mm", 40.0 }, { "position_y_mm", 30.0 }, { "position_z_mm", 15.0 },
+        { "axis_dir", { -1.0, 0.0, 0.0 } },
+        { "steps", {
+            { { "dia_mm", 20.0 }, { "depth_mm", 6.0 } },
+            { { "dia_mm", 14.0 }, { "depth_mm", 6.0 } },
+            { { "dia_mm",  9.0 }, { "depth_mm", 6.0 } } } },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+    EXPECT_EQ(tp.segments.size(), 12u) << "3 steps × 4 segments (local coaxial plunges)";
+    EXPECT_TRUE(tp.is_radial());
+    // Cumulative local depths: 6, 12, 18.
+    bool d6 = false, d12 = false, d18 = false;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            if (std::abs(s.end_point.Z() -  6.0) < 1e-6) d6  = true;
+            if (std::abs(s.end_point.Z() - 12.0) < 1e-6) d12 = true;
+            if (std::abs(s.end_point.Z() - 18.0) < 1e-6) d18 = true;
+        }
+    EXPECT_TRUE(d6 && d12 && d18) << "plunges at cumulative local depths 6/12/18";
+}
+
 // A bore_with_shelf (a stepped counterbore-class bore) must plunge to the shelf
 // (upper_depth) and then to the full depth (upper + lower, since lower_depth is
 // measured from the shelf).
