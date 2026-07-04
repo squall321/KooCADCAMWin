@@ -1197,9 +1197,11 @@ Toolpath boxBossToolpath(const skill::FeatureSignature& sig)
 // Geometry: the cap is a sphere of radius Rs = (r² + h²) / 2h whose apex is at
 // base_z + h and whose base circle (radius r) is at base_z.  At a cut height zc
 // (base_z ≤ zc ≤ base_z + h), let d = (base_z + h) − zc be the drop below the
-// apex; the surface radius is  rho(zc) = sqrt(Rs² − (Rs − d)²) = sqrt(2·Rs·d − d²).
-// (tip-contact approximation: the tool tip follows the surface radius; a true
-// ball-centre offset along the surface normal is a refinement.)
+// apex; the SURFACE radius is  rho(zc) = sqrt(Rs² − (Rs − d)²) = sqrt(2·Rs·d − d²).
+// The BALL-CENTRE path (what the toolpath drives) is offset toolR along the
+// outward surface normal = radially from the sphere centre, so it is a concentric
+// sphere of radius Rs + toolR: each surface ring is scaled by (Rs+toolR)/Rs about
+// the sphere centre.  (Driving the tool TIP along the surface would gouge by toolR.)
 Toolpath domeBossToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
@@ -1248,28 +1250,47 @@ Toolpath domeBossToolpath(const skill::FeatureSignature& sig)
     const double stepover = std::max(0.2, toolD * 0.25);
     const int    nLevels  = std::max(1, static_cast<int>(std::ceil(height / stepover)));
 
+    // BALL-NOSE offset: the cap is part of a sphere of radius Rs centred at
+    // sphereCenterZ on the axis.  The ball CENTRE (the point the toolpath drives)
+    // touches the surface at toolR along the outward surface normal, which for a
+    // sphere is radial — so the ball-centre path is a CONCENTRIC sphere of radius
+    // Rs + toolR.  Each surface ring (rho, zc) maps to the ball-centre ring by a
+    // uniform scale (Rs + toolR)/Rs about the sphere centre.  (The old tip-contact
+    // path drove the tip along the surface, leaving a toolR gouge/undercut.)
+    const double sphereCenterZ = baseZ + height - Rs;
+    const double scale         = (Rs > 1e-6) ? (Rs + toolR) / Rs : 1.0;
+
     // Rapid to the first ring start above the apex, then descend ring by ring.
-    // Level k (1..nLevels) sits at zc = apexZ - k*(height/nLevels); the surface
-    // radius grows from ~0 at the apex to baseR at the base.
+    // Level k (1..nLevels) sits at contact zc = apexZ - k*(height/nLevels); the
+    // surface radius grows from ~0 at the apex to baseR at the base.
     bool positioned = false;
     for (int k = 1; k <= nLevels; ++k) {
         const double zc  = apexZ - (height * static_cast<double>(k) / static_cast<double>(nLevels));
         const double d   = apexZ - zc;                       // drop below apex
         const double rho = std::sqrt(std::max(0.0, 2.0 * Rs * d - d * d));  // surface radius
-        const double r   = std::max(0.1, rho);
+        // Ball-centre ring: scale the surface ring outward from the sphere centre.
+        const double r  = std::max(0.1, rho * scale);
+        // For a > hemisphere (tall) dome the sub-equator rings scale to BELOW the
+        // base plane; clamp so the ball centre never drives past the base (the
+        // field-clearing skirt owns the base plane).  For the shallow domes we
+        // build (a watch crown: baseR >> height, sub-hemisphere) zb is already
+        // ≥ baseZ so the clamp is a no-op.
+        const double zb = std::max(baseZ, sphereCenterZ + (zc - sphereCenterZ) * scale);
         if (!positioned) {
             tp.segments.push_back({ M::Rapid,  gp_Pnt(cx + r, cy, safe_z), 0.0,  0, 0, 0 });
-            tp.segments.push_back({ M::Linear, gp_Pnt(cx + r, cy, zc),     feed, 0, 0, 0 });
+            tp.segments.push_back({ M::Linear, gp_Pnt(cx + r, cy, zb),     feed, 0, 0, 0 });
             positioned = true;
         } else {
             // Move (at feed) out to this ring's radius on the +X spoke, at its Z.
-            tp.segments.push_back({ M::Linear, gp_Pnt(cx + r, cy, zc), feed, 0, 0, 0 });
+            tp.segments.push_back({ M::Linear, gp_Pnt(cx + r, cy, zb), feed, 0, 0, 0 });
         }
-        emitRing(r, zc);
+        emitRing(r, zb);
     }
 
     // Final skirt contour at the base plane, offset OUTWARD by the tool radius —
-    // clears the surrounding field and defines the footprint.
+    // clears the surrounding field and defines the footprint.  This is a field-
+    // clearing pass (the tool side edge cuts down to the base), so it stays at the
+    // surface base plane, not the lifted ball-centre Z.
     const double skirtR = baseR + toolR;
     tp.segments.push_back({ M::Linear, gp_Pnt(cx + skirtR, cy, baseZ), feed, 0, 0, 0 });
     emitRing(skirtR, baseZ);

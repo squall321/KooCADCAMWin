@@ -678,10 +678,17 @@ TEST(ReToGCodeE2E, DomeBossProducesZLevelRingFinishing)
         }
     EXPECT_GT(arcs, 4) << "a 3-D finishing pass has more than one ring";
     EXPECT_EQ(arcs % 4, 0) << "each ring is four ArcCCW quarter-turns";
-    // Rings span from near the apex (Z≈20+5) down to the base plane (Z=20).
-    EXPECT_NEAR(minArcZ, 20.0, 1e-6) << "the lowest ring is at the base plane";
-    EXPECT_GT(maxArcZ, 20.0 + 2.0)   << "the highest ring climbs well up the dome";
-    EXPECT_LE(maxArcZ, 20.0 + 5.0 + 1e-6) << "no ring exceeds the apex";
+    // BALL-NOSE finishing: the ball-CENTRE path is a concentric sphere of radius
+    // Rs+toolR, so the rings lift ABOVE the surface by the tool radius.  The base
+    // skirt (field-clearing) stays at the base plane Z=20, so minArcZ = 20.  The
+    // apex ball centre climbs ABOVE the apex (Z=25) by ~toolR — the defining sign
+    // of a proper ball-nose offset vs. the old tip-contact path (which capped at
+    // the apex Z=25).  Rs=(8²+5²)/10=8.9, toolR≈1.6 → apex centre ≈ 26.6.
+    EXPECT_NEAR(minArcZ, 20.0, 1e-6) << "the base skirt stays at the base plane";
+    EXPECT_GT(maxArcZ, 25.0)
+        << "the ball CENTRE climbs ABOVE the apex (Z=25) — a true ball-nose offset";
+    EXPECT_LT(maxArcZ, 25.0 + 4.0)
+        << "the apex ball centre lifts by ~toolR, not an unbounded amount";
 }
 
 // A RADIAL box_boss (a lug on a side face, normal ±X) is not machinable on the
