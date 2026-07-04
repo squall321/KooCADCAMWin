@@ -1385,10 +1385,40 @@ std::vector<Toolpath> generateAllToolpaths(
 
 // ── G-code export ────────────────────────────────────────────────────────
 
-// Emit ONE toolpath's setup + moves (tool comment, G21/G90/G17, M3 S, optional
-// radial SETUP banner, the G0/G1/G2/G3 blocks, M5).  NO program-end (M30) and no
+// Map a LOCAL (u, v, depth) point to WORLD via the toolpath's work-plane frame:
+// world = work_origin + u·work_u + v·work_v + depth·work_depth.  (A rigid-body
+// transform R·p + t, R = [u|v|depth] columns, t = work_origin.)  Manual gp_Vec
+// composition — no gp_Trsf, and no gp_Dir::Dot(gp_Vec) normalisation footgun.
+gp_Pnt localToWorldPoint(const gp_Pnt& p, const Toolpath& tp)
+{
+    const gp_Vec off = gp_Vec(tp.work_u_axis)     * p.X()
+                     + gp_Vec(tp.work_v_axis)     * p.Y()
+                     + gp_Vec(tp.work_depth_axis) * p.Z();
+    return gp_Pnt(tp.work_origin.X() + off.X(),
+                  tp.work_origin.Y() + off.Y(),
+                  tp.work_origin.Z() + off.Z());
+}
+
+// One segment's world end point + a coarse linearisation of a radial ARC into
+// straight world segments.  A radial (tilted-plane) arc is NOT expressible as a
+// single G2/G3 with I/J on a 3-axis controller (the arc plane is the work plane,
+// not G17/G18/G19), so we linearise it into short chords in WORLD coordinates —
+// always correct and dialect-agnostic.  Returns the list of world points to emit
+// as G1 moves (for a radial arc) or a single world point (Rapid/Linear or a +Z
+// path where the arc is emitted natively as G2/G3 elsewhere).
+constexpr int kArcLinearizeSteps = 8;   // chords per quarter-turn arc segment
+
+// One toolpath's setup + moves (tool comment, G21/G90/G17, M3 S, optional radial
+// SETUP banner, the G0/G1/G2/G3 blocks, M5).  NO program-end (M30) and no
 // %/program wrapper — so this composes into a multi-toolpath program.  A leading
 // M5 is emitted only when the spindle is on; the caller decides program framing.
+//
+// For a RADIAL toolpath every coordinate is transformed LOCAL → WORLD before it
+// is emitted, so the G-code is runnable world XYZ (the SETUP comment stays as
+// metadata documenting the work plane).  Radial arcs are linearised into world
+// line segments (a tilted-plane arc has no single G17/18/19 plane).  The
+// Toolpath.segments themselves are left untouched (still local) — only the
+// emitted text is world.
 void emitToolpathBody(const Toolpath& path, std::ostringstream& s)
 {
     // Header.
@@ -1405,12 +1435,15 @@ void emitToolpathBody(const Toolpath& path, std::ostringstream& s)
     if (path.spindle_rpm > 0.0)
         s << "M3 S" << static_cast<long long>(std::llround(path.spindle_rpm)) << "\n";
 
-    // Radial / tilted feature: the coordinates below are in the feature's LOCAL
-    // work-plane frame, NOT world.  A re-setup / post must place the part on the
-    // work_origin with the recorded axes and apply the rotation.  We emit the
-    // frame as a comment (no dialect-specific G68.2/CYCL DEF 19 chosen here).
+    // Radial / tilted feature: the moves below are the feature's local (u,v,depth)
+    // path TRANSFORMED to WORLD XYZ (so the program is runnable on a 3-axis post
+    // with the part in place).  The work-plane frame is kept as a comment so a
+    // re-setup / fixture can be verified and radial arcs (linearised into world
+    // chords here) can be regenerated as native arcs if a controller supports the
+    // tilted plane (G68.2 / CYCL DEF 19).
     if (path.is_radial()) {
-        s << "(SETUP: RADIAL feature — LOCAL (u,v,depth) coordinates below)\n";
+        s << "(SETUP: RADIAL feature — coordinates below are WORLD, transformed "
+             "from the local work plane)\n";
         s << "(WORK_ORIGIN: X" << path.work_origin.X()
           << " Y" << path.work_origin.Y() << " Z" << path.work_origin.Z() << ")\n";
         s << "(WORK_U: " << path.work_u_axis.X() << " " << path.work_u_axis.Y()
@@ -1421,26 +1454,58 @@ void emitToolpathBody(const Toolpath& path, std::ostringstream& s)
           << " " << path.work_depth_axis.Z() << ")\n";
     }
 
+    const bool radial = path.is_radial();
+    gp_Pnt prevLocal(0.0, 0.0, 0.0);   // segment start = previous segment's end
+    bool havePrev = false;
     for (const auto& seg : path.segments) {
-        switch (seg.move) {
-            case PathSegment::Move::Rapid:  s << "G0"; break;
-            case PathSegment::Move::Linear: s << "G1"; break;
-            case PathSegment::Move::ArcCW:  s << "G2"; break;
-            case PathSegment::Move::ArcCCW: s << "G3"; break;
+        const bool isArc = (seg.move == PathSegment::Move::ArcCW ||
+                            seg.move == PathSegment::Move::ArcCCW);
+
+        // Emit one G0/G1 move to a WORLD point (transforming when radial).
+        auto emitMove = [&](const char* code, const gp_Pnt& localPt, double feed) {
+            const gp_Pnt p = radial ? localToWorldPoint(localPt, path) : localPt;
+            s << code << " X" << p.X() << " Y" << p.Y() << " Z" << p.Z();
+            if (feed > 0.0) s << " F" << feed;
+            s << "\n";
+        };
+
+        if (radial && isArc && havePrev) {
+            // Linearise the arc in the LOCAL plane, transforming each chord point
+            // to world.  Arc centre (local) = start + (arc_i, arc_j, arc_k).
+            const gp_Pnt c(prevLocal.X() + seg.arc_i, prevLocal.Y() + seg.arc_j,
+                           prevLocal.Z() + seg.arc_k);
+            const double a0 = std::atan2(prevLocal.Y() - c.Y(), prevLocal.X() - c.X());
+            double a1 = std::atan2(seg.end_point.Y() - c.Y(), seg.end_point.X() - c.X());
+            const bool ccw = (seg.move == PathSegment::Move::ArcCCW);
+            if (ccw && a1 <= a0) a1 += 2.0 * M_PI;
+            if (!ccw && a1 >= a0) a1 -= 2.0 * M_PI;
+            const double r  = std::hypot(prevLocal.X() - c.X(), prevLocal.Y() - c.Y());
+            const double zA = prevLocal.Z(), zB = seg.end_point.Z();
+            for (int k = 1; k <= kArcLinearizeSteps; ++k) {
+                const double t  = static_cast<double>(k) / kArcLinearizeSteps;
+                const double an = a0 + (a1 - a0) * t;
+                const gp_Pnt chord(c.X() + r * std::cos(an), c.Y() + r * std::sin(an),
+                                   zA + (zB - zA) * t);
+                emitMove("G1", chord, seg.feed_mm_per_min);
+            }
+        } else {
+            const char* code = seg.move == PathSegment::Move::Rapid  ? "G0"
+                             : seg.move == PathSegment::Move::Linear ? "G1"
+                             : seg.move == PathSegment::Move::ArcCW  ? "G2" : "G3";
+            if (isArc && !radial) {
+                // +Z arc: native G2/G3 with I/J/K (relative offsets, world already).
+                s << code << " X" << seg.end_point.X() << " Y" << seg.end_point.Y()
+                  << " Z" << seg.end_point.Z()
+                  << " I" << seg.arc_i << " J" << seg.arc_j << " K" << seg.arc_k;
+                if (seg.feed_mm_per_min > 0.0) s << " F" << seg.feed_mm_per_min;
+                s << "\n";
+            } else {
+                emitMove(code, seg.end_point, seg.move == PathSegment::Move::Rapid
+                                              ? 0.0 : seg.feed_mm_per_min);
+            }
         }
-        s << " X" << seg.end_point.X()
-          << " Y" << seg.end_point.Y()
-          << " Z" << seg.end_point.Z();
-        if (seg.move == PathSegment::Move::ArcCW ||
-            seg.move == PathSegment::Move::ArcCCW) {
-            s << " I" << seg.arc_i << " J" << seg.arc_j << " K" << seg.arc_k;
-        }
-        if (seg.move == PathSegment::Move::Linear ||
-            seg.move == PathSegment::Move::ArcCW ||
-            seg.move == PathSegment::Move::ArcCCW) {
-            if (seg.feed_mm_per_min > 0.0) s << " F" << seg.feed_mm_per_min;
-        }
-        s << "\n";
+        prevLocal = seg.end_point;
+        havePrev  = true;
     }
 
     if (path.spindle_rpm > 0.0) s << "M5\n";   // spindle off after this feature

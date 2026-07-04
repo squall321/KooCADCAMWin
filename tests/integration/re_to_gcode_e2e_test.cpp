@@ -737,6 +737,44 @@ TEST(ReToGCodeE2E, RadialSideBoreMachinedInLocalFrame)
         << "radial G-code must carry a setup comment, not pretend it is a +Z plunge";
 }
 
+// The G-CODE TEXT for a radial toolpath must be WORLD coordinates (transformed
+// from the local frame), not the raw local (u,v,depth) — so it is runnable.  The
+// Toolpath.segments stay LOCAL (the test above checks that); only the emitted
+// text is world.
+TEST(ReToGCodeE2E, RadialGCodeEmitsWorldCoordinates)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "bore_cylindrical";
+    // Entry at world (40,20,15); bores -X, so the plunge to local depth 8 lands at
+    // world (40-8, 20, 15) = (32, 20, 15).
+    sig.params = {
+        { "position_x_mm", 40.0 }, { "position_y_mm", 20.0 }, { "position_z_mm", 15.0 },
+        { "axis_dir", { -1.0, 0.0, 0.0 } },
+        { "diameter_mm", 6.0 }, { "depth_mm", 8.0 },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+
+    // The SEGMENTS are still LOCAL (u=v=0, depth=8) — the struct is untouched.
+    bool localZ8 = false;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::Linear &&
+            std::abs(s.end_point.X()) < 1e-9 && std::abs(s.end_point.Z() - 8.0) < 1e-6)
+            localZ8 = true;
+    EXPECT_TRUE(localZ8) << "the Toolpath segments remain in the local frame";
+
+    // The G-CODE emits WORLD coords: the plunge line carries the world entry Y
+    // (20) and Z (15) and a world X near 32 (40 - depth 8), NOT the local X0/Z8.
+    const std::string g = cam::toGCode(tp);
+    EXPECT_NE(g.find("X32"), std::string::npos)
+        << "the plunge must be at world X=32 (40 - depth 8), not local X=0";
+    EXPECT_NE(g.find("Y20"), std::string::npos) << "world Y = the entry Y";
+    EXPECT_NE(g.find("Z15"), std::string::npos) << "world Z = the entry Z (side face)";
+    EXPECT_EQ(g.find("Z8.000"), std::string::npos)
+        << "the raw LOCAL depth (Z8) must NOT appear — coords are transformed to world";
+}
+
 // A bare stock travels the same chain and yields an EMPTY-but-valid program
 // (no machining features → no toolpaths → still a well-formed % ... M30 %).
 TEST(ReToGCodeE2E, BareStockYieldsWellFormedEmptyProgram)
