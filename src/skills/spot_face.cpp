@@ -227,6 +227,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         json recovered = {
             { "position_x_mm", centerHigh.X() },
             { "position_y_mm", centerHigh.Y() },
+            { "position_z_mm", centerHigh.Z() },   // entry Z (consistent with x/y) so a
+                                                   // radial spot-face machines from the
+                                                   // real surface, not Z=0
             { "axis_dir",      { dirVec.X(), dirVec.Y(), dirVec.Z() } },
             { "dia_mm",        dia },
             { "depth_mm",      depth },

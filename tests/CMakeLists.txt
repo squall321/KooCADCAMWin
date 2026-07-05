@@ -1349,6 +1349,15 @@ koo_apply_compiler_flags(toolpath_plan_test)
 add_test(NAME toolpath_plan COMMAND toolpath_plan_test)
 set_tests_properties(toolpath_plan PROPERTIES TIMEOUT 60 LABELS "cam")
 
+# Tool-library (magazine T-number lookup + executable T/M6 emission).
+add_executable(tool_library_test cam/tool_library_test.cpp)
+target_link_libraries(tool_library_test PRIVATE
+    GTest::gtest GTest::gtest_main koo_cam koo_skills koo_engine)
+target_include_directories(tool_library_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(tool_library_test)
+add_test(NAME tool_library COMMAND tool_library_test)
+set_tests_properties(tool_library PROPERTIES TIMEOUT 60 LABELS "cam")
+
 # ── Sketch-extrusion RE round-trip (recognize -> regenerate) ──
 add_executable(extrude_roundtrip_test re/extrude_roundtrip_test.cpp)
 target_link_libraries(extrude_roundtrip_test PRIVATE

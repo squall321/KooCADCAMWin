@@ -17,6 +17,7 @@
 //     in lat.md/engine/cam-3axis-verify.md Stage-5.
 
 #include "Toolpath.hpp"
+#include "ToolLibrary.hpp"
 
 #include <gp.hxx>
 #include <gp_Dir.hxx>
@@ -188,6 +189,7 @@ Toolpath emptyRadialToolpath(const skill::FeatureSignature& sig)
                  "empty toolpath", sig.skill_id);
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -272,6 +274,7 @@ Toolpath drillHoleToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -336,6 +339,7 @@ Toolpath radialDrillToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -388,6 +392,7 @@ Toolpath radialBoxPocketToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -438,6 +443,161 @@ Toolpath radialBoxPocketToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── radial box_boss toolpath (local-frame) ────────────────────────────────
+// A raised rectangular island on a SIDE face (a lug on a watch-case side).  The
+// +Z boxBossToolpath clears the surrounding field with an OUTWARD-offset rectangle
+// at the base plane; the radial version does the same in the feature's LOCAL frame
+// — origin = world base centre, u = face_xaxis (length), v = normal × u, depth =
+// +face_normal (the boss stands OUT along +normal, so we clear the field just
+// BELOW the base = at local depth 0, skirting the boss walls by +toolR).
+Toolpath radialBoxBossToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double ox    = sig.params.value("center_x_world_mm", 0.0);
+    const double oy    = sig.params.value("center_y_world_mm", 0.0);
+    const double oz    = sig.params.value("center_z_world_mm", 0.0);
+    const double L     = sig.params.value("length_mm", 10.0);
+    const double W     = sig.params.value("width_mm", 10.0);
+    const double toolD = (sig.tooling.tool_dia_mm > 0.0)
+                       ? sig.tooling.tool_dia_mm : std::min(L, W) * 0.4;
+    const double toolR = toolD * 0.5;
+    const double feed  = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                sig.tooling.feed_per_tooth_mm);
+
+    // face_normal points OUT of the boss cap; the field-clearing pass runs at the
+    // base plane, so the local depth axis is -face_normal (into the host body).
+    const gp_Vec normal = readVec3(sig.params, "face_normal");
+    const gp_Dir depthAxis = (normal.Magnitude() > 1e-9)
+                           ? gp_Dir(-normal.X(), -normal.Y(), -normal.Z())
+                           : cutAxisDir(sig.params);
+    gp_Dir u, v;
+    buildInPlaneBasis(depthAxis, readVec3(sig.params, "face_xaxis"), u, v);
+
+    tp.work_origin     = gp_Pnt(ox, oy, oz);
+    tp.work_u_axis     = u;
+    tp.work_v_axis     = v;
+    tp.work_depth_axis = depthAxis;
+
+    // OUTWARD-offset rectangle in LOCAL (u, v) at the base plane (local depth 0) —
+    // the tool skirts the boss wall by +toolR, clearing the adjacent field.
+    const double hu = L / 2.0 + toolR;
+    const double hv = W / 2.0 + toolR;
+    const double safeLocal = -kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(-hu, -hv, safeLocal), 0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(-hu, -hv, 0.0),       feed, 0, 0, 0 }); // plunge to base
+    tp.segments.push_back({ M::Linear, gp_Pnt( hu, -hv, 0.0),       feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt( hu,  hv, 0.0),       feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(-hu,  hv, 0.0),       feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(-hu, -hv, 0.0),       feed, 0, 0, 0 }); // close
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(-hu, -hv, safeLocal), 0.0,  0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
+// ── radial dome_boss toolpath (local-frame) ───────────────────────────────
+// A raised spherical-cap island on a SIDE face.  The +Z domeBossToolpath finishes
+// the cap with a ball-nose Z-level ring stack (ball CENTRE on a concentric sphere
+// Rs+toolR) + a base skirt.  The radial version emits the SAME rings in the
+// feature's LOCAL frame: local depth measures OUTWARD along +normal from the base
+// plane (the cap protrudes), so a contact at surface height h_above_base sits at
+// local depth = -(that height) below the tool, and the ball centre lifts by the
+// concentric-sphere scale.  We emit in local coords where local Z is along the cap
+// axis (+normal), rings ascending from the base to the apex.
+Toolpath radialDomeBossToolpath(const skill::FeatureSignature& sig)
+{
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const double ox     = sig.params.value("center_x_world_mm", 0.0);
+    const double oy     = sig.params.value("center_y_world_mm", 0.0);
+    const double oz     = sig.params.value("center_z_world_mm", 0.0);
+    const double baseR  = sig.params.value("base_radius_mm", 5.0);
+    const double height = sig.params.value("height_mm", 1.0);
+    const double toolD  = (sig.tooling.tool_dia_mm > 0.0)
+                        ? sig.tooling.tool_dia_mm : baseR * 0.4;
+    const double toolR  = toolD * 0.5;
+    const double feed   = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                 sig.tooling.feed_per_tooth_mm);
+
+    // Local frame: depth axis = +face_normal (the cap protrudes OUT along +normal,
+    // so a point h above the base is at local +h along the cap axis).  u/v span the
+    // base plane.  origin = the world base centre.
+    const gp_Vec normal = readVec3(sig.params, "face_normal");
+    const gp_Dir capAxis = (normal.Magnitude() > 1e-9)
+                         ? gp_Dir(normal.X(), normal.Y(), normal.Z())
+                         : gp_Dir(0, 0, 1);
+    gp_Dir u, v;
+    buildInPlaneBasis(capAxis, gp_Vec(0, 0, 0), u, v);
+    tp.work_origin     = gp_Pnt(ox, oy, oz);
+    tp.work_u_axis     = u;
+    tp.work_v_axis     = v;
+    tp.work_depth_axis = capAxis;
+
+    // Ball-nose ring stack in LOCAL coords: local z = height above the base along
+    // the cap axis (apex at local z = height).  Same concentric-sphere ball-centre
+    // scale as the +Z dome (Rs+toolR)/Rs about the sphere centre at local z = height
+    // - Rs.  (Note: in the local frame "up the cap" is +z, matching the +Z dome's
+    // world +Z convention with baseZ = 0.)
+    const double Rs    = (height > 1e-6) ? (baseR * baseR + height * height) / (2.0 * height)
+                                         : baseR;
+    const double scale = (Rs > 1e-6) ? (Rs + toolR) / Rs : 1.0;
+    const double sphereCenterZ = height - Rs;   // local, base plane at z=0
+    const double safeLocal = height + kSafeZAboveStock_mm;
+
+    using M = PathSegment::Move;
+    auto emitLocalRing = [&](double r, double z) {
+        const double quarter[4][2] = { {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}, {1.0, 0.0} };
+        gp_Pnt cur(r, 0.0, z);
+        for (int q = 0; q < 4; ++q) {
+            const double nu = r * quarter[q][0];
+            const double nv = r * quarter[q][1];
+            const double ic = 0.0 - cur.X();
+            const double jc = 0.0 - cur.Y();
+            tp.segments.push_back({ M::ArcCCW, gp_Pnt(nu, nv, z), feed, ic, jc, 0.0 });
+            cur = gp_Pnt(nu, nv, z);
+        }
+    };
+
+    const double stepover = std::max(0.2, toolD * 0.25);
+    const int    nLevels  = std::max(1, static_cast<int>(std::ceil(height / stepover)));
+    bool positioned = false;
+    for (int k = 1; k <= nLevels; ++k) {
+        const double zc  = height - (height * static_cast<double>(k) / static_cast<double>(nLevels)); // contact z (local)
+        const double d   = height - zc;                       // drop below apex
+        const double rho = std::sqrt(std::max(0.0, 2.0 * Rs * d - d * d));
+        const double r   = std::max(0.1, rho * scale);
+        const double zb  = std::max(0.0, sphereCenterZ + (zc - sphereCenterZ) * scale);
+        if (!positioned) {
+            tp.segments.push_back({ M::Rapid,  gp_Pnt(r, 0.0, safeLocal), 0.0,  0, 0, 0 });
+            tp.segments.push_back({ M::Linear, gp_Pnt(r, 0.0, zb),        feed, 0, 0, 0 });
+            positioned = true;
+        } else {
+            tp.segments.push_back({ M::Linear, gp_Pnt(r, 0.0, zb), feed, 0, 0, 0 });
+        }
+        emitLocalRing(r, zb);
+    }
+    // Base skirt at the base plane (local z=0), offset OUTWARD by the tool radius.
+    const double skirtR = baseR + toolR;
+    tp.segments.push_back({ M::Linear, gp_Pnt(skirtR, 0.0, 0.0), feed, 0, 0, 0 });
+    emitLocalRing(skirtR, 0.0);
+    tp.segments.push_back({ M::Rapid, gp_Pnt(skirtR, 0.0, safeLocal), 0.0, 0, 0, 0 }); // retract
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── radial mill_circular_pocket toolpath (local-frame) ────────────────────
 // A round side pocket / side recess whose axis is NOT ±Z.  Emits an inward
 // circular finishing contour (radius = diameter/2 - toolR) in the feature's LOCAL
@@ -447,6 +607,7 @@ Toolpath radialCircularPocketToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -506,6 +667,7 @@ Toolpath radialSlotToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -553,6 +715,7 @@ Toolpath radialHolePatternToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -613,6 +776,7 @@ Toolpath millCircularPocketToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -737,6 +901,7 @@ Toolpath millRectPocketToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -783,6 +948,7 @@ Toolpath millSlotToolpath(const skill::FeatureSignature& sig)
 
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -819,6 +985,7 @@ Toolpath boxPocketToolpath(const skill::FeatureSignature& sig)
 
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -866,6 +1033,7 @@ Toolpath holePatternToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -908,6 +1076,7 @@ Toolpath counterboreToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -958,6 +1127,7 @@ Toolpath countersinkToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -1004,6 +1174,7 @@ Toolpath reamToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -1057,6 +1228,7 @@ Toolpath boreWithShelfToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -1101,6 +1273,7 @@ Toolpath multiStepBoreToolpath(const skill::FeatureSignature& sig)
 {
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -1149,8 +1322,13 @@ Toolpath multiStepBoreToolpath(const skill::FeatureSignature& sig)
 // stands height_mm above center_z_world_mm; stock top = base + height.
 Toolpath boxBossToolpath(const skill::FeatureSignature& sig)
 {
+    // A radial (side-face) box boss = the same outward field-clearing rectangle in
+    // the feature's own local work-plane frame.
+    if (!cutAxisIsZ(sig.params)) return radialBoxBossToolpath(sig);
+
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -1204,8 +1382,13 @@ Toolpath boxBossToolpath(const skill::FeatureSignature& sig)
 // the sphere centre.  (Driving the tool TIP along the surface would gouge by toolR.)
 Toolpath domeBossToolpath(const skill::FeatureSignature& sig)
 {
+    // A radial (side-face) dome boss = the same ball-nose ring stack in the
+    // feature's own local work-plane frame.
+    if (!cutAxisIsZ(sig.params)) return radialDomeBossToolpath(sig);
+
     Toolpath tp;
     tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
     tp.tool_id          = makeToolId(sig.tooling);
     tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
     tp.tool_length_mm   = sig.tooling.tool_length_mm;
@@ -1316,7 +1499,7 @@ std::vector<Toolpath> generateAllToolpaths(
         //   - a radial pocket / pattern / boss needs an in-plane contour on a side
         //     face — still deferred to an empty toolpath + warning.
         static const std::set<std::string> kRadialDrillable = {
-            "drill_hole", "drill_through_hole", "spot_drill",
+            "drill_hole", "drill_through_hole", "spot_drill", "spot_face",
             "bore_cylindrical", "micro_drill", "gun_drill",
         };
         // Radial patterns (side grille / side bolt circle) → per-hole plunges in
@@ -1325,18 +1508,15 @@ std::vector<Toolpath> generateAllToolpaths(
         static const std::set<std::string> kRadialContour = {
             "linear_pattern", "circular_pattern",
         };
-        // The hole/bore/pocket/slot family (counterbore/countersink/ream,
-        // mill_circular_pocket, mill_slot, bore_with_shelf, multi_step_bore) now
-        // handle their OWN radial case internally (routing to a local-frame
-        // generator), like box_pocket — so they are NOT in this deferred set.
-        // What remains genuinely has no radial generator: a side spot-face, a side
-        // rect-pocket (mill_rect_pocket cannot even be AUTHORED radial — its
-        // apply() rejects a non-Z axis, and box_pocket already covers side
-        // rectangles), and an additive side boss (box_boss / dome_boss).
+        // Nearly the whole hole/bore/pocket/slot/boss family now handles its OWN
+        // radial case internally (routing to a local-frame generator), like
+        // box_pocket — so those are NOT in this deferred set.  What remains is only
+        // mill_rect_pocket, which CANNOT be authored radial (its apply() rejects a
+        // non-Z axis and recognize() hard-codes -Z), and box_pocket already covers
+        // side rectangular recesses — so a radial mill_rect_pocket is unreachable
+        // and an empty toolpath is the safe fallback.
         static const std::set<std::string> kZAxisGuarded = {
-            "spot_face",
             "mill_rect_pocket",
-            "box_boss", "dome_boss",
         };
         if (!cutAxisIsZ(sig.params)) {
             if (kRadialDrillable.count(sig.skill_id)) {
@@ -1420,6 +1600,40 @@ gp_Pnt localToWorldPoint(const gp_Pnt& p, const Toolpath& tp)
                   tp.work_origin.Z() + off.Z());
 }
 
+// ZYX Euler angles (degrees) of the work-plane frame R = [u | v | depth] (columns),
+// i.e. the rotation that maps the machine axes onto the tilted work plane.  Fanuc
+// G68.2 P0 and Heidenhain CYCL DEF 19 both take this triple; we emit it as a
+// COMMENTED alternative to the world-transformed lines so a 5-axis / tilted-head
+// controller can re-post the feature as native tilted-plane moves (with true G2/G3
+// arcs) instead of the linearised world chords.  Convention: R = Rz(K)·Ry(J)·Rx(I),
+// so K spins about Z, then J about the new Y, then I about the new X.  The gimbal-
+// lock branch (|R20|→1) folds I into K, the standard degenerate handling.
+struct WorkPlaneEuler { double i_deg, j_deg, k_deg; };
+WorkPlaneEuler workPlaneEulerZYX(const Toolpath& tp)
+{
+    // Column vectors of R.  R[row][col]: r_c0 = u, r_c1 = v, r_c2 = depth.
+    const gp_Dir& u = tp.work_u_axis;
+    const gp_Dir& v = tp.work_v_axis;
+    const gp_Dir& w = tp.work_depth_axis;
+    const double r00 = u.X(), r10 = u.Y(), r20 = u.Z();
+    const double r21 = v.Z();
+    const double r22 = w.Z();
+    const double kRad2Deg = 180.0 / M_PI;
+    const double cy = std::hypot(r00, r10);   // cos(J) = sqrt(r00²+r10²)
+    double iRad, jRad, kRad;
+    if (cy > 1e-9) {
+        jRad = std::atan2(-r20, cy);
+        kRad = std::atan2(r10, r00);
+        iRad = std::atan2(r21, r22);
+    } else {
+        // Gimbal lock: J = ±90°, X and Z axes align — fold I into K, set I = 0.
+        jRad = std::atan2(-r20, cy);
+        kRad = std::atan2(-v.X(), v.Y());
+        iRad = 0.0;
+    }
+    return { iRad * kRad2Deg, jRad * kRad2Deg, kRad * kRad2Deg };
+}
+
 // One segment's world end point + a coarse linearisation of a radial ARC into
 // straight world segments.  A radial (tilted-plane) arc is NOT expressible as a
 // single G2/G3 with I/J on a 3-axis controller (the arc plane is the work plane,
@@ -1473,6 +1687,17 @@ void emitToolpathBody(const Toolpath& path, std::ostringstream& s)
           << " " << path.work_v_axis.Z() << ")\n";
         s << "(WORK_DEPTH: " << path.work_depth_axis.X() << " " << path.work_depth_axis.Y()
           << " " << path.work_depth_axis.Z() << ")\n";
+        // Native tilted-work-plane alternative, emitted as COMMENTS so it changes
+        // nothing for a 3-axis post (the runnable moves stay world XYZ below).  A
+        // 5-axis / tilted-head controller can enable these to re-cut the feature on
+        // the work plane with true G2/G3 arcs instead of the linearised chords.
+        const WorkPlaneEuler e = workPlaneEulerZYX(path);
+        s << "(ALT: tilted work plane — enable ONE dialect on a capable control)\n";
+        s << "(ALT Fanuc:  G68.2 X" << path.work_origin.X() << " Y" << path.work_origin.Y()
+          << " Z" << path.work_origin.Z()
+          << " I" << e.i_deg << " J" << e.j_deg << " K" << e.k_deg << " ; then G53.1)\n";
+        s << "(ALT Heidenhain: CYCL DEF 19.0 WORKING PLANE / 19.1 A" << e.i_deg
+          << " B" << e.j_deg << " C" << e.k_deg << ")\n";
     }
 
     const bool radial = path.is_radial();
@@ -1558,11 +1783,27 @@ std::string toGCodeProgram(const std::vector<Toolpath>& paths, bool ok, int coll
     // marks a change of tool between features so a post can insert T/M6.  A single
     // program-end (M30) closes the WHOLE program — NOT one per toolpath (that would
     // stop the machine at the first feature).
-    std::string prevTool;
+    // A tool change between features: look the requirement up in the magazine and
+    // emit an EXECUTABLE `T<n> M6` (the descriptive label stays as a comment).  When
+    // the magazine has no matching pocket we fall back to the comment-only form — a
+    // post must never machine a feature with a silently-wrong tool.  We key the
+    // "did the tool change" test on the resolved magazine pocket (T-number) when we
+    // have one, so two features that map to the SAME pocket don't re-emit a change.
+    std::string prevKey;
     for (const auto& tp : paths) {
-        if (!tp.tool_id.empty() && tp.tool_id != prevTool) {
-            s << "(TOOLCHANGE: " << tp.tool_id << ")\n";
-            prevTool = tp.tool_id;
+        if (!tp.tool_id.empty()) {
+            const std::optional<ToolEntry> pick = selectTool(tp.tooling);
+            const std::string key = pick ? ("T" + std::to_string(pick->t_number))
+                                         : tp.tool_id;
+            if (key != prevKey) {
+                if (pick)
+                    s << "T" << pick->t_number << " M6 (TOOLCHANGE: " << pick->label
+                      << " — " << tp.tool_id << ")\n";
+                else
+                    s << "(TOOLCHANGE: " << tp.tool_id
+                      << " — no magazine pocket; set tool manually)\n";
+                prevKey = key;
+            }
         }
         emitToolpathBody(tp, s);
     }

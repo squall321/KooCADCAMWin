@@ -15,6 +15,7 @@
 add_library(koo_cam STATIC
     Toolpath.cpp
     CollisionCheck.cpp
+    ToolLibrary.cpp
 )
 
 target_include_directories(koo_cam PUBLIC ${CMAKE_SOURCE_DIR}/src)

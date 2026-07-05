@@ -74,6 +74,9 @@ struct Toolpath
 {
     std::string              feature_skill_id;   // skill_id of the source signature
     std::string              tool_id;            // "drill_3mm_carbide_2flute" etc.
+    skill::ToolingMeta       tooling;            // full requirement (family/dia/material/
+                                                 // flutes) so the post can pick a real
+                                                 // magazine T-number via selectTool()
     double                   tool_dia_mm     = 0.0;
     double                   tool_length_mm  = 0.0;
     double                   spindle_rpm     = 0.0;
@@ -130,6 +133,13 @@ Toolpath radialHolePatternToolpath(const skill::FeatureSignature& sig);
 // radial box pocket).  counterbore/countersink/ream handle their radial case
 // inside their own generators via a shared coaxial-plunge-in-local-frame helper.
 Toolpath radialCircularPocketToolpath(const skill::FeatureSignature& sig);
+
+// A radial (non-Z) raised side boss (a lug on a case side): the field-clearing
+// contour of the +Z boss emitted in the feature's LOCAL frame.  box boss = an
+// OUTWARD-offset rectangle at the base plane; dome boss = the ball-nose ring stack
+// (concentric-sphere ball-centre offset) + base skirt, in local (u, v, depth).
+Toolpath radialBoxBossToolpath(const skill::FeatureSignature& sig);
+Toolpath radialDomeBossToolpath(const skill::FeatureSignature& sig);
 
 // A radial (non-Z) side slot / side port (USB-C / SIM-tray cutout): the +Z slot
 // centreline traverse (start → end at depth) emitted in the feature's LOCAL

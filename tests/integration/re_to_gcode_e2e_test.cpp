@@ -691,9 +691,9 @@ TEST(ReToGCodeE2E, DomeBossProducesZLevelRingFinishing)
         << "the apex ball centre lifts by ~toolR, not an unbounded amount";
 }
 
-// A RADIAL box_boss (a lug on a side face, normal ±X) is not machinable on the
-// 3-axis-Z post → empty toolpath via the axis guard.
-TEST(ReToGCodeE2E, RadialBoxBossYieldsEmptyToolpath)
+// A RADIAL box_boss (a lug on a side face, normal +X) is now machined in its own
+// local frame: an OUTWARD field-clearing rectangle at the base plane.
+TEST(ReToGCodeE2E, RadialBoxBossMachinedInLocalFrame)
 {
     skill::FeatureSignature sig;
     sig.skill_id = "box_boss";
@@ -701,12 +701,65 @@ TEST(ReToGCodeE2E, RadialBoxBossYieldsEmptyToolpath)
         { "center_x_world_mm", 30.0 }, { "center_y_world_mm", 0.0 },
         { "center_z_world_mm", 10.0 },
         { "length_mm", 10.0 }, { "width_mm", 8.0 }, { "height_mm", 4.0 },
-        { "face_normal", { 1.0, 0.0, 0.0 } },   // +X → radial
+        { "face_normal", { 1.0, 0.0, 0.0 } },   // +X → radial lug
+        { "face_xaxis",  { 0.0, 0.0, 1.0 } },   // length runs along world Z
     };
     const auto tps = cam::generateAllToolpaths({ sig });
     ASSERT_EQ(tps.size(), 1u);
-    EXPECT_EQ(tps[0].segments.size(), 0u)
-        << "a radial (side-face) boss is not machinable on the 3-axis-Z post";
+    const cam::Toolpath& tp = tps[0];
+    EXPECT_GT(tp.segments.size(), 2u) << "a radial box boss clears the field, not empty";
+    EXPECT_TRUE(tp.is_radial());
+    EXPECT_NEAR(std::abs(tp.work_depth_axis.X()), 1.0, 1e-6) << "depth axis ±X (into the side)";
+    // OUTWARD contour: the local u straddles the boss centre beyond L/2 (= 5+toolR).
+    bool posU = false, negU = false;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::Linear) {
+            if (s.end_point.X() > 5.0)  posU = true;   // beyond half-length → outward
+            if (s.end_point.X() < -5.0) negU = true;
+        }
+    EXPECT_TRUE(posU && negU) << "the outward contour straddles the boss beyond ±L/2";
+}
+
+// A RADIAL dome_boss (a domed lug on a side face, normal +X) is machined as a
+// ball-nose ring stack in its local frame (ArcCCW rings), NOT empty.
+TEST(ReToGCodeE2E, RadialDomeBossMachinedInLocalFrame)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "dome_boss";
+    sig.params = {
+        { "center_x_world_mm", 30.0 }, { "center_y_world_mm", 0.0 },
+        { "center_z_world_mm", 10.0 },
+        { "base_radius_mm", 8.0 }, { "height_mm", 5.0 },
+        { "face_normal", { 1.0, 0.0, 0.0 } },   // +X → radial dome
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+    EXPECT_TRUE(tp.is_radial());
+    int arcs = 0;
+    for (const auto& s : tp.segments)
+        if (s.move == cam::PathSegment::Move::ArcCCW) ++arcs;
+    EXPECT_GT(arcs, 4) << "a 3-D ball-nose ring stack in the local frame";
+    EXPECT_EQ(arcs % 4, 0) << "each ring is four ArcCCW quarter-turns";
+}
+
+// A RADIAL spot_face (a shallow side-face facing, axis -X) is now machined as a
+// local-frame plunge (it reuses the radial drill generator), NOT empty.
+TEST(ReToGCodeE2E, RadialSpotFaceMachinedInLocalFrame)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "spot_face";
+    sig.params = {
+        { "position_x_mm", 40.0 }, { "position_y_mm", 20.0 }, { "position_z_mm", 15.0 },
+        { "axis_dir", { -1.0, 0.0, 0.0 } },   // into the +X side face
+        { "dia_mm", 10.0 }, { "depth_mm", 1.5 },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+    EXPECT_EQ(tp.segments.size(), 4u) << "a radial spot-face is a local-frame plunge, not empty";
+    EXPECT_TRUE(tp.is_radial());
+    EXPECT_NEAR(std::abs(tp.work_depth_axis.X()), 1.0, 1e-6) << "depth axis ±X";
 }
 
 // A RADIAL side bore (a crown-stem bore, axis +X) is a plain axial plunge — it is
@@ -780,6 +833,59 @@ TEST(ReToGCodeE2E, RadialGCodeEmitsWorldCoordinates)
     EXPECT_NE(g.find("Z15"), std::string::npos) << "world Z = the entry Z (side face)";
     EXPECT_EQ(g.find("Z8.000"), std::string::npos)
         << "the raw LOCAL depth (Z8) must NOT appear — coords are transformed to world";
+}
+
+// The radial SETUP banner also carries a COMMENTED tilted-work-plane alternative
+// (Fanuc G68.2 + Heidenhain CYCL DEF 19) so a 5-axis control can re-post the
+// feature natively.  It must be commented (change nothing for a 3-axis post) and
+// the Euler triple must reconstruct the true work-plane frame.
+TEST(ReToGCodeE2E, RadialGCodeCarriesCommentedTiltedPlaneAlternative)
+{
+    skill::FeatureSignature sig;
+    sig.skill_id = "bore_cylindrical";
+    sig.params = {
+        { "position_x_mm", 40.0 }, { "position_y_mm", 20.0 }, { "position_z_mm", 15.0 },
+        { "axis_dir", { -1.0, 0.0, 0.0 } },   // depth axis = -X (a tilted plane)
+        { "diameter_mm", 6.0 }, { "depth_mm", 8.0 },
+    };
+    const auto tps = cam::generateAllToolpaths({ sig });
+    ASSERT_EQ(tps.size(), 1u);
+    const cam::Toolpath& tp = tps[0];
+    const std::string g = cam::toGCode(tp);
+
+    // Present, and COMMENTED (every ALT line lives inside parentheses → inert).
+    const auto fanuc = g.find("G68.2");
+    ASSERT_NE(fanuc, std::string::npos) << "the Fanuc tilted-plane alternative must appear";
+    EXPECT_NE(g.find("CYCL DEF 19"), std::string::npos) << "the Heidenhain alternative too";
+    // The G68.2 token sits inside a comment: the '(' that opens its line precedes it
+    // and the ')' that closes the line follows it, with no ')' in between.
+    const auto openParen  = g.rfind('(', fanuc);
+    const auto closeParen = g.find(')', fanuc);
+    ASSERT_NE(openParen, std::string::npos);
+    ASSERT_NE(closeParen, std::string::npos);
+    EXPECT_EQ(g.find(')', openParen), closeParen)
+        << "G68.2 must be INSIDE one comment — never an executable line on a 3-axis post";
+
+    // Reconstruct R = Rz(K)·Ry(J)·Rx(I) from the emitted I/J/K and confirm its third
+    // column equals the work depth axis (-X).  Parse the numbers straight out of the
+    // Fanuc line so we test the ACTUAL emitted values, not an internal call.
+    const std::string line = g.substr(openParen, closeParen - openParen);
+    auto num = [&](const std::string& key) {
+        const auto p = line.find(key);
+        return std::stod(line.substr(p + key.size()));
+    };
+    const double d2r = M_PI / 180.0;
+    const double I = num(" I") * d2r, J = num(" J") * d2r, K = num(" K") * d2r;
+    const double cI = std::cos(I), sI = std::sin(I);
+    const double cJ = std::cos(J), sJ = std::sin(J);
+    const double cK = std::cos(K), sK = std::sin(K);
+    // Third column of Rz(K)Ry(J)Rx(I):
+    const double wx = cK * sJ * cI + sK * sI;
+    const double wy = sK * sJ * cI - cK * sI;
+    const double wz = cJ * cI;
+    EXPECT_NEAR(wx, tp.work_depth_axis.X(), 1e-6) << "Euler K/J/I reconstructs the work depth axis";
+    EXPECT_NEAR(wy, tp.work_depth_axis.Y(), 1e-6);
+    EXPECT_NEAR(wz, tp.work_depth_axis.Z(), 1e-6);
 }
 
 // A bare stock travels the same chain and yields an EMPTY-but-valid program
