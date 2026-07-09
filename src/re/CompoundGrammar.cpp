@@ -270,6 +270,15 @@ void matchHolePatterns(const std::vector<Hole>& holes,
         // individual drill steps once the compound replaces them.
         json holeCenters = json::array();
         for (const auto& h : pts) holeCenters.push_back({ h.x, h.y });
+        // Constituent FACE IDs, so dedupe (collectFaceIds) can arbitrate this
+        // compound against the geometric pattern recognisers (circular_pattern /
+        // linear_pattern) claiming the SAME holes.  Without a face-id key the
+        // compound skips face arbitration entirely and both patterns survive as
+        // duplicate steps.  (This was previously masked by a fillet_edge false
+        // positive on the hole walls that happened to block the duplicate.)
+        json cylFaceIds = json::array();
+        for (const auto& h : pts)
+            for (int fid : h.faces) cylFaceIds.push_back(fid);
 
         // ── bolt-circle ────────────────────────────────────────────────
         double cx, cy, r, cresid;
@@ -297,6 +306,7 @@ void matchHolePatterns(const std::vector<Hole>& holes,
             rf.matched_geometry = {
                 { "is_compound", true }, { "source", "grammar:bolt_circle" },
                 { "fit_residual_mm", cresid }, { "grounded_atom_count", n },
+                { "cyl_face_ids", cylFaceIds },
             };
             out.push_back(std::move(rf));
             continue;
@@ -343,6 +353,7 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                     rf.matched_geometry = {
                         { "is_compound", true }, { "source", "grammar:linear_hole_array" },
                         { "fit_residual_mm", lresid }, { "grounded_atom_count", n },
+                        { "cyl_face_ids", cylFaceIds },
                     };
                     out.push_back(std::move(rf));
                     continue;
@@ -379,6 +390,7 @@ void matchHolePatterns(const std::vector<Hole>& holes,
                 rf.matched_geometry = {
                     { "is_compound", true }, { "source", "grammar:rectangular_hole_grid" },
                     { "fit_residual_mm", gresid }, { "grounded_atom_count", n },
+                    { "cyl_face_ids", cylFaceIds },
                 };
                 out.push_back(std::move(rf));
                 continue;

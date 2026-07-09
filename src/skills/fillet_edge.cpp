@@ -25,6 +25,10 @@
 #include <string>
 #include <utility>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace koocadcam::skill::fillet_edge {
 
 namespace pr = koocadcam::engine::prim;
@@ -339,6 +343,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         double r = 0.0;
         std::string kind;
         if (t == GeomAbs_Cylinder) {
+            // A fillet blend is a PARTIAL cylindrical strip that rounds an edge —
+            // its surface wraps only a fraction of a full circle (typically ≤ π).
+            // A drilled/bored HOLE WALL is a FULL (≈2π) cylinder and must NOT be
+            // mistaken for a fillet: a ring of same-radius holes was clustering as
+            // a bogus 0.90 "rim-fillet sweep" that then subsumed the real holes.
+            const double wrap = surf.LastUParameter() - surf.FirstUParameter();
+            if (wrap > 1.9 * M_PI) continue;   // full-wrap cylinder → a hole, not a fillet
             r = surf.Cylinder().Radius();
             kind = "cylindrical";
         } else if (t == GeomAbs_Torus) {

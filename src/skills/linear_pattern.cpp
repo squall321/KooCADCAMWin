@@ -219,6 +219,7 @@ struct CylInst
     double x, y, z;
     double radius;
     double depth = 0.0;   // axial extent of the cylinder face (recovered hole depth)
+    int    faceId = -1;   // source cylindrical face (for dedupe face-id arbitration)
     gp_Dir dir;
 };
 
@@ -259,6 +260,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             ci.y = c.Location().Y();
             ci.z = c.Location().Z();
             ci.radius = c.Radius();
+            ci.faceId = i;
             ci.dir = c.Axis().Direction();
             // Depth = the cylinder face's extent ALONG its own axis (project the
             // face bbox corners onto the axis).  Recovering depth is essential:
@@ -457,6 +459,12 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             // local-frame generator — world_n* alone is invisible to that guard.
             { "face_normal",   { normal.X(), normal.Y(), normal.Z() } },
         };
+        // Constituent FACE IDs so dedupe (collectFaceIds) can arbitrate this
+        // candidate against the grammar's linear_hole_array / rectangular_hole_grid
+        // claiming the SAME holes — without a face-id key this candidate skips face
+        // arbitration entirely and both patterns survive as duplicate steps.
+        json cylFaceIds = json::array();
+        for (const auto& p : pts) cylFaceIds.push_back(p.c->faceId);
         bestMatched = {
             { "cyl_count",      static_cast<int>(pts.size()) },
             { "first_radius",   grp[0].radius },
@@ -465,6 +473,7 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             { "pitch_x_mm",     pitchX },
             { "pitch_y_mm",     pitchY },
             { "axis_z",         normal.Z() },
+            { "cyl_face_ids",   cylFaceIds },
         };
     }
 

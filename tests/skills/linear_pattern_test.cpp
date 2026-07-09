@@ -297,11 +297,16 @@ TEST(SkillLinearPattern, PatternSubsumesIndividualDrills)
 
     int patternSteps = 0, drillSteps = 0;
     for (const auto& s : plan.steps()) {
-        if (s.skill_id == "linear_pattern") ++patternSteps;
+        // Either pattern form may own the row: the grammar's linear_hole_array
+        // (higher confidence) or the geometric linear_pattern.  Both now carry
+        // face-id keys, so dedupe arbitration keeps exactly ONE of them — the
+        // duplicate-steps bug this asserts against is either form appearing twice.
+        if (s.skill_id == "linear_pattern" || s.skill_id == "linear_hole_array")
+            ++patternSteps;
         if (s.skill_id == "drill_hole" || s.skill_id == "drill_through_hole")
             ++drillSteps;
     }
-    EXPECT_EQ(patternSteps, 1) << "the row is one pattern step";
+    EXPECT_EQ(patternSteps, 1) << "the row is exactly one pattern step (no duplicates)";
     EXPECT_EQ(drillSteps, 0)
         << "the pattern must SUBSUME the individual drills (no leftover drill steps)";
 }
