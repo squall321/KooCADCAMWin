@@ -513,6 +513,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         json recovered = {
             { "position_x_mm",   p.value("position_x_mm",   0.0) },
             { "position_y_mm",   p.value("position_y_mm",   0.0) },
+            // Entry-plane Z: apply() stamps it (entryPointOnFacePlane); omitting
+            // it here made a HISTORY-BEARING countersunk ring recover with every
+            // member at z=0 — the ring compound's entry plane and pilot-mouth
+            // hole_centers then sat off the real part, breaking z-aware drill
+            // subsumption.  (The counterbore atom has no replay fast-path, so
+            // this was a countersink-only gap.)
+            { "position_z_mm",   p.value("position_z_mm",   0.0) },
             { "axis_dir",        p.value("axis_dir", json::array({ 0.0, 0.0, -1.0 })) },
             { "pilot_dia_mm",    p.value("pilot_dia_mm",    0.0) },
             { "pilot_depth_mm",  p.value("pilot_depth_mm",  0.0) },
@@ -614,12 +621,41 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
                 { "cone_angle_deg",   coneAngleDeg },
                 { "cone_depth_mm",    coneDepth },
             };
+            // Claim the planar ENTRY face (the plane holding the cone's large
+            // rim) in matched_geometry — mirroring counterbore.  Downstream the
+            // ring compound harvests it as the Executor's entry_face_id datum
+            // anchor; without it a recovered countersunk ring always replays on
+            // the by-normal fallback face, which can resolve the WRONG deck on
+            // a multi-level part.
+            int    entryFaceId = -1;
+            double entryArea   = 0.0;
+            for (int fi = 0; fi < wp.faceCount(); ++fi) {
+                if (!wp.isFacePlanar(fi)) continue;
+                gp_Dir n;
+                try { n = wp.faceNormal(fi); } catch (...) { continue; }
+                const double nDot = std::abs(n.X() * adir.X() +
+                                             n.Y() * adir.Y() +
+                                             n.Z() * adir.Z());
+                if (nDot < 0.99) continue;            // not ⊥ to the bore axis
+                const gp_Pnt c = wp.faceCenter(fi);
+                const gp_Vec rel(cone.largeCenter, c);
+                const double along = rel.X() * adir.X() +
+                                     rel.Y() * adir.Y() +
+                                     rel.Z() * adir.Z();
+                if (std::abs(along) < 0.05) {
+                    // Entry plane: the largest coplanar face at the rim height.
+                    const double area = wp.faceArea(fi);
+                    if (area > entryArea) { entryArea = area; entryFaceId = fi; }
+                }
+            }
+
             json matched = {
                 { "cone_face_id",     cone.faceIdx },
                 { "cyl_face_id",      cyl.faceIdx },
                 { "entry_center", { cone.largeCenter.X(), cone.largeCenter.Y(),
                                     cone.largeCenter.Z() } },
             };
+            if (entryFaceId >= 0) matched["entry_face_id"] = entryFaceId;
             out.push_back(RecognizedFeature{
                 kSkillId, recovered, conf, matched
             });

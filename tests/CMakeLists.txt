@@ -950,7 +950,7 @@ koo_add_skill_test(surface_fill_4_edges)
 # slice 12 — CAD-native patterns (5)
 # linear/circular pattern tests also exercise re::inferProcessPlan (pattern
 # subsumption of individual drills), so they additionally link koo_re/process.
-foreach(pat linear_pattern circular_pattern counterbore_ring_pattern)
+foreach(pat linear_pattern circular_pattern counterbore_ring_pattern countersink_ring_pattern)
     add_executable(skill_${pat}_test skills/${pat}_test.cpp)
     target_link_libraries(skill_${pat}_test PRIVATE
         GTest::gtest GTest::gtest_main

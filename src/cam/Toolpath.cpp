@@ -1176,6 +1176,88 @@ Toolpath counterboreRingPatternToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── countersink-ring-pattern toolpath ─────────────────────────────────────
+// The grammar compound: N identical countersinks on a bolt circle (a flat-head
+// screw seat ring).  After an Executor replay the workpiece carries ONLY this
+// compound signature — the member countersink signatures are not kept — so the
+// ring needs its own generator: per instance i at angle start + i·360/N on the
+// pitch circle, the countersink plunge pair (pilot to pilot_depth_mm, chamfer
+// tool to cone_depth_mm) from the stamped entry plane (position_z_mm), all
+// instances in ONE toolpath like holePatternToolpath.  Params (apply): count,
+// bolt_circle_dia_mm, center_x/y_mm, position_z_mm, start_angle_deg, axis_dir,
+// pilot_dia/depth_mm, cone_top_dia_mm, cone_angle_deg, cone_depth_mm.  A
+// grammar-recovered signature may lack cone_depth_mm — derive it with the
+// atom's formula: (cone_top_dia − pilot_dia) / 2 / tan(cone_angle / 2).
+Toolpath countersinkRingPatternToolpath(const skill::FeatureSignature& sig)
+{
+    // The ring skill is authored ±Z-only (its validate rejects a tilted axis);
+    // a non-Z compound cannot be machined by the 3-axis-Z post, so fail visibly
+    // with the same empty radial-guard toolpath the dispatcher emits for the
+    // kZAxisGuarded skills instead of shipping a wrong vertical path.
+    if (!cutAxisIsZ(sig.params)) return emptyRadialToolpath(sig);
+
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const int    count    = sig.params.value("count", 0);
+    const double R        = sig.params.value("bolt_circle_dia_mm", 0.0) / 2.0;
+    const double cx       = sig.params.value("center_x_mm", 0.0);
+    const double cy       = sig.params.value("center_y_mm", 0.0);
+    const double zTop     = entryZ(sig.params);   // "position_z_mm", default 0
+    const double startDeg = sig.params.value("start_angle_deg", 0.0);
+    const double pilotDep = sig.params.value("pilot_depth_mm", 0.0);
+    const double topDia   = sig.params.value("cone_top_dia_mm", 0.0);
+    const double pilotDia = sig.params.value("pilot_dia_mm", 0.0);
+    const double angDeg   = sig.params.value("cone_angle_deg", 0.0);
+    double       coneDep  = sig.params.value("cone_depth_mm", 0.0);
+    if (coneDep <= 0.0 && topDia > pilotDia && angDeg > 0.0 && angDeg < 180.0) {
+        // A grammar-recovered signature carries the cone dims but not the
+        // derived depth — same derivation as countersink::computeConeDepth.
+        const double t = std::tan(angDeg * 0.5 * M_PI / 180.0);
+        if (t > 1e-9) coneDep = (topDia - pilotDia) * 0.5 / t;
+    }
+    // TIP-datum chamfer depth: the emitted G-code carries the tool TIP Z, and
+    // the near-universal chamfer/countersink tool is a POINTED cone — its tip
+    // must reach (cone_top/2)/tan(half) below the entry for the mouth to open
+    // to the full cone_top diameter (stopping at the frustum height coneDep
+    // would cut a mouth pilot_dia SMALLER than required).  The extra travel
+    // beyond coneDep lies inside the already-drilled pilot, so a piloted tool
+    // (cone small-end datum) over-plunges harmlessly into air.
+    double chamferTipDep = coneDep;
+    if (angDeg > 0.0 && angDeg < 180.0) {
+        const double t = std::tan(angDeg * 0.5 * M_PI / 180.0);
+        if (t > 1e-9) chamferTipDep = coneDep + (pilotDia * 0.5) / t;
+    }
+    const double feed     = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                   sig.tooling.feed_per_tooth_mm);
+
+    const double safe_z = zTop + kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    for (int i = 0; i < count; ++i) {
+        const double ang = (startDeg + i * 360.0 / count) * M_PI / 180.0;
+        const double x   = cx + R * std::cos(ang);
+        const double y   = cy + R * std::sin(ang);
+        // Per instance: the countersink's two coaxial plunges (order is
+        // immaterial for a re-synthesised depth-covering path — see the
+        // counterbore atom's note).
+        // [pilot] plunge to full pilot depth.
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),          0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - pilotDep), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),          0.0,  0, 0, 0 });
+        // [chamfer] plunge the pointed countersink tool TIP (see above).
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),               0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - chamferTipDep), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),               0.0,  0, 0, 0 });
+    }
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── countersink toolpath ──────────────────────────────────────────────────
 // A countersink is a PILOT hole with a CONICAL seat (a chamfered mouth for a
 // flat-head screw).  On the 3-axis-Z post: plunge the pilot to pilot_depth_mm,
@@ -1197,6 +1279,18 @@ Toolpath countersinkToolpath(const skill::FeatureSignature& sig)
     const double zTop     = entryZ(sig.params);
     const double pilotDep = sig.params.value("pilot_depth_mm", 0.0);
     const double coneDep  = sig.params.value("cone_depth_mm", 0.0);
+    const double pilotDia = sig.params.value("pilot_dia_mm", 0.0);
+    const double angDeg   = sig.params.value("cone_angle_deg", 0.0);
+    // TIP-datum chamfer depth (see countersinkRingPatternToolpath): a POINTED
+    // chamfer tool's tip must travel (pilot/2)/tan(half) past the frustum
+    // height so the mouth opens to the full cone_top diameter; the extra
+    // travel lies inside the already-drilled pilot (harmless for a piloted
+    // small-end-datum tool).
+    double chamferTipDep = coneDep;
+    if (angDeg > 0.0 && angDeg < 180.0) {
+        const double t = std::tan(angDeg * 0.5 * M_PI / 180.0);
+        if (t > 1e-9) chamferTipDep = coneDep + (pilotDia * 0.5) / t;
+    }
     const double feed     = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
                                                    sig.tooling.feed_per_tooth_mm);
 
@@ -1204,7 +1298,7 @@ Toolpath countersinkToolpath(const skill::FeatureSignature& sig)
     // feature's local work-plane frame.
     if (!cutAxisIsZ(sig.params)) {
         emitCoaxialPlungesInLocalFrame(tp, gp_Pnt(x, y, zTop), cutAxisDir(sig.params),
-                                       { pilotDep, coneDep }, feed);
+                                       { pilotDep, chamferTipDep }, feed);
         return tp;
     }
 
@@ -1214,11 +1308,10 @@ Toolpath countersinkToolpath(const skill::FeatureSignature& sig)
     tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),           0.0,  0, 0, 0 });
     tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - pilotDep), feed, 0, 0, 0 });
     tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),           0.0,  0, 0, 0 });
-    // [chamfer] plunge the countersink tool to the cone depth (the tool's cone
-    // half-angle equals cone_angle_deg/2; the toolpath just carries the tip Z).
-    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),           0.0,  0, 0, 0 });
-    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - coneDep),  feed, 0, 0, 0 });
-    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),           0.0,  0, 0, 0 });
+    // [chamfer] plunge the pointed countersink tool TIP (see above).
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),               0.0,  0, 0, 0 });
+    tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - chamferTipDep), feed, 0, 0, 0 });
+    tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),               0.0,  0, 0, 0 });
 
     tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
     return tp;
@@ -1614,6 +1707,13 @@ std::vector<Toolpath> generateAllToolpaths(
             // plunges from the ring params.  ±Z-only — it guards its own
             // radial case to the empty toolpath internally.
             out.push_back(counterboreRingPatternToolpath(sig));
+        } else if (sig.skill_id == "countersink_ring_pattern") {
+            // Same replay story as the counterbore ring: only the compound
+            // signature survives, so the generator regenerates the
+            // per-instance pilot + chamfer plunges from the ring params.
+            // ±Z-only — it guards its own radial case to the empty toolpath
+            // internally.
+            out.push_back(countersinkRingPatternToolpath(sig));
         } else if (sig.skill_id == "bore_cylindrical"   ||
                    sig.skill_id == "drill_through_hole" ||
                    sig.skill_id == "spot_drill"         ||

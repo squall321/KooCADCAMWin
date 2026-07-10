@@ -194,6 +194,17 @@ Toolpath reamToolpath(const skill::FeatureSignature& sig);
 // radial-guard toolpath.
 Toolpath counterboreRingPatternToolpath(const skill::FeatureSignature& sig);
 
+// countersink_ring_pattern → the grammar compound of N countersinks on a bolt
+// circle.  Same replay story as the counterbore ring (only the compound
+// signature survives), so the ring has its own generator: at each instance
+// angle (start + i·360/N on the pitch circle), the countersink plunge pair
+// (pilot to pilot_depth_mm, chamfer tool to cone_depth_mm — derived from
+// cone_top/pilot dia + cone_angle when a recovered signature lacks it) from
+// the stamped entry plane (position_z_mm), all instances in ONE toolpath like
+// holePatternToolpath.  The skill is ±Z-only; a non-Z axis emits the empty
+// radial-guard toolpath.
+Toolpath countersinkRingPatternToolpath(const skill::FeatureSignature& sig);
+
 // bore_with_shelf → two coaxial plunges (upper to upper_depth_mm, then lower to
 // upper_depth + lower_depth, since lower_depth is measured from the shelf).
 // multi_step_bore → one plunge per step at the CUMULATIVE depth (steps[] carry

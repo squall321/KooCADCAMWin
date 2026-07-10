@@ -901,6 +901,7 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
             "bolt_circle_pattern", "linear_hole_array", "rectangular_hole_grid",
             "linear_pattern", "circular_pattern",   // geometric pattern recognizers
             "counterbore_ring_pattern",             // counterbored bolt circle
+            "countersink_ring_pattern",             // countersunk bolt circle
         };
         // A consumed centre carries its compound's hole diameter and whether
         // bores (not just drills) belong to it — so we DON'T over-subsume an
