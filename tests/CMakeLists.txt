@@ -1624,10 +1624,3 @@ target_include_directories(integration_bearing_housing SYSTEM PRIVATE ${OpenCASC
 koo_apply_compiler_flags(integration_bearing_housing)
 add_test(NAME integration_bearing_housing COMMAND integration_bearing_housing)
 set_tests_properties(integration_bearing_housing PROPERTIES TIMEOUT 240 LABELS "integration")
-
-# ── TEMPORARY verifier probe (delete after verification) ──
-add_executable(verify_tilt_gate_probe re/verify_tilt_gate_probe.cpp)
-target_link_libraries(verify_tilt_gate_probe PRIVATE
-    koo_re koo_process koo_skills koo_engine koo_io koo_adapt)
-target_include_directories(verify_tilt_gate_probe SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-koo_apply_compiler_flags(verify_tilt_gate_probe)
