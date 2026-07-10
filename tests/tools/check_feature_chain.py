@@ -42,6 +42,7 @@ INFRA = {"Workpiece.cpp", "Stock.cpp"}
 DELEGATION_WHITELIST = {
     "adaptive_clearing.cpp",        # wpNew = pocketOut.workpiece
     "bolt_circle_pattern.cpp",      # current = drill_hole::apply(...).workpiece per hole
+    "counterbore_ring_pattern.cpp", # current = counterbore::apply(...).workpiece per instance
     "linear_hole_array.cpp",        # current = drill_hole::apply(...).workpiece per hole
     "rectangular_hole_grid.cpp",    # current = drill_hole::apply(...).workpiece per hole
     "coaxial_step_bore.cpp",        # current = drill_hole::apply(...).workpiece per step

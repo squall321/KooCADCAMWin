@@ -950,11 +950,11 @@ koo_add_skill_test(surface_fill_4_edges)
 # slice 12 — CAD-native patterns (5)
 # linear/circular pattern tests also exercise re::inferProcessPlan (pattern
 # subsumption of individual drills), so they additionally link koo_re/process.
-foreach(pat linear_pattern circular_pattern)
+foreach(pat linear_pattern circular_pattern counterbore_ring_pattern)
     add_executable(skill_${pat}_test skills/${pat}_test.cpp)
     target_link_libraries(skill_${pat}_test PRIVATE
         GTest::gtest GTest::gtest_main
-        koo_re koo_process koo_skills koo_engine koo_io koo_adapt)
+        koo_re koo_process koo_cam koo_skills koo_engine koo_io koo_adapt)
     target_include_directories(skill_${pat}_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
     koo_apply_compiler_flags(skill_${pat}_test)
     add_test(NAME skill_${pat} COMMAND skill_${pat}_test)
@@ -1624,3 +1624,10 @@ target_include_directories(integration_bearing_housing SYSTEM PRIVATE ${OpenCASC
 koo_apply_compiler_flags(integration_bearing_housing)
 add_test(NAME integration_bearing_housing COMMAND integration_bearing_housing)
 set_tests_properties(integration_bearing_housing PROPERTIES TIMEOUT 240 LABELS "integration")
+
+# ── TEMPORARY verifier probe (delete after verification) ──
+add_executable(verify_tilt_gate_probe re/verify_tilt_gate_probe.cpp)
+target_link_libraries(verify_tilt_gate_probe PRIVATE
+    koo_re koo_process koo_skills koo_engine koo_io koo_adapt)
+target_include_directories(verify_tilt_gate_probe SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(verify_tilt_gate_probe)

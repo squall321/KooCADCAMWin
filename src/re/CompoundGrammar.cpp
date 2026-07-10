@@ -110,6 +110,27 @@ bool fitCircleXY(const std::vector<Hole>& pts, double& cx, double& cy,
     return true;
 }
 
+// TRUE when the points sit EVENLY spaced around the fitted circle centre: every
+// adjacent angular gap (including the wrap-around) is within 25 % of the nominal
+// 360°/n step.  A uniform-ring compound replays instance i at start + i·360/n,
+// so an uneven concyclic layout (clocked/keyed or partial bolt pattern) must be
+// refused — the Kåsa fit alone cannot reject it (exact for any 3 points).
+bool anglesEvenOnCircle(const std::vector<Hole>& pts, double cx, double cy)
+{
+    if (pts.size() < 3) return false;
+    std::vector<double> angles;
+    angles.reserve(pts.size());
+    for (const auto& p : pts) angles.push_back(std::atan2(p.y - cy, p.x - cx));
+    std::sort(angles.begin(), angles.end());
+    const double meanA = (2.0 * M_PI) / static_cast<double>(pts.size());
+    double maxDev = 0.0;
+    for (std::size_t k = 1; k < angles.size(); ++k)
+        maxDev = std::max(maxDev, std::abs((angles[k] - angles[k - 1]) - meanA));
+    maxDev = std::max(maxDev,
+        std::abs((2.0 * M_PI - (angles.back() - angles.front())) - meanA));
+    return meanA < 1e-9 || maxDev / meanA <= 0.25;
+}
+
 // Total-least-squares (PCA) line fit of XY points.  Returns the unit direction
 // (dirx,diry) and centroid (cx,cy), the max PERPENDICULAR residual, and each
 // point's signed projection onto the direction (for pitch analysis).  Returns
@@ -281,8 +302,16 @@ void matchHolePatterns(const std::vector<Hole>& holes,
             for (int fid : h.faces) cylFaceIds.push_back(fid);
 
         // ── bolt-circle ────────────────────────────────────────────────
+        // ANGULAR EVENNESS is required alongside the circle fit: replay places
+        // hole i at start + i*360/n, so UNEVEN concyclic holes (a clocked/keyed
+        // or partial pattern) must NOT be recovered as a uniform ring — they
+        // would silently regenerate at wrong angular positions.  (The Kåsa fit
+        // is exact for ANY 3 non-collinear points, so the residual alone cannot
+        // reject an uneven trio.)  25 % of the nominal step, like the linear
+        // array's pitch gate.
         double cx, cy, r, cresid;
-        if (fitCircleXY(pts, cx, cy, r, cresid) && cresid <= 0.3 && r >= dia) {
+        if (fitCircleXY(pts, cx, cy, r, cresid) && cresid <= 0.3 && r >= dia &&
+            anglesEvenOnCircle(pts, cx, cy)) {
             for (std::size_t j : grp) used[j] = true;
             skill::RecognizedFeature rf;
             // Phase: the seed hole's angle on the circle, so regeneration places
@@ -476,6 +505,220 @@ void matchCoaxialStepBores(const std::vector<Hole>& sections,
     }
 }
 
+// PATTERN: counterbored bolt circle — >= 3 recognised counterbores of IDENTICAL
+// pilot/seat dimensions on a common vertical axis whose centres fit one circle
+// (a screw-head seat ring: watch casebacks, flanged covers).  The hole-pattern
+// grammar above sees the same geometry as TWO equal-diameter rings (pilots,
+// seats) whose replay leaves every pilot short by the seat depth (~18 % removed
+// volume, measured), while the individual counterbore candidates — the complete
+// two-diameter explanation — are blocked in dedupe by the rings' face claims.
+// This matcher emits the ONE candidate whose face set (the union of every
+// member's pilot/seat/entry/shoulder faces) strictly contains the pilot ring,
+// the seat ring AND each member, so dedupe's strict-superset rule collapses all
+// of them into a single editable counterbore_ring_pattern step.
+void matchCounterboreRings(const std::vector<skill::RecognizedFeature>& candidates,
+                           std::vector<skill::RecognizedFeature>& out)
+{
+    struct CB {
+        double x, y, z;
+        double ax, ay, az;                          // recovered drilling axis
+        double pilotDia, pilotDepth, seatDia, seatDepth;
+        int    entryFaceId = -1;                    // shared entry plane (Executor datum)
+        json   faceIds;                             // OWN faces only (walls + shoulder)
+    };
+    std::vector<CB> cbs;
+    for (const auto& c : candidates) {
+        if (c.skill_id != "counterbore") continue;
+        if (c.confidence < 0.7) continue;           // loose-junction members excluded
+        const json& p = c.recovered_params;
+        if (!p.is_object()) continue;
+        if (!p.contains("axis_dir") || !p["axis_dir"].is_array() ||
+            p["axis_dir"].size() != 3)
+            continue;
+        CB cb;
+        cb.ax = p["axis_dir"][0].get<double>();
+        cb.ay = p["axis_dir"][1].get<double>();
+        cb.az = p["axis_dir"][2].get<double>();
+        // Vertical rings only: counterbore::Input carries no z position, so only
+        // a ±Z ring is regenerable (matching the planar grammar scope above).
+        if (std::abs(cb.az) < 0.99) continue;
+        cb.x = p.value("position_x_mm", 0.0);
+        cb.y = p.value("position_y_mm", 0.0);
+        cb.z = p.value("position_z_mm", 0.0);
+        cb.pilotDia   = p.value("pilot_dia_mm", 0.0);
+        cb.pilotDepth = p.value("pilot_depth_mm", 0.0);
+        cb.seatDia    = p.value("seat_dia_mm", 0.0);
+        cb.seatDepth  = p.value("seat_depth_mm", 0.0);
+        if (cb.pilotDia <= 0.0 || cb.seatDia <= cb.pilotDia) continue;
+        // Manufacturable floor: the composed counterbore::apply hard-rejects a
+        // pilot under 0.8 mm (DFM-002), so a ring of sub-mm pilots would be an
+        // UN-REPLAYABLE plan step — leave those members to their own candidates.
+        if (cb.pilotDia < 0.8) continue;
+        // The member's OWN faces (seat/pilot walls + step shoulder).  The shared
+        // ENTRY PLANE is deliberately NOT part of the dedupe union: including it
+        // made the first ring on a face block every other counterbore feature on
+        // the same face (intersecting sets, no containment).  It is kept
+        // separately as the Executor's entry datum.
+        cb.faceIds = json::array();
+        const json& mg = c.matched_geometry;
+        if (mg.is_object()) {
+            for (const char* k : { "seat_cyl_face_id", "pilot_cyl_face_id",
+                                   "shoulder_face_id" })
+                if (mg.contains(k) && mg[k].is_number_integer())
+                    cb.faceIds.push_back(mg[k].get<int>());
+            if (mg.contains("entry_face_id") && mg["entry_face_id"].is_number_integer())
+                cb.entryFaceId = mg["entry_face_id"].get<int>();
+        }
+        cbs.push_back(std::move(cb));
+    }
+    if (cbs.size() < 3) return;
+
+    // Group by identical pilot/seat dimensions + same axis SIGN (a fastener
+    // ring is uniform; +Z and -Z entries are different rings) + COPLANAR entry
+    // (different-deck counterbores of a stepped part are never one ring).
+    std::vector<bool> used(cbs.size(), false);
+    for (size_t i = 0; i < cbs.size(); ++i) {
+        if (used[i]) continue;
+        std::vector<size_t> grp{ i };
+        for (size_t j = i + 1; j < cbs.size(); ++j) {
+            if (used[j]) continue;
+            if (cbs[j].az * cbs[i].az > 0.0 &&
+                std::abs(cbs[j].z          - cbs[i].z)          < 0.2 &&
+                std::abs(cbs[j].pilotDia   - cbs[i].pilotDia)   < 0.1 &&
+                std::abs(cbs[j].seatDia    - cbs[i].seatDia)    < 0.1 &&
+                std::abs(cbs[j].pilotDepth - cbs[i].pilotDepth) < 0.2 &&
+                std::abs(cbs[j].seatDepth  - cbs[i].seatDepth)  < 0.2)
+                grp.push_back(j);
+        }
+        if (grp.size() < 3) continue;
+
+        // EXTRACT rings from the dims-group by TRIPLE-SEEDED inlier circles: for
+        // every member triple take its circumcircle and count members within
+        // 0.35 mm of it; the largest inlier set is one candidate ring.  This
+        // handles what a single global fit cannot: two SIDE-BY-SIDE rings of the
+        // same dimensions (each triple's circle collects only its own ring),
+        // CONCENTRIC rings (different radii → different circles), and stray
+        // identical counterbores off the circle (never inliers).  n is tiny
+        // (a dims-group is a handful of fasteners), so O(n³) triples is free.
+        // Members of a candidate that fails the gates below are DROPPED from
+        // further ring extraction but NOT consumed — they stay available as
+        // individual counterbore candidates (the correct fallback explanation).
+        std::vector<size_t> remaining = grp;
+        while (remaining.size() >= 3) {
+            std::vector<size_t> ring;
+            double bcx = 0, bcy = 0, brr = 0;
+            for (size_t a = 0; a < remaining.size(); ++a)
+                for (size_t b = a + 1; b < remaining.size(); ++b)
+                    for (size_t c = b + 1; c < remaining.size(); ++c) {
+                        std::vector<Hole> tri(3);
+                        tri[0].x = cbs[remaining[a]].x; tri[0].y = cbs[remaining[a]].y;
+                        tri[1].x = cbs[remaining[b]].x; tri[1].y = cbs[remaining[b]].y;
+                        tri[2].x = cbs[remaining[c]].x; tri[2].y = cbs[remaining[c]].y;
+                        double tx, ty, tr, tres;
+                        if (!fitCircleXY(tri, tx, ty, tr, tres)) continue;
+                        std::vector<size_t> in;
+                        for (size_t j : remaining)
+                            if (std::abs(std::hypot(cbs[j].x - tx, cbs[j].y - ty) - tr)
+                                <= 0.35)
+                                in.push_back(j);
+                        if (in.size() > ring.size()) {
+                            ring = std::move(in); bcx = tx; bcy = ty; brr = tr;
+                        }
+                    }
+            if (ring.size() < 3) break;
+            // Remove the candidate's members from further extraction up front;
+            // `used` is only set if the ring passes every gate and is emitted.
+            {
+                std::vector<size_t> rest;
+                for (size_t j : remaining)
+                    if (std::find(ring.begin(), ring.end(), j) == ring.end())
+                        rest.push_back(j);
+                remaining = std::move(rest);
+            }
+
+            // Refit on the full inlier set for the emitted parameters.
+            std::vector<Hole> pts;
+            pts.reserve(ring.size());
+            for (size_t j : ring) {
+                Hole h{};
+                h.x = cbs[j].x; h.y = cbs[j].y; h.z = cbs[j].z;
+                pts.push_back(std::move(h));
+            }
+            double cx, cy, rr, cresid;
+            if (!fitCircleXY(pts, cx, cy, rr, cresid)) continue;
+            if (cresid > 0.3) continue;
+            (void)bcx; (void)bcy; (void)brr;
+            // PCD sanity, aligned with the skill's validate (bolt_circle_dia_mm
+            // must exceed seat_dia_mm — 2rr <= seat means seats overlap centre).
+            if (2.0 * rr <= cbs[ring.front()].seatDia) continue;
+            // A near-collinear row fits a HUGE circumcircle exactly; a genuine
+            // ring's radius never exceeds the members' own spread.
+            double maxPair = 0.0;
+            for (size_t a = 0; a < ring.size(); ++a)
+                for (size_t b = a + 1; b < ring.size(); ++b)
+                    maxPair = std::max(maxPair,
+                        std::hypot(cbs[ring[a]].x - cbs[ring[b]].x,
+                                   cbs[ring[a]].y - cbs[ring[b]].y));
+            if (rr > maxPair) continue;
+            // ANGULAR EVENNESS: apply() regenerates instances at start + i*360/n,
+            // so the members must actually BE evenly spaced — an uneven concyclic
+            // layout (clocked/keyed or partial bolt pattern) falls through,
+            // leaving the individual counterbores as the correct explanation.
+            if (!anglesEvenOnCircle(pts, cx, cy)) continue;
+
+            for (size_t j : ring) used[j] = true;
+
+            // Phase from the first member so replay keeps the real positions.
+            const double startDeg =
+                std::atan2(cbs[ring.front()].y - cy, cbs[ring.front()].x - cx)
+                * 180.0 / M_PI;
+            json holeCenters = json::array();
+            json faceUnion   = json::array();
+            for (size_t j : ring) {
+                // Subsumption backup targets the DRILL atoms, whose recovered
+                // entry is the PILOT MOUTH — one seat-depth INTO the part from
+                // the ring's entry plane along the drilling direction.
+                const double mouthZ =
+                    cbs[j].z + cbs[j].seatDepth * (cbs[j].az > 0.0 ? 1.0 : -1.0);
+                holeCenters.push_back({ cbs[j].x, cbs[j].y, mouthZ });
+                for (const auto& f : cbs[j].faceIds) faceUnion.push_back(f);
+            }
+
+            skill::RecognizedFeature rf;
+            rf.skill_id         = "counterbore_ring_pattern";
+            rf.recovered_params = {
+                { "count",              static_cast<int>(ring.size()) },
+                { "bolt_circle_dia_mm", 2.0 * rr },
+                { "center_x_mm",        cx },
+                { "center_y_mm",        cy },
+                { "position_z_mm",      cbs[ring.front()].z },   // ring entry plane
+                { "axis_dir",           { cbs[ring.front()].ax, cbs[ring.front()].ay,
+                                          cbs[ring.front()].az } },
+                { "pilot_dia_mm",       cbs[ring.front()].pilotDia },
+                { "pilot_depth_mm",     cbs[ring.front()].pilotDepth },
+                { "seat_dia_mm",        cbs[ring.front()].seatDia },
+                { "seat_depth_mm",      cbs[ring.front()].seatDepth },
+                { "start_angle_deg",    startDeg },
+                { "hole_centers",       holeCenters },   // pilot mouths (subsumption)
+                { "hole_dia_mm",        cbs[ring.front()].pilotDia },
+            };
+            // The shared entry plane anchors the Executor's datum (parse prefers
+            // entry_face_id over the by-normal fallback) — kept OUT of the dedupe
+            // face union above so two rings on one face can coexist.
+            if (cbs[ring.front()].entryFaceId >= 0)
+                rf.recovered_params["entry_face_id"] = cbs[ring.front()].entryFaceId;
+            rf.confidence       = std::min(0.95, 0.9 + (0.3 - cresid) * 0.1);
+            rf.matched_geometry = {
+                { "is_compound", true }, { "source", "grammar:counterbore_ring" },
+                { "fit_residual_mm", cresid },
+                { "grounded_atom_count", static_cast<int>(ring.size()) },
+                { "cyl_face_ids", faceUnion },
+            };
+            out.push_back(std::move(rf));
+        }
+    }
+}
+
 // Assemble recognizer cylinder atoms into physical sections: merge atoms that
 // share a location (within tol), a parallel axis and a diameter; sum each
 // distinct face's wrap so a section split across STEP faces still reads as a
@@ -559,6 +802,11 @@ recognizeCompounds(const std::vector<skill::RecognizedFeature>& candidates)
     for (auto& h : assembleHoles(candidates, /*includeBores=*/true))
         if (h.wrap >= kHoleWrapMin) sections.push_back(std::move(h));
     matchCoaxialStepBores(sections, out);
+
+    // Counterbored bolt circle: grounded in the COUNTERBORE candidates directly
+    // (not Hole atoms) — the one candidate that owns pilot ring + seat ring +
+    // members, so dedupe collapses them instead of replaying pilots seat-short.
+    matchCounterboreRings(candidates, out);
     return out;
 }
 

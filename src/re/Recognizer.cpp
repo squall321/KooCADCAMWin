@@ -738,7 +738,11 @@ std::string geomFingerprint(const skill::RecognizedFeature& c)
     if (!p.is_object()) return "";
     static const char* kDimKeys[] = {
         "diameter_mm", "seat_dia_mm", "pilot_dia_mm", "bore_dia_mm",
-        "position_x_mm", "position_y_mm", "position_z_mm", "depth_mm"
+        "position_x_mm", "position_y_mm", "position_z_mm", "depth_mm",
+        // Pattern-compound centres: two same-dimension rings at DIFFERENT
+        // centres are different features — without these keys their
+        // fingerprints collide and the second ring is silently dropped.
+        "center_x_mm", "center_y_mm"
     };
     std::string key = c.skill_id;
     bool any = false;
@@ -896,6 +900,7 @@ inferProcessPlan(const skill::Workpiece& wp, double min_confidence)
         static const std::unordered_set<std::string> kHolePatternCompounds = {
             "bolt_circle_pattern", "linear_hole_array", "rectangular_hole_grid",
             "linear_pattern", "circular_pattern",   // geometric pattern recognizers
+            "counterbore_ring_pattern",             // counterbored bolt circle
         };
         // A consumed centre carries its compound's hole diameter and whether
         // bores (not just drills) belong to it — so we DON'T over-subsume an

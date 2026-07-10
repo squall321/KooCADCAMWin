@@ -8,6 +8,7 @@ add_library(koo_skills STATIC
     drill_hole.cpp
     # B1.2 grammar — generative compounds (recognition lives in koo_re)
     bolt_circle_pattern.cpp
+    counterbore_ring_pattern.cpp
     linear_hole_array.cpp
     rectangular_hole_grid.cpp
     coaxial_step_bore.cpp

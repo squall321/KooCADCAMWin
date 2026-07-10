@@ -18,6 +18,7 @@
 #include "skills/linear_pattern.hpp"
 #include "skills/circular_pattern.hpp"
 #include "skills/bolt_circle_pattern.hpp"
+#include "skills/counterbore_ring_pattern.hpp"
 #include "skills/linear_hole_array.hpp"
 #include "skills/rectangular_hole_grid.hpp"
 #include "skills/coaxial_step_bore.hpp"
@@ -536,6 +537,29 @@ sk::bolt_circle_pattern::Input parseBoltCirclePattern(const json& p)
     in.center_y_mm        = jdouble(p, "center_y_mm", 0.0);
     in.depth_mm           = jdouble(p, "depth_mm", 0.0);
     in.through_hole       = jbool  (p, "through_hole", true);
+    in.start_angle_deg    = jdouble(p, "start_angle_deg", 0.0);
+    return in;
+}
+
+sk::counterbore_ring_pattern::Input parseCounterboreRingPattern(const json& p)
+{
+    sk::counterbore_ring_pattern::Input in;
+    in.axis_dir = parseAxisDir(p);
+    // Default the entry face to the one facing OPPOSITE the drilling direction
+    // (the grammar's recovered_params carry axis_dir but no entry face).
+    if (p.contains("entry_face") || p.contains("entry_face_id"))
+        in.entry_face = parseFaceDatum(p);
+    else
+        in.entry_face = sk::FaceByNormal{
+            gp_Dir(-in.axis_dir.X(), -in.axis_dir.Y(), -in.axis_dir.Z()) };
+    in.count              = static_cast<int>(jdouble(p, "count", 0.0));
+    in.bolt_circle_dia_mm = jdouble(p, "bolt_circle_dia_mm", 0.0);
+    in.center_x_mm        = jdouble(p, "center_x_mm", 0.0);
+    in.center_y_mm        = jdouble(p, "center_y_mm", 0.0);
+    in.pilot_dia_mm       = jdouble(p, "pilot_dia_mm", 0.0);
+    in.pilot_depth_mm     = jdouble(p, "pilot_depth_mm", 0.0);
+    in.seat_dia_mm        = jdouble(p, "seat_dia_mm", 0.0);
+    in.seat_depth_mm      = jdouble(p, "seat_depth_mm", 0.0);
     in.start_angle_deg    = jdouble(p, "start_angle_deg", 0.0);
     return in;
 }
@@ -4504,6 +4528,9 @@ std::unordered_map<std::string, Executor::SkillFn> buildDispatchTable()
     };
     t[sk::bolt_circle_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::bolt_circle_pattern::apply(wp, parseBoltCirclePattern(p));
+    };
+    t[sk::counterbore_ring_pattern::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
+        return sk::counterbore_ring_pattern::apply(wp, parseCounterboreRingPattern(p));
     };
     t[sk::linear_hole_array::kSkillId] = [](const sk::Workpiece& wp, const json& p) {
         return sk::linear_hole_array::apply(wp, parseLinearHoleArray(p));

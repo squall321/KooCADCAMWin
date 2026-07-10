@@ -1117,6 +1117,65 @@ Toolpath counterboreToolpath(const skill::FeatureSignature& sig)
     return tp;
 }
 
+// ── counterbore-ring-pattern toolpath ─────────────────────────────────────
+// The grammar compound: N identical counterbores on a bolt circle (a screw-head
+// seat ring).  After an Executor replay the workpiece carries ONLY this compound
+// signature — the member counterbore signatures are not kept — so the ring needs
+// its own generator: per instance i at angle start + i·360/N on the pitch circle,
+// the counterbore plunge pair (seat to seat_depth_mm, pilot to pilot_depth_mm)
+// from the stamped entry plane (position_z_mm), all instances in ONE toolpath
+// like holePatternToolpath.  Params (apply): count, bolt_circle_dia_mm,
+// center_x/y_mm, position_z_mm, start_angle_deg, axis_dir, pilot_dia/depth_mm,
+// seat_dia/depth_mm.
+Toolpath counterboreRingPatternToolpath(const skill::FeatureSignature& sig)
+{
+    // The ring skill is authored ±Z-only (its validate rejects a tilted axis);
+    // a non-Z compound cannot be machined by the 3-axis-Z post, so fail visibly
+    // with the same empty radial-guard toolpath the dispatcher emits for the
+    // kZAxisGuarded skills instead of shipping a wrong vertical path.
+    if (!cutAxisIsZ(sig.params)) return emptyRadialToolpath(sig);
+
+    Toolpath tp;
+    tp.feature_skill_id = sig.skill_id;
+    tp.tooling          = sig.tooling;
+    tp.tool_id          = makeToolId(sig.tooling);
+    tp.tool_dia_mm      = sig.tooling.tool_dia_mm;
+    tp.tool_length_mm   = sig.tooling.tool_length_mm;
+    tp.spindle_rpm      = sfmToRpm(sig.tooling.cutting_speed_sfm, sig.tooling.tool_dia_mm);
+
+    const int    count    = sig.params.value("count", 0);
+    const double R        = sig.params.value("bolt_circle_dia_mm", 0.0) / 2.0;
+    const double cx       = sig.params.value("center_x_mm", 0.0);
+    const double cy       = sig.params.value("center_y_mm", 0.0);
+    const double zTop     = entryZ(sig.params);   // "position_z_mm", default 0
+    const double startDeg = sig.params.value("start_angle_deg", 0.0);
+    const double pilotDep = sig.params.value("pilot_depth_mm", 0.0);
+    const double seatDep  = sig.params.value("seat_depth_mm", 0.0);
+    const double feed     = computeFeed_mm_per_min(tp.spindle_rpm, sig.tooling.flute_count,
+                                                   sig.tooling.feed_per_tooth_mm);
+
+    const double safe_z = zTop + kSafeZAboveStock_mm;
+    using M = PathSegment::Move;
+    for (int i = 0; i < count; ++i) {
+        const double ang = (startDeg + i * 360.0 / count) * M_PI / 180.0;
+        const double x   = cx + R * std::cos(ang);
+        const double y   = cy + R * std::sin(ang);
+        // Per instance: the counterbore's two coaxial plunges (order is
+        // immaterial for a re-synthesised depth-covering path — see the
+        // counterbore atom's note).
+        // [seat] plunge to the (shallower) seat depth.
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),          0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - seatDep),  feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),          0.0,  0, 0, 0 });
+        // [pilot] plunge to full pilot depth.
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),          0.0,  0, 0, 0 });
+        tp.segments.push_back({ M::Linear, gp_Pnt(x, y, zTop - pilotDep), feed, 0, 0, 0 });
+        tp.segments.push_back({ M::Rapid,  gp_Pnt(x, y, safe_z),          0.0,  0, 0, 0 });
+    }
+    tp.est_cycle_time_s = estimateCycleTime_s(tp.segments, feed);
+    return tp;
+}
+
 // ── countersink toolpath ──────────────────────────────────────────────────
 // A countersink is a PILOT hole with a CONICAL seat (a chamfered mouth for a
 // flat-head screw).  On the 3-axis-Z post: plunge the pilot to pilot_depth_mm,
@@ -1549,6 +1608,12 @@ std::vector<Toolpath> generateAllToolpaths(
         } else if (sig.skill_id == "linear_pattern" ||
                    sig.skill_id == "circular_pattern") {
             out.push_back(holePatternToolpath(sig));
+        } else if (sig.skill_id == "counterbore_ring_pattern") {
+            // The grammar compound survives replay ALONE (member counterbore
+            // sigs are dropped); the generator regenerates the per-instance
+            // plunges from the ring params.  ±Z-only — it guards its own
+            // radial case to the empty toolpath internally.
+            out.push_back(counterboreRingPatternToolpath(sig));
         } else if (sig.skill_id == "bore_cylindrical"   ||
                    sig.skill_id == "drill_through_hole" ||
                    sig.skill_id == "spot_drill"         ||
