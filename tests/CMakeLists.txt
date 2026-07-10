@@ -1313,6 +1313,20 @@ koo_apply_compiler_flags(plan_editor_test)
 add_test(NAME plan_editor COMMAND plan_editor_test)
 set_tests_properties(plan_editor PROPERTIES TIMEOUT 60 LABELS "process")
 
+# ── Layer 5 cross-product FeatureTransfer tests ───────────────
+add_executable(feature_transfer_test adapt/feature_transfer_test.cpp)
+target_link_libraries(feature_transfer_test PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_adapt
+    koo_process
+    koo_skills
+    koo_engine
+)
+target_include_directories(feature_transfer_test SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(feature_transfer_test)
+add_test(NAME adapt_feature_transfer COMMAND feature_transfer_test)
+set_tests_properties(adapt_feature_transfer PROPERTIES TIMEOUT 60 LABELS "process")
+
 # ── Layer 5 LlmBridge tests ───────────────────────────────────
 add_executable(llm_bridge_test adapt/llm_bridge_test.cpp)
 target_link_libraries(llm_bridge_test PRIVATE
@@ -1570,6 +1584,20 @@ target_include_directories(integration_frame_reframe SYSTEM PRIVATE ${OpenCASCAD
 koo_apply_compiler_flags(integration_frame_reframe)
 add_test(NAME integration_frame_reframe COMMAND integration_frame_reframe)
 set_tests_properties(integration_frame_reframe PROPERTIES TIMEOUT 180 LABELS "integration")
+
+# ── Integration: cross-product feature transfer — watch bezel ring → phone ─
+# build watch+phone -> geometric recognize (annular_groove) -> transferFeature
+# (scale positions, preserve intrinsics) -> execute on phone -> volume + DFM +
+# re-recognition, all measured.
+add_executable(integration_feature_transfer_watch_to_phone
+    integration/feature_transfer_watch_to_phone_test.cpp)
+target_link_libraries(integration_feature_transfer_watch_to_phone PRIVATE
+    GTest::gtest GTest::gtest_main
+    koo_skills koo_process koo_re koo_io koo_parts koo_engine koo_adapt)
+target_include_directories(integration_feature_transfer_watch_to_phone SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+koo_apply_compiler_flags(integration_feature_transfer_watch_to_phone)
+add_test(NAME integration_feature_transfer_watch_to_phone COMMAND integration_feature_transfer_watch_to_phone)
+set_tests_properties(integration_feature_transfer_watch_to_phone PROPERTIES TIMEOUT 180 LABELS "integration")
 
 # ── Integration: modify a foreign hole in place + re-verify (koo_modify core) ─
 add_executable(integration_modify_in_place

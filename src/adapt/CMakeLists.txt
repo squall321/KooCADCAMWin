@@ -2,6 +2,7 @@
 # Layer 5 — typed editor + NL stub over ProcessPlan.
 
 add_library(koo_adapt STATIC
+    FeatureTransfer.cpp
     PlanEditor.cpp
     NaturalLanguageStub.cpp
     LlmBridge.cpp
@@ -25,6 +26,10 @@ target_link_libraries(koo_adapt
         koo_process
         nlohmann_json::nlohmann_json
 )
+
+# spdlog — debug traces in FeatureTransfer.cpp (same pattern as the skills
+# layer, where it is also PRIVATE).  No public header exposes spdlog types.
+target_link_libraries(koo_adapt PRIVATE spdlog::spdlog)
 
 # WinHTTP — used by LlmBridge.cpp for the real Anthropic Claude API call.
 # Ships with Windows; no vcpkg dep.  PRIVATE because no public header
