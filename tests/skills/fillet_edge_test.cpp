@@ -6,7 +6,11 @@
 
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
+#include "skills/drill_hole.hpp"
 #include "skills/fillet_edge.hpp"
+#include "skills/mill_slot.hpp"
+
+#include <memory>
 
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
@@ -140,4 +144,44 @@ TEST(SkillFilletEdge, NoMatchingEdgesThrows)
     in.radius_mm     = 1.0;
 
     EXPECT_THROW(skill::fillet_edge::apply(*stock, in), skill::SkillError);
+}
+
+// ─── 6. SPLIT hole walls are not fillet blends (summed-wrap exclusion) ─────
+// A slot crossing a drilled hole SPLITS its cylindrical wall into partial
+// faces; foreign STEP kernels do the same.  Each partial face passes a naive
+// per-face wrap gate, and several same-radius partials then cluster into a
+// bogus "rim-fillet" (measured pre-fix: 4 faces → confidence 0.90) that
+// subsumes the real holes in dedupe.  The recogniser must merge COAXIAL
+// same-radius faces and gate on the SUMMED wrap.
+TEST(SkillFilletEdge, SplitHoleWallsAreNotFilletBlends)
+{
+    // Two d6 holes crossed by one slot → four partial wall faces (r = 3).
+    auto stock = skill::createCuboidStock(60.0, 60.0, 20.0);
+    std::shared_ptr<skill::Workpiece> wp = stock;
+    for (double hx : { 20.0, 40.0 }) {
+        skill::drill_hole::Input h;
+        h.entry_face    = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+        h.position_x_mm = hx;
+        h.position_y_mm = 30.0;
+        h.axis_dir      = gp_Dir(0, 0, -1);
+        h.diameter_mm   = 6.0;
+        h.depth_mm      = 8.0;
+        wp = skill::drill_hole::apply(*wp, h).workpiece;
+    }
+    skill::mill_slot::Input s;
+    s.entry_face  = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    s.start_x_mm  = 12.0;  s.start_y_mm = 30.0;
+    s.end_x_mm    = 48.0;  s.end_y_mm   = 30.0;
+    s.width_mm    = 4.0;                       // narrower than the d6 holes
+    s.depth_mm    = 4.0;                       // upper half of the walls only
+    wp = skill::mill_slot::apply(*wp, s).workpiece;
+
+    skill::Workpiece foreign(wp->shape());
+    const auto cands = skill::fillet_edge::recognize(foreign);
+    for (const auto& c : cands) {
+        const double r = c.recovered_params.value("radius_mm", -1.0);
+        EXPECT_FALSE(std::abs(r - 3.0) < 0.1)
+            << "split hole-wall partials (r=3) must never cluster into a "
+               "fillet blend (summed wrap identifies them as one wall)";
+    }
 }

@@ -10,6 +10,7 @@
 #include <BRep_Tool.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
@@ -23,6 +24,7 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #ifndef M_PI
@@ -332,6 +334,66 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     std::vector<RecognizedFeature> out;
     const double radTol = 1e-3;
 
+    // ── HOLE-WALL exclusion (summed wrap over split faces) ────────────────
+    // A fillet blend is a PARTIAL cylindrical strip that rounds an edge — its
+    // surface wraps only a fraction of a full circle (typically ≤ π).  A
+    // drilled/bored HOLE WALL is a FULL (≈2π) cylinder and must NOT be
+    // mistaken for a fillet: a ring of same-radius holes was clustering as a
+    // bogus 0.90 "rim-fillet sweep" that then subsumed the real holes.
+    //
+    // Crucially the wall may be SPLIT into several partial faces (foreign
+    // STEP kernels split cylinders; a slot crossing a hole splits its wall),
+    // each of which passes a naive per-face gate.  So we mirror the grammar's
+    // assembleHoles: merge COAXIAL, SAME-RADIUS cylindrical faces and gate on
+    // their SUMMED wrap — a physical wall reads as a wall no matter how many
+    // faces it arrives in.  (A genuine straight-edge fillet is a lone strip;
+    // distinct fillets in practice share a radius but not an axis LINE.  The
+    // one exotic false-negative: 4+ COLLINEAR quarter-round fillets on a
+    // single axis line would sum past the gate and go unrecognised — a
+    // recognition miss only, never wrong geometry.)
+    struct CylFace { int faceIdx; gp_Ax1 axis; double radius, wrap; };
+    std::vector<CylFace> cylFaces;
+    for (int fIdx = 0; fIdx < wp.faceCount(); ++fIdx) {
+        BRepAdaptor_Surface surf(wp.face(fIdx));
+        if (surf.GetType() != GeomAbs_Cylinder) continue;
+        CylFace cf;
+        cf.faceIdx = fIdx;
+        cf.axis    = surf.Cylinder().Axis();
+        cf.radius  = surf.Cylinder().Radius();
+        cf.wrap    = surf.LastUParameter() - surf.FirstUParameter();
+        cylFaces.push_back(cf);
+    }
+    auto coaxial = [](const gp_Ax1& a, const gp_Ax1& b) {
+        const gp_Dir& da = a.Direction();
+        const gp_Dir& db = b.Direction();
+        if (std::abs(da.X() * db.X() + da.Y() * db.Y() + da.Z() * db.Z()) < 0.999)
+            return false;
+        gp_Vec v(a.Location(), b.Location());
+        gp_Vec ax(da.X(), da.Y(), da.Z());
+        return (v - ax * v.Dot(ax)).Magnitude() < 0.05;   // same axis LINE
+    };
+    std::unordered_set<int> holeWallFaces;
+    {
+        std::vector<bool> grouped(cylFaces.size(), false);
+        for (size_t i = 0; i < cylFaces.size(); ++i) {
+            if (grouped[i]) continue;
+            std::vector<size_t> grp{ i };
+            grouped[i] = true;
+            double wrapSum = cylFaces[i].wrap;
+            for (size_t j = i + 1; j < cylFaces.size(); ++j) {
+                if (grouped[j]) continue;
+                if (std::abs(cylFaces[j].radius - cylFaces[i].radius) < 1e-2 &&
+                    coaxial(cylFaces[j].axis, cylFaces[i].axis)) {
+                    grp.push_back(j);
+                    grouped[j] = true;
+                    wrapSum += cylFaces[j].wrap;
+                }
+            }
+            if (wrapSum > 1.9 * M_PI)
+                for (size_t j : grp) holeWallFaces.insert(cylFaces[j].faceIdx);
+        }
+    }
+
     struct Blend { int face_id; double radius; double mid_z; std::string kind; };
     std::vector<Blend> blends;
 
@@ -343,13 +405,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         double r = 0.0;
         std::string kind;
         if (t == GeomAbs_Cylinder) {
-            // A fillet blend is a PARTIAL cylindrical strip that rounds an edge —
-            // its surface wraps only a fraction of a full circle (typically ≤ π).
-            // A drilled/bored HOLE WALL is a FULL (≈2π) cylinder and must NOT be
-            // mistaken for a fillet: a ring of same-radius holes was clustering as
-            // a bogus 0.90 "rim-fillet sweep" that then subsumed the real holes.
-            const double wrap = surf.LastUParameter() - surf.FirstUParameter();
-            if (wrap > 1.9 * M_PI) continue;   // full-wrap cylinder → a hole, not a fillet
+            // Hole/boss wall (possibly split across faces — see the summed-wrap
+            // pre-pass above): never a fillet blend.
+            if (holeWallFaces.count(fIdx)) continue;
             r = surf.Cylinder().Radius();
             kind = "cylindrical";
         } else if (t == GeomAbs_Torus) {
