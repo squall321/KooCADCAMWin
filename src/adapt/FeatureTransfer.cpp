@@ -2,9 +2,14 @@
 
 #include "FeatureTransfer.hpp"
 
+#include "skills/Datum.hpp"
+#include "skills/Workpiece.hpp"
+
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -255,11 +260,49 @@ TransferResult transferFeature(const process::StepInvocation& src,
         return result;
     }
 
-    // CONCENTRICITY envelope: the executed position is FACE-LOCAL (offset from
-    // the resolved face's centre), so the frame-ratio scaling above and the
-    // AABB clamp below are only faithful while the ring stays near the frame
-    // centre.  Past half-way to the boundary the approximation is unsafe.
-    if (std::abs(cx) > 0.5 * dstFrame.hx || std::abs(cy) > 0.5 * dstFrame.hy) {
+    // FACE-ANCHORED placement (optional): resolve the entry face NOW with the
+    // exact rule the Executor will use (FaceByNormal ±Z, "largest"), so every
+    // fit decision below tests the REAL executed position (face centre +
+    // face-local offset) instead of assuming the entry face is centred on the
+    // product frame.  apply()'s in-plane basis for a ±Z normal is vx = +X,
+    // vy = n × vx (so world Y flips for a −Z entry).
+    bool   faceAnchored = false;
+    double eccX = 0.0, eccY = 0.0;   // executed centre, relative to the FRAME centre
+    double faceZ = 0.0;
+    {
+        const double nz = p["face_normal"][2].get<double>();   // ±Z validated above
+        if (opts.dst_shape != nullptr) {
+            try {
+                skill::Workpiece dstWp(*opts.dst_shape);
+                const auto fid = dstWp.resolve(skill::FaceByNormal{
+                    gp_Dir(0.0, 0.0, nz >= 0.0 ? 1.0 : -1.0), 5.0, "largest" });
+                if (!fid) {
+                    neuter(result, "destination entry face (±Z, largest) unresolvable");
+                    return result;
+                }
+                const gp_Pnt C = dstWp.faceCenter(*fid);
+                const double ySign = (nz >= 0.0) ? 1.0 : -1.0;
+                eccX  = (C.X() + cx) - dstFrame.cx;
+                eccY  = (C.Y() + ySign * cy) - dstFrame.cy;
+                faceZ = C.Z();
+                faceAnchored = true;
+                result.notes.push_back(
+                    "face-anchored: entry face centre (" + std::to_string(C.X()) +
+                    ", " + std::to_string(C.Y()) + ", " + std::to_string(C.Z()) + ")");
+            } catch (...) {
+                neuter(result, "destination face resolution threw — refusing");
+                return result;
+            }
+        }
+    }
+
+    // CONCENTRICITY envelope (frame-only mode): the executed position is
+    // FACE-LOCAL (offset from the resolved face's centre), so without the
+    // destination shape the frame-ratio scaling and the AABB clamp are only
+    // faithful while the ring stays near the frame centre.  Face-anchored mode
+    // replaces this approximation with the exact placement test below.
+    if (!faceAnchored &&
+        (std::abs(cx) > 0.5 * dstFrame.hx || std::abs(cy) > 0.5 * dstFrame.hy)) {
         neuter(result, "scaled ring centre beyond half the destination half-extent"
                        " — outside the slice-1 concentric envelope");
         return result;
@@ -273,38 +316,51 @@ TransferResult transferFeature(const process::StepInvocation& src,
         return result;
     }
 
-    // Depth: a groove deeper than (almost) the destination thickness would
-    // sever the part; clamp to thickness minus 1 mm of floor stock.  A
+    // Depth: a groove deeper than (almost) the stock below the entry plane
+    // would sever the part; clamp to that minus 1 mm of floor stock.  Face-
+    // anchored mode measures the REAL stock under the resolved face (a
+    // recessed deck has less than the bbox thickness — the review's measured
+    // case: the phone's display floor sits 0.6 mm below the bbox top); the
+    // frame-only mode conservatively assumes the bbox thickness.  A
     // destination too thin to hold ANY groove refuses instead of stamping a
     // nonsense depth (the transferred=true contract means "safe to execute").
-    const double maxDepth = 2.0 * dstFrame.hz - 1.0;
+    const double nzSign  = p["face_normal"][2].get<double>() >= 0.0 ? 1.0 : -1.0;
+    const double maxDepth =
+        (faceAnchored
+             ? (nzSign > 0.0 ? faceZ - (dstFrame.cz - dstFrame.hz)
+                             : (dstFrame.cz + dstFrame.hz) - faceZ)
+             : 2.0 * dstFrame.hz) - 1.0;
     const double depth    = num("depth_mm", 0.0);
     if (std::isnan(depth)) {
         neuter(result, "malformed depth_mm in source step");
         return result;
     }
     if (maxDepth < 0.1) {
-        neuter(result, "destination too thin for any groove (thickness "
-                       + std::to_string(2.0 * dstFrame.hz) + " mm)");
+        neuter(result, "destination too thin for any groove below the entry plane");
         return result;
     }
     if (depth > maxDepth) {
         result.notes.push_back("depth clamped " + std::to_string(depth) + " -> " +
                                std::to_string(maxDepth) +
-                               " mm (destination thickness minus 1 mm floor)");
+                               " mm (stock below the entry plane minus 1 mm floor)");
         p["depth_mm"] = maxDepth;
         result.fit_clamped = true;
     }
 
-    // 8. Radial: |c| + OD/2 must clear each half-extent minus the margin.
-    //    When violated, shrink OD and ID by ONE factor (ratio-preserving — the
-    //    groove keeps its proportions) to the largest OD that fits both axes.
+    // 8. Radial: the executed centre + OD/2 must clear each half-extent minus
+    //    the margin.  Face-anchored mode uses the REAL eccentricity (face
+    //    centre + offset − frame centre); frame-only mode falls back to the
+    //    centred-face assumption (|offset| alone).  When violated, shrink OD
+    //    and ID by ONE factor (ratio-preserving — the groove keeps its
+    //    proportions) to the largest OD that fits both axes.
     const double margin = opts.fit_margin_mm;
-    const bool fitsX = std::abs(cx) + 0.5 * od <= dstFrame.hx - margin;
-    const bool fitsY = std::abs(cy) + 0.5 * od <= dstFrame.hy - margin;
+    const double offX = faceAnchored ? std::abs(eccX) : std::abs(cx);
+    const double offY = faceAnchored ? std::abs(eccY) : std::abs(cy);
+    const bool fitsX = offX + 0.5 * od <= dstFrame.hx - margin;
+    const bool fitsY = offY + 0.5 * od <= dstFrame.hy - margin;
     if (od > 1e-9 && (!fitsX || !fitsY)) {
-        const double maxOdX = (dstFrame.hx - margin - std::abs(cx)) * 2.0;
-        const double maxOdY = (dstFrame.hy - margin - std::abs(cy)) * 2.0;
+        const double maxOdX = (dstFrame.hx - margin - offX) * 2.0;
+        const double maxOdY = (dstFrame.hy - margin - offY) * 2.0;
         const double feasibleOd = std::max(0.0, std::min(maxOdX, maxOdY));
         const double factor = feasibleOd / od;
         od *= factor;

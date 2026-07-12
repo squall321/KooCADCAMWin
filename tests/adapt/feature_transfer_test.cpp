@@ -20,6 +20,13 @@
 
 #include "adapt/FeatureTransfer.hpp"
 
+#include "skills/Stock.hpp"
+#include "skills/Workpiece.hpp"
+#include "skills/mill_rect_pocket.hpp"
+
+#include <TopoDS_Shape.hxx>
+#include <gp_Dir.hxx>
+
 #include <nlohmann/json.hpp>
 
 #include <string>
@@ -274,4 +281,92 @@ TEST(FeatureTransfer, UnmachinableSourceWallRefusesWithoutClamp)
                                             frame(38.0, 80.0, 4.0));
     EXPECT_FALSE(res.transferred);
     EXPECT_FALSE(res.fit_clamped) << "refused before any clamp was needed";
+}
+
+// ─── 11. FACE-ANCHORED placement: an OFF-CENTRE largest entry face ─────────
+// A stepped plate whose largest +Z face sits left of the frame centre: the
+// executed ring lands on THAT face's centre, so the radial clamp must use the
+// real eccentricity (frame-only math would see |cx|=0 and never clamp).
+TEST(FeatureTransfer, FaceAnchoredOffsetDeckClampsExactly)
+{
+    // 80x80x10 plate; step the right 30 mm down by 3 → largest +Z face is the
+    // LEFT ~50x80 deck at z=10, centre x ≈ 25.5 (the pocket's corner fillets
+    // nudge the boundary); frame centre (40, 40, 5).  The plate is WIDE in Y
+    // so only the X eccentricity binds the clamp.
+    auto stock = skill::createCuboidStock(80.0, 80.0, 10.0);
+    skill::mill_rect_pocket::Input mp;
+    mp.entry_face  = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    mp.center_x_mm = 65.0;
+    mp.center_y_mm = 40.0;
+    mp.length_mm   = 30.0;
+    mp.width_mm    = 80.0;
+    mp.depth_mm    = 3.0;
+    auto stepped = skill::mill_rect_pocket::apply(*stock, mp);
+    ASSERT_NE(stepped.workpiece, nullptr);
+    const TopoDS_Shape dst = stepped.workpiece->shape();
+
+    process::StepInvocation s;
+    s.skill_id = "annular_groove";
+    s.params = {
+        { "center_x_mm",   0.0 },
+        { "center_y_mm",   0.0 },
+        { "outer_dia_mm", 48.0 },     // ecc ~14.5 + 24 = 38.5 > 40 - margin 2
+        { "inner_dia_mm", 40.0 },
+        { "depth_mm",      1.0 },
+    };
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 22, 22, 5 },
+        adapt::AnchorFrame::fromShape(dst), opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_TRUE(res.fit_clamped)
+        << "the face-anchored eccentricity (~14.5) forces a clamp that the "
+           "centred-face assumption (|cx|=0 -> 24 <= 38) would miss";
+    // feasible OD = (hx 40 - margin 2 - ecc ~14.5) * 2 ≈ 47 (±corner-fillet
+    // wobble on the resolved face centre).
+    const double odClamped = res.step.params["outer_dia_mm"].get<double>();
+    EXPECT_GT(odClamped, 45.0);
+    EXPECT_LT(odClamped, 48.0) << "clamped strictly below the source OD 48";
+}
+
+// ─── 12. FACE-ANCHORED depth: a RECESSED largest entry face limits depth by
+// the stock actually below it, not the whole bbox thickness. ────────────────
+TEST(FeatureTransfer, FaceAnchoredRecessedDeckLimitsDepth)
+{
+    // Recess most of the top by 3 → the largest +Z face is the pocket FLOOR at
+    // z = 7; only 7 mm of stock sits below it (bbox thickness is 10).
+    auto stock = skill::createCuboidStock(80.0, 40.0, 10.0);
+    skill::mill_rect_pocket::Input mp;
+    mp.entry_face  = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    mp.center_x_mm = 50.0;
+    mp.center_y_mm = 20.0;
+    mp.length_mm   = 60.0;                    // floor 60x40 > remaining 20x40 top
+    mp.width_mm    = 40.0;
+    mp.depth_mm    = 3.0;
+    auto stepped = skill::mill_rect_pocket::apply(*stock, mp);
+    ASSERT_NE(stepped.workpiece, nullptr);
+    const TopoDS_Shape dst = stepped.workpiece->shape();
+
+    process::StepInvocation s;
+    s.skill_id = "annular_groove";
+    s.params = {
+        { "center_x_mm",   0.0 },
+        { "center_y_mm",   0.0 },
+        { "outer_dia_mm", 20.0 },
+        { "inner_dia_mm", 14.0 },
+        { "depth_mm",      8.0 },             // > 7 - 1 = 6 mm of usable stock
+    };
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 22, 22, 5 },
+        adapt::AnchorFrame::fromShape(dst), opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_TRUE(res.fit_clamped);
+    EXPECT_NEAR(res.step.params["depth_mm"].get<double>(), 6.0, 1e-6)
+        << "depth limit = faceZ(7) - bbox bottom(0) - 1 mm floor = 6, NOT the "
+           "bbox-thickness limit (2*5 - 1 = 9) that would sever the recessed deck";
 }

@@ -112,6 +112,23 @@ struct TransferOptions
     // Minimum clearance between the feature's outer extent and the
     // destination footprint edge before the fit clamp engages.
     double fit_margin_mm = 2.0;
+
+    // FACE-ANCHORED placement (optional): when the destination SHAPE is
+    // supplied, transferFeature resolves the entry face at TRANSFER time with
+    // the same rule the Executor will use (FaceByNormal ±Z, "largest") and
+    // anchors every fit decision to the REAL face:
+    //   - the executed ring centre = face centre + (cx, cy) — the radial
+    //     clamp tests that WORLD position against the frame boundary, so an
+    //     off-centre entry face (a recessed deck, a stepped plate) is handled
+    //     exactly instead of assumed centred;
+    //   - the depth limit becomes (face Z − frame bottom − 1 mm floor), the
+    //     stock actually below the entry plane, not the whole-bbox thickness;
+    //   - the near-concentric envelope refusal is replaced by the exact
+    //     placement test (the approximation it guarded against is gone);
+    //   - an unresolvable entry face refuses.
+    // Null (default) keeps the frame-only behaviour and its conservative
+    // concentric envelope.  The pointer is borrowed for the call only.
+    const TopoDS_Shape* dst_shape = nullptr;
 };
 
 struct TransferResult

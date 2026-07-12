@@ -134,10 +134,17 @@ TEST(FeatureTransferWatchToPhone, BezelRingTransfersToPhoneMeasured)
     }
 
     // ── 5. Transfer the recovered bezel step watch -> phone ──────────────
+    // FACE-ANCHORED mode: pass the phone shape so the entry face (the largest
+    // +Z planar face — the display floor or the top rim, whichever resolve
+    // picks) is fixed at transfer time and every fit decision uses the REAL
+    // face; the off-centre/recessed specifics are drilled by the unit tests.
     const adapt::AnchorFrame watchFrame = adapt::AnchorFrame::fromShape(watchShape);
     const adapt::AnchorFrame phoneFrame = adapt::AnchorFrame::fromShape(phoneShape);
+    adapt::TransferOptions transferOpts;
+    transferOpts.dst_shape = &phoneShape;
     const adapt::TransferResult tr =
-        adapt::transferFeature(*bezel, "watch", "phone", watchFrame, phoneFrame);
+        adapt::transferFeature(*bezel, "watch", "phone", watchFrame, phoneFrame,
+                               transferOpts);
     ASSERT_TRUE(tr.transferred);
     EXPECT_FALSE(tr.fit_clamped)
         << "a Ø44 ring fits the 76 mm-wide phone without any clamp";
