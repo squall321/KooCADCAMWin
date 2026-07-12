@@ -29,6 +29,12 @@
 // only, so features() is EMPTY and every recovery below is geometric
 // measurement, not FeatureSignature metadata replay (the same guarantee the
 // STEP round-trip gives frame_reframe_loop_test, without the file I/O).
+//
+// A second test runs the same loop for the WORLD-XY pattern family: a
+// counterbore ring machined onto the watch face is geometrically recovered
+// (grammar compound), transferred, executed on the phone, volume-checked and
+// re-recognised — proving the pattern re-anchors from centre + PCD + count +
+// phase alone (the per-member hole_centers breadcrumb is stripped).
 
 #include <gtest/gtest.h>
 
@@ -39,10 +45,12 @@
 #include "process/StepInvocation.hpp"
 #include "re/Recognizer.hpp"
 #include "skills/Workpiece.hpp"
+#include "skills/counterbore_ring_pattern.hpp"
 
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Dir.hxx>
 
 #include <nlohmann/json.hpp>
 
@@ -204,4 +212,127 @@ TEST(FeatureTransferWatchToPhone, BezelRingTransfersToPhoneMeasured)
     EXPECT_TRUE(found)
         << "the transferred ring must be re-recognised on the phone with the "
            "transferred OD/ID/depth (measured)";
+}
+
+// ═══ WORLD-XY pattern family e2e: a counterbore ring machined onto the
+//     watch, geometrically recovered, transferred, executed on the phone,
+//     volume-checked and re-recognised.  The per-member hole_centers
+//     breadcrumb is STRIPPED by the transfer — the destination members are
+//     re-derived from centre + PCD + count + phase alone, which is the
+//     pattern re-anchoring being proven. ═══
+TEST(FeatureTransferWatchToPhone, CounterboreRingTransfersToPhoneMeasured)
+{
+    // ── 1. Build both products; machine a counterbore ring onto the watch ─
+    const json watchSpec = engine::defaultSpecForProduct("watch");
+    const json phoneSpec = engine::defaultSpecForProduct("phone");
+    std::vector<engine::BuildWarning> wWatch, wPhone;
+    const TopoDS_Shape watchShape = engine::buildProduct(watchSpec, wWatch);
+    const TopoDS_Shape phoneShape = engine::buildProduct(phoneSpec, wPhone);
+    ASSERT_FALSE(watchShape.IsNull());
+    ASSERT_FALSE(phoneShape.IsNull());
+
+    skill::counterbore_ring_pattern::Input rin;
+    rin.entry_face          = skill::FaceByNormal{ gp_Dir(0.0, 0.0, 1.0) };
+    rin.center_x_mm         = 0.0;
+    rin.center_y_mm         = 0.0;
+    rin.axis_dir            = gp_Dir(0.0, 0.0, -1.0);
+    rin.count               = 6;
+    rin.bolt_circle_dia_mm  = 20.0;
+    rin.pilot_dia_mm        = 1.5;
+    rin.pilot_depth_mm      = 4.0;
+    rin.seat_dia_mm         = 3.0;
+    rin.seat_depth_mm       = 1.5;
+    rin.start_angle_deg     = 0.0;
+    skill::Workpiece watchWp(watchShape);
+    const auto ringOut = skill::counterbore_ring_pattern::apply(watchWp, rin);
+    ASSERT_NE(ringOut.workpiece, nullptr);
+    const TopoDS_Shape ringedWatch = ringOut.workpiece->shape();
+
+    // ── 2. Recover the ring GEOMETRICALLY from a foreign copy ─────────────
+    // HONESTY GATE: raw shape in, zero FeatureSignatures — the grammar must
+    // measure the compound, not replay metadata.
+    skill::Workpiece foreignRinged(ringedWatch);
+    ASSERT_TRUE(foreignRinged.features().empty());
+    const process::ProcessPlan plan = re::inferProcessPlan(foreignRinged, 0.7);
+    const process::StepInvocation* ring = nullptr;
+    for (const auto& s : plan.steps())
+        if (s.skill_id == "counterbore_ring_pattern") { ring = &s; break; }
+    ASSERT_NE(ring, nullptr)
+        << "the machined counterbore ring must be recovered as a compound";
+    EXPECT_EQ(ring->params.value("count", 0), 6);
+    EXPECT_NEAR(ring->params.value("bolt_circle_dia_mm", 0.0), 20.0, 0.5);
+    EXPECT_NEAR(ring->params.value("pilot_dia_mm", 0.0), 1.5, 0.3);
+    EXPECT_NEAR(ring->params.value("seat_dia_mm", 0.0),  3.0, 0.3);
+
+    // ── 3. Transfer watch → phone, face-anchored ──────────────────────────
+    const adapt::AnchorFrame watchFrame = adapt::AnchorFrame::fromShape(ringedWatch);
+    const adapt::AnchorFrame phoneFrame = adapt::AnchorFrame::fromShape(phoneShape);
+    adapt::TransferOptions transferOpts;
+    transferOpts.dst_shape = &phoneShape;
+    const adapt::TransferResult tr = adapt::transferFeature(
+        *ring, "watch", "phone", watchFrame, phoneFrame, transferOpts);
+    ASSERT_TRUE(tr.transferred);
+    EXPECT_FALSE(tr.fit_clamped)
+        << "a PCD-20 ring of Ø3 seats fits the 76 mm phone without any clamp";
+
+    // Fastener intrinsics survive bit-for-bit; the member breadcrumbs are
+    // gone (apply() re-derives them); the portable pattern datum survives.
+    const json& tp = tr.step.params;
+    EXPECT_DOUBLE_EQ(tp["pilot_dia_mm"].get<double>(),
+                     ring->params["pilot_dia_mm"].get<double>());
+    EXPECT_DOUBLE_EQ(tp["seat_dia_mm"].get<double>(),
+                     ring->params["seat_dia_mm"].get<double>());
+    EXPECT_DOUBLE_EQ(tp["bolt_circle_dia_mm"].get<double>(),
+                     ring->params["bolt_circle_dia_mm"].get<double>());
+    EXPECT_FALSE(tp.contains("hole_centers"));
+    EXPECT_FALSE(tp.contains("entry_face_id"));
+    ASSERT_TRUE(tp.contains("axis_dir"));
+
+    // ── 4. Execute the transferred 1-step plan on the phone ───────────────
+    const double vBefore = volumeOf(phoneShape);
+    process::ProcessPlan transferPlan;
+    transferPlan.append(tr.step);
+    auto phoneStock = std::make_shared<skill::Workpiece>(phoneShape);
+    const auto result = process::Executor::execute(transferPlan, phoneStock);
+    ASSERT_TRUE(result.ok())
+        << (result.errors.empty() ? "" : result.errors.front());
+    ASSERT_NE(result.workpiece, nullptr);
+    const TopoDS_Shape transferredShape = result.workpiece->shape();
+    ASSERT_FALSE(transferredShape.IsNull());
+
+    // ── 5. Volume: n counterbores remove their analytic volume ────────────
+    // Computed FROM the transferred params — measured, not authored.
+    const int    n    = tp["count"].get<int>();
+    const double pd   = tp["pilot_dia_mm"].get<double>();
+    const double pdep = tp["pilot_depth_mm"].get<double>();
+    const double sd   = tp["seat_dia_mm"].get<double>();
+    const double sdep = tp["seat_depth_mm"].get<double>();
+    const double expectedCut =
+        n * (M_PI / 4.0) * (sd * sd * sdep + pd * pd * (pdep - sdep));
+    const double vAfter = volumeOf(transferredShape);
+    EXPECT_NEAR(vBefore - vAfter, expectedCut, expectedCut * 0.05)
+        << "the machined ring must remove its analytic volume";
+
+    // (No destination-DFM assertion here: the transfer contract is "safe to
+    // EXECUTE"; whether six counterbores belong in a phone's display area is
+    // a product-design question the bezel test already covers for DFM.)
+
+    // ── 6. Re-recognition on a metadata-free copy of the machined phone ───
+    skill::Workpiece foreignTransferred(transferredShape);
+    ASSERT_TRUE(foreignTransferred.features().empty());
+    bool found = false;
+    for (const auto& c : re::analyzeFiltered(foreignTransferred, 0.7)) {
+        if (c.skill_id != "counterbore_ring_pattern") continue;
+        const auto& rp = c.recovered_params;
+        if (std::abs(rp.value("bolt_circle_dia_mm", 0.0) -
+                     tp["bolt_circle_dia_mm"].get<double>()) > 0.5) continue;
+        EXPECT_EQ(rp.value("count", 0), n);
+        EXPECT_NEAR(rp.value("pilot_dia_mm", 0.0), pd, 0.3);
+        EXPECT_NEAR(rp.value("seat_dia_mm", 0.0),  sd, 0.3);
+        found = true;
+        break;
+    }
+    EXPECT_TRUE(found)
+        << "the transferred counterbore ring must be re-recognised on the "
+           "phone with the transferred PCD/count/dias (measured)";
 }

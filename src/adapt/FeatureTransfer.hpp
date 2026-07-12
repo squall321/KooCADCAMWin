@@ -23,21 +23,42 @@
 // being transferred, so dimensions stay fixed and only the placement (and,
 // at the physical limit, fit) adapts.
 //
-// Slice-1 VALIDATED ENVELOPE — everything outside it REFUSES loudly
+// VALIDATED ENVELOPE — everything outside it REFUSES loudly
 // (transferred=false) instead of emitting a silently-wrong step:
-//   • skill whitelist { "annular_groove" };
-//   • FRONT/BACK (±Z) entry only — a surviving non-±Z face_normal refuses
-//     (the fit clamp maps depth→Z, footprint→X/Y);
-//   • near-CONCENTRIC placement — the executed position is FACE-LOCAL
-//     (annular_groove::apply offsets from the resolved face's centre), which
-//     coincides with the frame-ratio math only while the entry face is centred
-//     on the product frame (true of both shipped products) and the offset is
-//     small; a scaled centre past half the destination half-extent refuses.
-//     Full face-anchored placement (resolve the destination face at transfer
-//     time) is documented follow-up;
+//   • skill whitelist — two placement families:
+//       FACE-LOCAL  { "annular_groove" }: center_x/y are offsets from the
+//                   resolved entry face's centre (apply()'s in-plane basis);
+//       WORLD-XY    { "bolt_circle_pattern", "counterbore_ring_pattern",
+//                   "countersink_ring_pattern" }: center_x/y are WORLD
+//                   coordinates (the member atoms pierce the entry plane at
+//                   world (px, py) — see skills/Workpiece.hpp
+//                   entryPointOnFacePlane), so they re-express RELATIVE to
+//                   the frame centres: v' = dstC + (v − srcC)·(dstHalf/srcHalf).
+//                   The per-member hole_centers breadcrumb is stripped
+//                   (Diagnostic) — apply() RECOMPUTES every member from
+//                   centre + PCD + count + start angle, which is the whole
+//                   re-anchoring story for patterns.
+//   • FRONT/BACK (±Z) entry only — a non-±Z face_normal (face-local family)
+//     or a non-±Z axis_dir (pattern family; mirrors the skills' own
+//     validate error) refuses;
+//   • placement: face-anchored EXACT when opts.dst_shape is supplied;
+//     otherwise the conservative near-CONCENTRIC envelope (a centre past
+//     half the destination half-extent refuses);
 //   • rectangular-footprint destination — the AABB clamp does not model a
 //     round boundary (phone→watch stays out of scope);
-//   • destination thick enough for the groove + 1 mm floor, else refuse.
+//   • destination thick enough below the entry plane for the cut + 1 mm
+//     floor, else clamp — and REFUSE when the clamp would have to eat a
+//     fastener-critical intrinsic (a counterbore seat, a countersink cone):
+//     those dimensions are the mating identity being transferred, so a
+//     destination that cannot hold them cannot receive the feature.
+//     Through-drilled bolt circles skip the depth clamp (through is through).
+//
+// PATTERN FIT: the outermost cut radius is PCD/2 + widest-member-dia/2.
+// When it does not fit, the PITCH CIRCLE alone shrinks — the member
+// diameters are fastener sizes and stay preserved.  A post-clamp PCD at or
+// below the widest member dia (the skill's own validate error) or a
+// member-to-member chord below the widest dia (adjacent cuts would merge —
+// the result would not be a pattern) refuses.
 //
 // EXPLICIT REFUSAL BEATS SILENT WRONGNESS: a step whose param family has not
 // been audited for the positional/intrinsic split could be silently misplaced

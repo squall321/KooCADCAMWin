@@ -1,20 +1,21 @@
 // @lat: [[engine/skills#Layer 5 LLM adapter]]
 //
-// FeatureTransfer — slice-1 cross-product transfer unit spec.
+// FeatureTransfer — cross-product transfer unit spec, two placement families:
 //
-//   1. ClassifyParamTable          — a few keys per role map correctly, and
-//                                    unknown keys default to Intrinsic.
-//   2. AnnularGrooveTransfers      — positions scale by the half-extent
-//                                    ratios, intrinsics survive bit-for-bit,
-//                                    product-bound keys are stripped, the
-//                                    front-face datum is injected, and
-//                                    depends_on is cleared.
-//   3. FitClampRatioPreserving     — an OD-80 ring into a 38-half-width
-//                                    destination clamps OD/ID by 0.9.
-//   4. ImpossibleFitRefuses        — post-clamp groove wall < 0.5 mm must
-//                                    refuse (transferred=false), not lie.
-//   5. UnsupportedSkillRefuses     — drill_hole is not whitelisted in
-//                                    slice-1; explicit refusal + note.
+//   1–12  FACE-LOCAL annular_groove — classify table, positional scaling,
+//         intrinsic preservation, ratio-preserving OD/ID clamp, refusals
+//         (unsupported skill / non-±Z / too-thin / off-envelope / thin wall),
+//         and FACE-ANCHORED placement (offset deck clamp, recessed-deck
+//         depth limit).
+//   13–22 WORLD-XY pitch-circle patterns (bolt_circle / counterbore_ring /
+//         countersink_ring) — frame-RELATIVE world re-expression (13),
+//         PCD-only fit clamp with fastener dias preserved (14), member-merge
+//         refusal (15), seat/cone-preserving depth clamp with refusal when
+//         the stock cannot hold the fastener intrinsic (16, 17), the
+//         through-drill depth-clamp exemption (18), non-vertical/missing
+//         axis refusal (19), the face-anchored recessed-deck depth limit
+//         (20), the validate/composed-atom gate mirror sweep (21), and the
+//         per-axis real-eccentricity clamp discrimination (22).
 
 #include <gtest/gtest.h>
 
@@ -369,4 +370,383 @@ TEST(FeatureTransfer, FaceAnchoredRecessedDeckLimitsDepth)
     EXPECT_NEAR(res.step.params["depth_mm"].get<double>(), 6.0, 1e-6)
         << "depth limit = faceZ(7) - bbox bottom(0) - 1 mm floor = 6, NOT the "
            "bbox-thickness limit (2*5 - 1 = 9) that would sever the recessed deck";
+}
+
+// ═══ WORLD-XY pattern family (bolt_circle / counterbore_ring /
+//     countersink_ring) — positions are world coordinates, so they re-express
+//     RELATIVE to the frame centres; the pitch circle alone absorbs the fit
+//     clamp; fastener-critical member dimensions refuse rather than shrink. ═══
+
+namespace {
+
+// The canonical recovered counterbore-ring step: measured intrinsics plus the
+// breadcrumbs the grammar drags along (entry_face_id, hole_centers).
+process::StepInvocation makeCounterboreRingStep()
+{
+    process::StepInvocation s;
+    s.skill_id = "counterbore_ring_pattern";
+    s.params = {
+        { "count",              6 },
+        { "bolt_circle_dia_mm", 40.0 },
+        { "center_x_mm",        0.0 },
+        { "center_y_mm",        0.0 },
+        { "position_z_mm",      10.0 },
+        { "axis_dir",           json::array({ 0.0, 0.0, -1.0 }) },
+        { "pilot_dia_mm",       3.0 },
+        { "pilot_depth_mm",     6.0 },
+        { "seat_dia_mm",        6.0 },
+        { "seat_depth_mm",      2.0 },
+        { "start_angle_deg",    15.0 },
+        { "hole_centers",       json::array({ json::array({ 20.0, 0.0, 8.0 }) }) },
+        { "entry_face_id",      9 },
+    };
+    return s;
+}
+
+}  // namespace
+
+// ─── 13. Pattern positions are WORLD coordinates: frame-RELATIVE scaling ───
+// A source product NOT modelled about the world origin discriminates: a bare
+// ratio would fling the centre to 34*(40/20) = 68; the world-relative math
+// lands it at dstC + (34-30)*(40/20) = 8.
+TEST(FeatureTransfer, BoltCircleWorldCentreReExpressesRelativeToFrames)
+{
+    process::StepInvocation s;
+    s.skill_id = "bolt_circle_pattern";
+    s.params = {
+        { "hole_count",         6 },
+        { "bolt_circle_dia_mm", 20.0 },
+        { "hole_dia_mm",        3.0 },
+        { "center_x_mm",        34.0 },
+        { "center_y_mm",        10.0 },
+        { "start_angle_deg",    12.0 },
+        { "axis_dir",           json::array({ 0.0, 0.0, -1.0 }) },
+        { "position_z_mm",      10.0 },
+        { "hole_centers",       json::array({ json::array({ 44.0, 10.0, 10.0 }) }) },
+        { "entry_face_id",      4 },
+    };
+    s.depends_on = { 2 };
+
+    const auto res = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 30.0, 10.0, 5.0, 20.0, 20.0, 5.0 },
+        adapt::AnchorFrame{  0.0,  0.0, 0.0, 40.0, 40.0, 5.0 });
+    ASSERT_TRUE(res.transferred);
+    EXPECT_FALSE(res.fit_clamped);
+
+    const json& p = res.step.params;
+    EXPECT_NEAR(p["center_x_mm"].get<double>(), 8.0, 1e-9)
+        << "world-relative: 0 + (34-30)*(40/20), NOT the bare ratio 34*2 = 68";
+    EXPECT_NEAR(p["center_y_mm"].get<double>(), 0.0, 1e-9);
+
+    // Intrinsics preserved bit-for-bit; the members are re-derived by apply()
+    // from centre + PCD + count + phase, so the breadcrumbs must be GONE.
+    EXPECT_DOUBLE_EQ(p["bolt_circle_dia_mm"].get<double>(), 20.0);
+    EXPECT_DOUBLE_EQ(p["hole_dia_mm"].get<double>(),         3.0);
+    EXPECT_EQ(p["hole_count"].get<int>(),                    6);
+    EXPECT_DOUBLE_EQ(p["start_angle_deg"].get<double>(),    12.0);
+    EXPECT_FALSE(p.contains("hole_centers"));
+    EXPECT_FALSE(p.contains("entry_face_id"));
+    ASSERT_TRUE(p.contains("axis_dir")) << "the portable pattern datum survives";
+    EXPECT_TRUE(res.step.depends_on.empty());
+}
+
+// ─── 14. Pattern fit clamp: the PITCH CIRCLE shrinks, the fasteners don't ──
+TEST(FeatureTransfer, CounterboreRingClampShrinksPitchCirclePreservesFastenerDias)
+{
+    const auto src = makeCounterboreRingStep();   // PCD 40, seat 6 -> rOut 23
+    const auto res = adapt::transferFeature(
+        src, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 10 });   // feasible R 18
+    ASSERT_TRUE(res.transferred);
+    EXPECT_TRUE(res.fit_clamped);
+
+    const json& p = res.step.params;
+    EXPECT_NEAR(p["bolt_circle_dia_mm"].get<double>(), 30.0, 1e-9)
+        << "newPcd = 2*feasibleR - widest = 36 - 6";
+    // The member diameters are the fastener sizes being transferred.
+    EXPECT_DOUBLE_EQ(p["seat_dia_mm"].get<double>(),  6.0);
+    EXPECT_DOUBLE_EQ(p["pilot_dia_mm"].get<double>(), 3.0);
+    // chord = 30*sin(pi/6) = 15 > seat 6 — still a pattern.
+}
+
+// ─── 15. A clamp that would MERGE adjacent members refuses ─────────────────
+TEST(FeatureTransfer, CounterboreRingMembersMergeAfterClampRefuses)
+{
+    auto s = makeCounterboreRingStep();
+    s.params["count"] = 24;   // post-clamp chord = 30*sin(pi/24) ≈ 3.92 < seat 6
+    const auto res = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 10 });
+    EXPECT_FALSE(res.transferred);
+    EXPECT_EQ(res.step.skill_id, "refused_transfer")
+        << "24 tangent-to-overlapping seats are a ring groove, not a pattern";
+}
+
+// ─── 16. Depth clamp may not eat the counterbore SEAT ──────────────────────
+// The seat depth is a fastener-critical intrinsic (the screw head sits in it);
+// clamping the pilot INTO the seat is a validate error on the skill and a
+// different feature dimensionally — refuse instead.
+TEST(FeatureTransfer, CounterboreRingDepthClampPreservesSeatOrRefuses)
+{
+    // (a) enough stock for the seat: pilot depth clamps, seat survives intact.
+    auto s = makeCounterboreRingStep();           // pilot_depth 6, PCD 40 -> use
+    s.params["bolt_circle_dia_mm"] = 20.0;        // a small ring so radial fits
+    s.params["seat_depth_mm"]      = 0.8;
+    const auto clamped = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 1.5 });   // maxDepth = 3 - 1 = 2
+    ASSERT_TRUE(clamped.transferred);
+    EXPECT_TRUE(clamped.fit_clamped);
+    EXPECT_NEAR(clamped.step.params["pilot_depth_mm"].get<double>(), 2.0, 1e-9);
+    EXPECT_DOUBLE_EQ(clamped.step.params["seat_depth_mm"].get<double>(), 0.8)
+        << "the seat is preserved, only the pilot shortens";
+
+    // (b) the stock cannot even hold the seat: refuse, don't alter it.
+    s.params["seat_depth_mm"] = 2.5;              // > maxDepth 2
+    const auto refused = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 1.5 });
+    EXPECT_FALSE(refused.transferred);
+    EXPECT_EQ(refused.step.skill_id, "refused_transfer");
+}
+
+// ─── 17. Depth clamp may not eat the countersink CONE ──────────────────────
+TEST(FeatureTransfer, CountersinkRingDepthClampPreservesConeOrRefuses)
+{
+    process::StepInvocation s;
+    s.skill_id = "countersink_ring_pattern";
+    s.params = {
+        { "count",              6 },
+        { "bolt_circle_dia_mm", 20.0 },
+        { "center_x_mm",        0.0 },
+        { "center_y_mm",        0.0 },
+        { "axis_dir",           json::array({ 0.0, 0.0, -1.0 }) },
+        { "pilot_dia_mm",       3.0 },
+        { "pilot_depth_mm",     6.0 },
+        { "cone_top_dia_mm",    8.0 },
+        { "cone_angle_deg",    90.0 },   // cone depth = (8-3)/2 / tan(45) = 2.5
+        { "start_angle_deg",    0.0 },
+    };
+
+    // (a) maxDepth 4 > cone depth 2.5: the pilot clamps, the cone is intact.
+    const auto clamped = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 2.5 });   // maxDepth = 5 - 1 = 4
+    ASSERT_TRUE(clamped.transferred);
+    EXPECT_TRUE(clamped.fit_clamped);
+    EXPECT_NEAR(clamped.step.params["pilot_depth_mm"].get<double>(), 4.0, 1e-9);
+    EXPECT_DOUBLE_EQ(clamped.step.params["cone_top_dia_mm"].get<double>(), 8.0);
+    EXPECT_DOUBLE_EQ(clamped.step.params["cone_angle_deg"].get<double>(), 90.0);
+
+    // (b) maxDepth 2 <= cone depth 2.5: the cone itself cannot fit — refuse.
+    const auto refused = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 1.5 });   // maxDepth = 3 - 1 = 2
+    EXPECT_FALSE(refused.transferred);
+    EXPECT_EQ(refused.step.skill_id, "refused_transfer");
+}
+
+// ─── 18. A THROUGH bolt circle skips the depth clamp (through is through) ──
+TEST(FeatureTransfer, ThroughBoltCircleSkipsDepthClampOnThinDestination)
+{
+    process::StepInvocation s;
+    s.skill_id = "bolt_circle_pattern";
+    s.params = {
+        { "hole_count",         6 },
+        { "bolt_circle_dia_mm", 10.0 },
+        { "hole_dia_mm",        3.0 },
+        { "center_x_mm",        0.0 },
+        { "center_y_mm",        0.0 },
+        { "axis_dir",           json::array({ 0.0, 0.0, -1.0 }) },
+        { "start_angle_deg",    0.0 },
+        // no through_hole key: parseBoltCirclePattern defaults it to TRUE,
+        // and the transfer mirrors that default.
+    };
+    const auto through = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 0.4 });   // 0.8 mm foil
+    ASSERT_TRUE(through.transferred)
+        << "a through pattern drills through whatever thickness is there";
+    EXPECT_FALSE(through.fit_clamped);
+
+    // An explicitly BLIND bolt circle on the same foil must refuse (no room
+    // for any cut + 1 mm floor).
+    s.params["through_hole"] = false;
+    s.params["depth_mm"]     = 2.0;
+    const auto blind = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 0.4 });
+    EXPECT_FALSE(blind.transferred);
+}
+
+// ─── 19. A non-vertical (or missing) pattern axis refuses ──────────────────
+// Mirrors the pattern skills' own validate error (|axis Z| >= 0.99): a
+// transferred=true step must never throw at apply().
+TEST(FeatureTransfer, NonVerticalPatternAxisRefuses)
+{
+    auto s = makeCounterboreRingStep();
+    s.params["axis_dir"] = json::array({ 1.0, 0.0, 0.0 });   // side drilling
+    const auto side = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 10 });
+    EXPECT_FALSE(side.transferred);
+    EXPECT_EQ(side.step.skill_id, "refused_transfer");
+
+    s.params.erase("axis_dir");
+    const auto missing = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },
+        adapt::AnchorFrame{ 0, 0, 0, 20, 20, 10 });
+    EXPECT_FALSE(missing.transferred);
+    EXPECT_EQ(missing.step.skill_id, "refused_transfer");
+}
+
+// ─── 20. FACE-ANCHORED pattern: a recessed deck limits the PILOT depth ─────
+// Same recessed fixture as test 12: the largest +Z face is a pocket floor at
+// z = 7, so only 6 mm of clamped depth is honest; the frame-only bbox limit
+// (2*5 - 1 = 9) would leave the 8 mm pilot unclamped and sever the deck.
+TEST(FeatureTransfer, FaceAnchoredPatternRecessedDeckLimitsPilotDepth)
+{
+    auto stock = skill::createCuboidStock(80.0, 40.0, 10.0);
+    skill::mill_rect_pocket::Input mp;
+    mp.entry_face  = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    mp.center_x_mm = 50.0;
+    mp.center_y_mm = 20.0;
+    mp.length_mm   = 60.0;
+    mp.width_mm    = 40.0;
+    mp.depth_mm    = 3.0;
+    auto stepped = skill::mill_rect_pocket::apply(*stock, mp);
+    ASSERT_NE(stepped.workpiece, nullptr);
+    const TopoDS_Shape dst = stepped.workpiece->shape();
+
+    auto s = makeCounterboreRingStep();
+    s.params["bolt_circle_dia_mm"] = 16.0;   // rOut 11 — fits the 40-wide plate
+    s.params["seat_depth_mm"]      = 1.0;
+    s.params["pilot_depth_mm"]     = 8.0;
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 22, 22, 5 },
+        adapt::AnchorFrame::fromShape(dst), opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_TRUE(res.fit_clamped);
+    EXPECT_NEAR(res.step.params["pilot_depth_mm"].get<double>(), 6.0, 1e-6)
+        << "depth limit = faceZ(7) - bbox bottom(0) - 1 mm floor";
+    EXPECT_DOUBLE_EQ(res.step.params["seat_depth_mm"].get<double>(), 1.0);
+}
+
+// ─── 21. Source-intrinsic validate gates are mirrored: apply() never throws ─
+// A recovered step CAN carry values the skills refuse to re-synthesise (a
+// real Ø0.5 micro-drilled ring exists in metal, but counterbore_ring_pattern
+// ::apply hard-throws below 0.8 mm).  transferred=true promises execution.
+TEST(FeatureTransfer, SourceViolatingSkillValidateGatesRefuses)
+{
+    const adapt::AnchorFrame src{ 0, 0, 0, 30, 30, 10 };
+    const adapt::AnchorFrame dst{ 0, 0, 0, 20, 20, 10 };
+
+    {   // sub-0.8 pilot: machinable by a micro drill, unsynthesisable by apply.
+        auto s = makeCounterboreRingStep();
+        s.params["pilot_dia_mm"] = 0.5;
+        const auto r = adapt::transferFeature(s, "watch", "phone", src, dst);
+        EXPECT_FALSE(r.transferred);
+        EXPECT_EQ(r.step.skill_id, "refused_transfer");
+    }
+    {   // seat not wider than the pilot.
+        auto s = makeCounterboreRingStep();
+        s.params["seat_dia_mm"] = 2.5;   // pilot 3.0
+        const auto r = adapt::transferFeature(s, "watch", "phone", src, dst);
+        EXPECT_FALSE(r.transferred);
+    }
+    {   // pilot ends inside the seat.
+        auto s = makeCounterboreRingStep();
+        s.params["pilot_depth_mm"] = 1.5;   // seat_depth 2.0
+        const auto r = adapt::transferFeature(s, "watch", "phone", src, dst);
+        EXPECT_FALSE(r.transferred);
+    }
+    {   // pitch circle no wider than the widest member — even when it FITS.
+        auto s = makeCounterboreRingStep();
+        s.params["bolt_circle_dia_mm"] = 5.0;   // seat 6.0
+        const auto r = adapt::transferFeature(s, "watch", "phone", src, dst);
+        EXPECT_FALSE(r.transferred);
+    }
+    {   // countersink cone angle outside the ISO envelope.
+        process::StepInvocation s;
+        s.skill_id = "countersink_ring_pattern";
+        s.params = {
+            { "count",              6 },
+            { "bolt_circle_dia_mm", 20.0 },
+            { "center_x_mm",        0.0 },
+            { "center_y_mm",        0.0 },
+            { "axis_dir",           json::array({ 0.0, 0.0, -1.0 }) },
+            { "pilot_dia_mm",       3.0 },
+            { "pilot_depth_mm",     6.0 },
+            { "cone_top_dia_mm",    8.0 },
+            { "cone_angle_deg",    30.0 },   // < 45
+            { "start_angle_deg",    0.0 },
+        };
+        const auto r = adapt::transferFeature(s, "watch", "phone", src, dst);
+        EXPECT_FALSE(r.transferred);
+    }
+    {   // bolt circle of Ø0.5 micro-drilled holes: bolt_circle_pattern::
+        // validate itself has no 0.8 floor, but apply() composes drill_hole,
+        // which hard-throws DFM-002 — the transfer must mirror the ATOM's
+        // gate (the recovery grammar emits the measured dia with no floor).
+        process::StepInvocation s;
+        s.skill_id = "bolt_circle_pattern";
+        s.params = {
+            { "hole_count",         6 },
+            { "bolt_circle_dia_mm", 20.0 },
+            { "hole_dia_mm",        0.5 },
+            { "center_x_mm",        0.0 },
+            { "center_y_mm",        0.0 },
+            { "axis_dir",           json::array({ 0.0, 0.0, -1.0 }) },
+            { "start_angle_deg",    0.0 },
+        };
+        const auto r = adapt::transferFeature(s, "watch", "phone", src, dst);
+        EXPECT_FALSE(r.transferred);
+        EXPECT_EQ(r.step.skill_id, "refused_transfer");
+
+        // A BLIND bolt circle with no positive depth throws the atom's
+        // "blind drill depth must be > 0" — refuse that too.
+        s.params["hole_dia_mm"]  = 3.0;
+        s.params["through_hole"] = false;
+        s.params["depth_mm"]     = 0.0;
+        const auto b = adapt::transferFeature(s, "watch", "phone", src, dst);
+        EXPECT_FALSE(b.transferred);
+    }
+}
+
+// ─── 22. The pattern radial clamp uses the REAL per-axis eccentricity ──────
+// An off-centre ring on an asymmetric destination: only the Y axis binds
+// (|eccY| + rOut > hy − margin while X has slack), so a centred-pattern
+// assumption (off = 0 → 13 <= 18, no clamp) or an X/Y axis mixup would leave
+// the PCD at 20 and fail the assertion.
+TEST(FeatureTransfer, PatternClampUsesRealEccentricityPerAxis)
+{
+    auto s = makeCounterboreRingStep();
+    s.params["bolt_circle_dia_mm"] = 20.0;   // rOut = (20 + 6)/2 = 13
+    s.params["center_y_mm"]        = 8.0;
+    const auto res = adapt::transferFeature(
+        s, "watch", "phone",
+        adapt::AnchorFrame{ 0, 0, 0, 40, 20, 10 },    // identity scaling
+        adapt::AnchorFrame{ 0, 0, 0, 40, 20, 10 });
+    ASSERT_TRUE(res.transferred);
+    EXPECT_TRUE(res.fit_clamped)
+        << "|eccY| 8 + rOut 13 = 21 > hy 20 - margin 2 = 18";
+    // feasibleR = min(40-2-0, 20-2-8) = 10 -> newPcd = 2*10 - 6 = 14;
+    // chord = 14*sin(pi/6) = 7 > seat 6 (still a pattern, inside the DFM-003
+    // density warning band — allowed through with a note).
+    EXPECT_NEAR(res.step.params["bolt_circle_dia_mm"].get<double>(), 14.0, 1e-9);
+    EXPECT_DOUBLE_EQ(res.step.params["seat_dia_mm"].get<double>(), 6.0);
 }
