@@ -25,8 +25,11 @@
 #include "skills/Workpiece.hpp"
 #include "skills/mill_rect_pocket.hpp"
 
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 
 #include <nlohmann/json.hpp>
 
@@ -325,11 +328,14 @@ TEST(FeatureTransfer, FaceAnchoredOffsetDeckClampsExactly)
     EXPECT_TRUE(res.fit_clamped)
         << "the face-anchored eccentricity (~14.5) forces a clamp that the "
            "centred-face assumption (|cx|=0 -> 24 <= 38) would miss";
-    // feasible OD = (hx 40 - margin 2 - ecc ~14.5) * 2 ≈ 47 (±corner-fillet
-    // wobble on the resolved face centre).
+    // The MEASURED footprint binds at the pocket wall (x = 50), not the plate
+    // edge: a ring reaching over the recessed pocket would cut air there and
+    // execute as an incomplete arc — not the transferred feature.  feasible
+    // OD = (pocket wall 50 - exec x ~25.5 - margin 2) * 2 ≈ 45 (±corner-
+    // fillet wobble on the resolved face centre).
     const double odClamped = res.step.params["outer_dia_mm"].get<double>();
-    EXPECT_GT(odClamped, 45.0);
-    EXPECT_LT(odClamped, 48.0) << "clamped strictly below the source OD 48";
+    EXPECT_GT(odClamped, 43.5);
+    EXPECT_LT(odClamped, 46.5) << "clamped strictly below the source OD 48";
 }
 
 // ─── 12. FACE-ANCHORED depth: a RECESSED largest entry face limits depth by
@@ -748,5 +754,80 @@ TEST(FeatureTransfer, PatternClampUsesRealEccentricityPerAxis)
     // chord = 14*sin(pi/6) = 7 > seat 6 (still a pattern, inside the DFM-003
     // density warning band — allowed through with a note).
     EXPECT_NEAR(res.step.params["bolt_circle_dia_mm"].get<double>(), 14.0, 1e-9);
+    EXPECT_DOUBLE_EQ(res.step.params["seat_dia_mm"].get<double>(), 6.0);
+}
+
+// ─── 23. ROUND footprint: a diagonal offset clamps against the RIM ─────────
+// On a Ø44 disc, a ring at face-local (10,10) has |ecc| = 14.14; the measured
+// footprint clamps its OD to 2*(22 - 2 - 14.14) ≈ 11.7.  The per-axis AABB
+// (hx = hy = 22) sees offX + OD/2 = 10 + 10 = 20 <= 20 and would not clamp at
+// all — the diagonal is exactly where a square model over-allows a circle.
+TEST(FeatureTransfer, FaceAnchoredRoundCaseClampsDiagonalOffset)
+{
+    auto disc = skill::createCylindricalStock(44.0, 10.0);
+    const TopoDS_Shape dst = disc->shape();
+
+    process::StepInvocation s;
+    s.skill_id = "annular_groove";
+    s.params = {
+        { "center_x_mm",  10.0 },
+        { "center_y_mm",  10.0 },
+        { "outer_dia_mm", 20.0 },
+        { "inner_dia_mm", 14.0 },
+        { "depth_mm",      1.0 },
+    };
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 22, 22, 5 },
+        adapt::AnchorFrame::fromShape(dst), opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_TRUE(res.fit_clamped)
+        << "the AABB model would see 10 + 10 <= 22 - 2 and skip the clamp";
+    const double odClamped = res.step.params["outer_dia_mm"].get<double>();
+    EXPECT_GT(odClamped, 11.0);
+    EXPECT_LT(odClamped, 12.4)
+        << "feasible OD = 2*(rim 22 - margin 2 - |ecc| 14.14) ~ 11.7";
+    // Ratio-preserving: the ID shrinks by the same factor.
+    EXPECT_NEAR(res.step.params["inner_dia_mm"].get<double>(),
+                odClamped * 14.0 / 20.0, 1e-6);
+}
+
+// ─── 24. Lug/crown-like protrusions do NOT inflate the footprint ────────────
+// Four tabs push the bbox to 60 x 60 (hx = hy = 30), so the AABB test would
+// pass a PCD-40 ring (rOut 22 <= 30 - 2) untouched; the measured footprint
+// still clamps against the Ø44 case rim between the tabs.
+TEST(FeatureTransfer, FaceAnchoredLugsDoNotInflateFootprint)
+{
+    auto disc = skill::createCylindricalStock(44.0, 10.0);
+    TopoDS_Shape dst = disc->shape();
+    const double tabs[4][2] = { { 1.0, 0.0 }, { -1.0, 0.0 },
+                                { 0.0, 1.0 }, { 0.0, -1.0 } };
+    for (const auto& t : tabs) {
+        // A 6-wide tab reaching from the rim to |axis| = 30 (z 0..10).
+        const gp_Pnt lo(t[0] != 0.0 ? (t[0] > 0 ? 20.0 : -30.0) : -3.0,
+                        t[1] != 0.0 ? (t[1] > 0 ? 20.0 : -30.0) : -3.0, 0.0);
+        const gp_Pnt hi(t[0] != 0.0 ? (t[0] > 0 ? 30.0 : -20.0) : 3.0,
+                        t[1] != 0.0 ? (t[1] > 0 ? 30.0 : -20.0) : 3.0, 10.0);
+        dst = BRepAlgoAPI_Fuse(dst, BRepPrimAPI_MakeBox(lo, hi).Shape()).Shape();
+    }
+
+    auto s = makeCounterboreRingStep();          // world centre (0, 0)
+    s.params["bolt_circle_dia_mm"] = 40.0;       // seat 6 -> rOut 23
+    const adapt::AnchorFrame dstFrame = adapt::AnchorFrame::fromShape(dst);
+    EXPECT_NEAR(dstFrame.hx, 30.0, 0.2) << "the tabs must inflate the bbox";
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 30, 30, 10 },   // identity scaling
+        dstFrame, opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_TRUE(res.fit_clamped)
+        << "the inflated AABB (0 + 23 <= 30 - 2) would skip the clamp; the "
+           "45-degree samples lie off the Ø44 case and off the tabs";
+    // feasibleR + margin <= rim 22 -> feasibleR ~ 20 -> newPcd ~ 34.
+    EXPECT_NEAR(res.step.params["bolt_circle_dia_mm"].get<double>(), 34.0, 0.8);
     EXPECT_DOUBLE_EQ(res.step.params["seat_dia_mm"].get<double>(), 6.0);
 }

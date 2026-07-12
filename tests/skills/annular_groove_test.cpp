@@ -56,6 +56,41 @@ TEST(SkillAnnularGroove, ApplyRemovesRingVolume)
         << "ring channel removes pi*(R^2 - r^2)*depth";
 }
 
+// ─── 1b. TWO concentric grooves on one part are BOTH recognised ─────────────
+// A watch already carries its bezel ring; a transferred deco ring lands next
+// to it.  The single-emit recognize (return after the first passing floor)
+// made every groove after the first invisible — the reverse-transfer e2e
+// measured exactly that.  Each passing annular floor is a distinct groove.
+TEST(SkillAnnularGroove, RecognizesTwoConcentricGrooves)
+{
+    auto stock = skill::createCuboidStock(60.0, 60.0, 10.0);
+    skill::annular_groove::Input big;
+    big.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    big.outer_dia_mm = 44.0;
+    big.inner_dia_mm = 38.0;
+    big.depth_mm     = 1.0;
+    const auto first = skill::annular_groove::apply(*stock, big);
+
+    skill::annular_groove::Input small;
+    small.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    small.outer_dia_mm = 12.0;
+    small.inner_dia_mm =  8.0;
+    small.depth_mm     =  0.5;
+    const auto second = skill::annular_groove::apply(*first.workpiece, small);
+
+    skill::Workpiece foreign(second.workpiece->shape());   // NO history
+    bool foundBig = false, foundSmall = false;
+    for (const auto& c : skill::annular_groove::recognize(foreign)) {
+        if (c.matched_geometry.value("source", std::string{}) != "geometry")
+            continue;
+        const double odr = c.recovered_params.value("outer_dia_mm", 0.0);
+        if (std::abs(odr - 44.0) < 0.5) foundBig = true;
+        if (std::abs(odr - 12.0) < 0.5) foundSmall = true;
+    }
+    EXPECT_TRUE(foundBig)   << "the bezel-sized ring must be recognised";
+    EXPECT_TRUE(foundSmall) << "the deco-sized ring must ALSO be recognised";
+}
+
 // ─── 2. recognize recovers a foreign bezel ring (geometric path B) ─────────
 TEST(SkillAnnularGroove, RecognizesForeignBezel)
 {

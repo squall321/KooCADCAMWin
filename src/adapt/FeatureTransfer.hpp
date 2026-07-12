@@ -44,8 +44,16 @@
 //   • placement: face-anchored EXACT when opts.dst_shape is supplied;
 //     otherwise the conservative near-CONCENTRIC envelope (a centre past
 //     half the destination half-extent refuses);
-//   • rectangular-footprint destination — the AABB clamp does not model a
-//     round boundary (phone→watch stays out of scope);
+//   • destination footprint: face-anchored mode MEASURES it — the feature's
+//     outermost circle (footprint radius + margin) is point-classified
+//     against the actual solid at the entry plane, and the clamp bisects the
+//     largest feasible radius (assumes a footprint star-shaped about the
+//     executed centre — true of every shipped product).  A round watch case
+//     therefore clamps against its rim where an AABB would over-allow up to
+//     √2× on diagonal offsets, bbox-inflating lugs/crown do not inflate the
+//     footprint, and a circle over an existing cut's void also clamps.
+//     Frame-only mode keeps the per-axis AABB approximation, so phone→watch
+//     (round footprint) is only sound face-anchored;
 //   • destination thick enough below the entry plane for the cut + 1 mm
 //     floor, else clamp — and REFUSE when the clamp would have to eat a
 //     fastener-critical intrinsic (a counterbore seat, a countersink cone):

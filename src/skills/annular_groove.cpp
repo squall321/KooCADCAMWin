@@ -325,7 +325,14 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     double wallSpan = -1.0;
     int innerFace = -1, outerFace = -1;
     for (const auto& cyl : cyls) {
-        if (std::abs(cyl.radius - floor.outerR) < 0.2) { outerFace = cyl.faceIdx; continue; }
+        // COAXIAL-gated like the inner branch: a bare radius match would grab
+        // ANOTHER groove's wall anywhere on the part (last match wins) — with
+        // multi-emit, two same-OD rings would then stamp the SAME face id and
+        // dedupe's face-set intersection would drop the second real groove.
+        if (std::abs(cyl.radius - floor.outerR) < 0.2) {
+            if (coaxial(cyl)) outerFace = cyl.faceIdx;
+            continue;
+        }
         if (std::abs(cyl.radius - floor.innerR) > 0.2) continue;
         if (!coaxial(cyl)) continue;
         double lo, hi; cylRange(cyl, lo, hi);
@@ -459,7 +466,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     // The annular floor signature (solid below the floor) is the more specific
     // and correct explanation, so it must win.
     out.push_back(RecognizedFeature{ kSkillId, recovered, 0.95, matched });
-    return out;   // single-ring parity with the pre-refactor behaviour
+    // Keep iterating: a part can carry SEVERAL grooves (the watch bezel plus
+    // a transferred deco ring measured this — single-emit made every groove
+    // after the first invisible).  Each passing floor is a distinct groove
+    // (one groove has exactly one annular floor face); overlapping
+    // explanations of shared walls are dedupe's job, as for the first ring.
 
     }  // for each candidate annular floor
     return out;

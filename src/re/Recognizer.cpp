@@ -738,6 +738,10 @@ std::string geomFingerprint(const skill::RecognizedFeature& c)
     if (!p.is_object()) return "";
     static const char* kDimKeys[] = {
         "diameter_mm", "seat_dia_mm", "pilot_dia_mm", "bore_dia_mm",
+        // Ring channels: OD/ID distinguish concentric grooves of equal depth
+        // (a bezel plus a transferred deco ring) — annular_groove became
+        // multi-emit, so these dims now reach dedupe in pairs.
+        "outer_dia_mm", "inner_dia_mm",
         "position_x_mm", "position_y_mm", "position_z_mm", "depth_mm",
         // Pattern-compound centres: two same-dimension rings at DIFFERENT
         // centres are different features — without these keys their
@@ -752,6 +756,21 @@ std::string geomFingerprint(const skill::RecognizedFeature& c)
             // 0.05 mm grid: collapses rebuild noise, keeps distinct features apart.
             const long q = std::lround(p[k].get<double>() * 20.0);
             key += '|'; key += k; key += ':'; key += std::to_string(q);
+        }
+    }
+    // world_center [x, y]: the WORLD position of features whose center_x/y
+    // are FACE-LOCAL by apply() contract (annular_groove's geometric path
+    // stamps (0,0) — "on its own face").  Without it, two dimensionally
+    // identical grooves at different world positions (the default phone's
+    // twin camera deco rings) fingerprint identically and the second is
+    // silently dropped — the exact collision the centre keys above were
+    // added to prevent for pattern compounds.
+    if (p.contains("world_center") && p["world_center"].is_array()) {
+        for (const auto& v : p["world_center"]) {
+            if (!v.is_number()) continue;
+            any = true;
+            const long q = std::lround(v.get<double>() * 20.0);
+            key += "|wc:"; key += std::to_string(q);
         }
     }
     return any ? key : "";

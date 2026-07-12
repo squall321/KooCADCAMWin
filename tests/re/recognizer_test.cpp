@@ -19,6 +19,7 @@
 
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
+#include "skills/annular_groove.hpp"
 #include "skills/chamfer_edge.hpp"
 #include "skills/crown_knurl.hpp"
 #include "skills/drill_hole.hpp"
@@ -321,4 +322,65 @@ TEST(Recognizer, CrownKnurlNotchesDoNotSurviveAsDuplicateDrills)
         << "DOUBLE-CUT PATH REACHABLE: plan carries crown_knurl x" << knurl
         << " AND drill_hole x" << drill
         << " for the same notch ring (no subsumption, no face-id dedupe)";
+}
+
+namespace {
+
+// Two annular grooves on one plate, machined at face-local offsets so their
+// WORLD centres differ; dims per ring supplied by the caller.
+skill::Workpiece twoGroovePlate(double depthLeft, double depthRight)
+{
+    auto stock = skill::createCuboidStock(80.0, 40.0, 10.0);
+    skill::annular_groove::Input g;
+    g.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    g.outer_dia_mm = 10.0;
+    g.inner_dia_mm =  8.0;
+    g.center_x_mm  = -20.0;
+    g.depth_mm     = depthLeft;
+    const auto left = skill::annular_groove::apply(*stock, g);
+    g.center_x_mm  = 20.0;
+    g.depth_mm     = depthRight;
+    const auto both = skill::annular_groove::apply(*left.workpiece, g);
+    return skill::Workpiece(both.workpiece->shape());   // NO history
+}
+
+int annularStepsInPlan(const skill::Workpiece& foreign)
+{
+    // NAMED plan: ranging over `inferProcessPlan(...).steps()` directly would
+    // iterate a reference into a destroyed temporary (C++17 range-for does
+    // not extend the temporary's lifetime through a member call).
+    const process::ProcessPlan plan = re::inferProcessPlan(foreign, 0.7);
+    int n = 0;
+    for (const auto& st : plan.steps())
+        if (st.skill_id == "annular_groove") ++n;
+    return n;
+}
+
+}  // namespace
+
+// ─── Multi-emit must SURVIVE dedupe: twin same-dimension grooves ────────────
+// The default phone carries two IDENTICAL camera deco rings at different
+// world positions.  The geometric path stamps center (0,0) ("on its own
+// face"), so without world_center in the fingerprint the twins collide and
+// one is silently dropped in inferProcessPlan — multi-emit nullified one
+// stage later.
+TEST(Recognizer, TwinSameDimensionGroovesBothSurviveDedupe)
+{
+    const skill::Workpiece foreign = twoGroovePlate(0.5, 0.5);
+    EXPECT_EQ(annularStepsInPlan(foreign), 2)
+        << "two dimensionally identical grooves at different WORLD centres "
+           "are two features — the fingerprint must not collapse them";
+}
+
+// ─── Same-OD, different-depth grooves: the outer-wall stamp must be COAXIAL ─
+// Their fingerprints differ (depth is a key), so the binding failure is the
+// face-set: a bare radius match let each floor grab the OTHER ring's outer
+// wall (last match wins), the shared face id made the two candidates
+// "overlap", and dedupe blocked the second at equal confidence.
+TEST(Recognizer, SameODDifferentDepthGroovesBothSurviveDedupe)
+{
+    const skill::Workpiece foreign = twoGroovePlate(0.5, 1.2);
+    EXPECT_EQ(annularStepsInPlan(foreign), 2)
+        << "same-OD grooves at different centres must not contaminate each "
+           "other's outer-wall face id";
 }

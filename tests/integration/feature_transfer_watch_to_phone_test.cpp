@@ -45,6 +45,7 @@
 #include "process/StepInvocation.hpp"
 #include "re/Recognizer.hpp"
 #include "skills/Workpiece.hpp"
+#include "skills/annular_groove.hpp"
 #include "skills/counterbore_ring_pattern.hpp"
 
 #include <BRepGProp.hxx>
@@ -335,4 +336,101 @@ TEST(FeatureTransferWatchToPhone, CounterboreRingTransfersToPhoneMeasured)
     EXPECT_TRUE(found)
         << "the transferred counterbore ring must be re-recognised on the "
            "phone with the transferred PCD/count/dias (measured)";
+}
+
+// ═══ REVERSE direction (phone → watch): a deco-style annular ring machined
+//     onto the phone display is geometrically recovered, transferred onto
+//     the ROUND watch case (the measured-footprint clamp's home turf — the
+//     AABB approximation was never sound for a disc), executed, volume-
+//     checked and re-recognised.  Closes the transfer loop bidirectionally. ═══
+TEST(FeatureTransferWatchToPhone, DecoRingTransfersBackToWatchMeasured)
+{
+    // ── 1. Build both products; machine a deco ring onto the phone ────────
+    const json watchSpec = engine::defaultSpecForProduct("watch");
+    const json phoneSpec = engine::defaultSpecForProduct("phone");
+    std::vector<engine::BuildWarning> wWatch, wPhone;
+    const TopoDS_Shape watchShape = engine::buildProduct(watchSpec, wWatch);
+    const TopoDS_Shape phoneShape = engine::buildProduct(phoneSpec, wPhone);
+    ASSERT_FALSE(watchShape.IsNull());
+    ASSERT_FALSE(phoneShape.IsNull());
+    EXPECT_EQ(engine::productFromGeometry(watchShape), "watch");
+
+    skill::annular_groove::Input gin;
+    gin.entry_face   = skill::FaceByNormal{ gp_Dir(0.0, 0.0, 1.0) };
+    gin.center_x_mm  = 0.0;
+    gin.center_y_mm  = 0.0;
+    gin.outer_dia_mm = 12.0;
+    gin.inner_dia_mm =  8.0;
+    gin.depth_mm     =  0.5;
+    skill::Workpiece phoneWp(phoneShape);
+    const auto decoOut = skill::annular_groove::apply(phoneWp, gin);
+    ASSERT_NE(decoOut.workpiece, nullptr);
+    const TopoDS_Shape decoPhone = decoOut.workpiece->shape();
+
+    // ── 2. Recover the deco ring GEOMETRICALLY from a foreign copy ────────
+    // (the phone carries OTHER annular grooves — the camera deco rings — so
+    // select by the machined OD; recovery must still be measurement).
+    skill::Workpiece foreignDeco(decoPhone);
+    ASSERT_TRUE(foreignDeco.features().empty());
+    const process::ProcessPlan plan = re::inferProcessPlan(foreignDeco, 0.7);
+    const process::StepInvocation* deco = nullptr;
+    for (const auto& s : plan.steps()) {
+        if (s.skill_id != "annular_groove") continue;
+        if (std::abs(s.params.value("outer_dia_mm", 0.0) - 12.0) > 0.5) continue;
+        deco = &s;
+        break;
+    }
+    ASSERT_NE(deco, nullptr)
+        << "the machined deco ring must be recovered as an annular_groove";
+    EXPECT_NEAR(deco->params.value("inner_dia_mm", 0.0), 8.0, 0.5);
+    EXPECT_NEAR(deco->params.value("depth_mm", 0.0),     0.5, 0.2);
+
+    // ── 3. Transfer phone → watch, face-anchored onto the ROUND case ──────
+    const adapt::AnchorFrame phoneFrame = adapt::AnchorFrame::fromShape(decoPhone);
+    const adapt::AnchorFrame watchFrame = adapt::AnchorFrame::fromShape(watchShape);
+    adapt::TransferOptions transferOpts;
+    transferOpts.dst_shape = &watchShape;
+    const adapt::TransferResult tr = adapt::transferFeature(
+        *deco, "phone", "watch", phoneFrame, watchFrame, transferOpts);
+    ASSERT_TRUE(tr.transferred);
+    EXPECT_FALSE(tr.fit_clamped)
+        << "a Ø12 ring at the case centre clears the Ø44 rim and the bezel "
+           "groove — the measured footprint must not clamp it";
+    EXPECT_DOUBLE_EQ(tr.step.params["outer_dia_mm"].get<double>(),
+                     deco->params["outer_dia_mm"].get<double>());
+    EXPECT_DOUBLE_EQ(tr.step.params["inner_dia_mm"].get<double>(),
+                     deco->params["inner_dia_mm"].get<double>());
+
+    // ── 4. Execute on the watch; the ring removes its analytic volume ─────
+    const double vBefore = volumeOf(watchShape);
+    process::ProcessPlan transferPlan;
+    transferPlan.append(tr.step);
+    auto watchStock = std::make_shared<skill::Workpiece>(watchShape);
+    const auto result = process::Executor::execute(transferPlan, watchStock);
+    ASSERT_TRUE(result.ok())
+        << (result.errors.empty() ? "" : result.errors.front());
+    const TopoDS_Shape ringedWatch = result.workpiece->shape();
+    const double od    = tr.step.params["outer_dia_mm"].get<double>();
+    const double id    = tr.step.params["inner_dia_mm"].get<double>();
+    const double depth = tr.step.params["depth_mm"].get<double>();
+    const double expectedCut = M_PI / 4.0 * (od * od - id * id) * depth;
+    EXPECT_NEAR(vBefore - volumeOf(ringedWatch), expectedCut, expectedCut * 0.05)
+        << "the machined deco ring must remove its analytic volume";
+
+    // ── 5. Re-recognition on a metadata-free copy of the machined watch ───
+    skill::Workpiece foreignRinged(ringedWatch);
+    ASSERT_TRUE(foreignRinged.features().empty());
+    bool found = false;
+    for (const auto& c : re::analyzeFiltered(foreignRinged, 0.7)) {
+        if (c.skill_id != "annular_groove") continue;
+        const auto& rp = c.recovered_params;
+        if (std::abs(rp.value("outer_dia_mm", 0.0) - od) > 0.5) continue;
+        EXPECT_NEAR(rp.value("inner_dia_mm", 0.0), id,    0.5);
+        EXPECT_NEAR(rp.value("depth_mm",     0.0), depth, 0.3);
+        found = true;
+        break;
+    }
+    EXPECT_TRUE(found)
+        << "the deco ring must be re-recognised on the watch alongside the "
+           "bezel ring (distinct ODs) — the reverse transfer round-trips";
 }

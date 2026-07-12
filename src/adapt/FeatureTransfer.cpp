@@ -7,7 +7,9 @@
 #include "skills/countersink.hpp"
 
 #include <BRepBndLib.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <Bnd_Box.hxx>
+#include <TopAbs_State.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
@@ -130,10 +132,14 @@ ParamRole classifyParam(const std::string& key)
 //     face-local family without it falls back to the conservative
 //     near-concentric envelope (the pattern family's world placement needs
 //     no face and is exact in both modes);
-//   - destination: a rectangular-footprint slab thick enough to hold the cut
-//     plus 1 mm of floor (through-drilled bolt circles are exempt).  A
-//     round-footprint destination (phone→watch) is not modelled by the AABB
-//     clamp and stays out of scope.
+//   - destination footprint: face-anchored mode MEASURES it (the outermost
+//     circle is classified against the actual solid at the entry plane —
+//     round watch cases, stepped decks, lug/crown protrusions and existing
+//     cuts are all handled by interrogation, not modelling); frame-only mode
+//     keeps the AABB approximation, so a round-footprint destination is only
+//     sound face-anchored;
+//   - destination thick enough to hold the cut plus 1 mm of floor
+//     (through-drilled bolt circles are exempt).
 
 namespace {
 
@@ -169,6 +175,26 @@ const PatternFamily* patternFamily(const std::string& skillId)
     };
     const auto it = kFamilies.find(skillId);
     return it == kFamilies.end() ? nullptr : &it->second;
+}
+
+// MEASURED radial feasibility (face-anchored mode): every sample on the
+// circle of radius r about (cx, cy) at height z must classify IN (or ON)
+// the destination solid.  The sample count scales with the circle so
+// adjacent probes stay <= ~0.4 mm apart (floor 48): the finest shipped
+// face-open voids — the phone's 0.5 mm-wide camera deco-groove band, the
+// watch's Ø1.5 rear sensor recess — cannot slip between probes.  (A fixed
+// 48 left ~2.6 mm gaps on a Ø40 circle, wider than both.)
+bool circleInMaterial(BRepClass3d_SolidClassifier& cls,
+                      double cx, double cy, double z, double r)
+{
+    const int n = std::max(48, static_cast<int>(std::ceil(2.0 * M_PI * r / 0.4)));
+    for (int i = 0; i < n; ++i) {
+        const double a = 2.0 * M_PI * i / n;
+        cls.Perform(gp_Pnt(cx + r * std::cos(a), cy + r * std::sin(a), z), 1e-6);
+        const TopAbs_State st = cls.State();
+        if (st != TopAbs_IN && st != TopAbs_ON) return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -524,61 +550,54 @@ TransferResult transferFeature(const process::StepInvocation& src,
         }
     }
 
-    // 8. Radial: the executed centre + the outermost cut radius must clear
-    //    each half-extent minus the margin.
+    // 8. Radial: the feature's outermost circle — footprint radius rOut plus
+    //    the fit margin — must lie inside the destination footprint.
     //
-    //    Face-local family: outermost radius = OD/2.  Face-anchored mode uses
-    //    the REAL eccentricity (face centre + offset − frame centre);
-    //    frame-only mode falls back to the centred-face assumption (|offset|
-    //    alone).  When violated, shrink OD and ID by ONE factor
-    //    (ratio-preserving — the groove keeps its proportions).
+    //    rOut per family: OD/2 (face-local groove) or PCD/2 + widest-member-
+    //    dia/2 (pattern).  The eccentricity is the executed centre relative
+    //    to the frame centre (face-local frame-only mode falls back to the
+    //    centred-face assumption, |offset| alone).
     //
-    //    Pattern family: outermost radius = PCD/2 + widest-member-dia/2, and
-    //    the eccentricity is the world centre in BOTH modes.  When violated,
-    //    the PITCH CIRCLE alone shrinks — the member diameters are fastener
-    //    sizes (the mating identity being transferred) and stay preserved.
-    //    A post-clamp PCD at or below the widest member (the skill's own
-    //    validate error) or a member-to-member chord below the widest dia
-    //    (adjacent cuts would merge — no longer a pattern) refuses.
+    //    FEASIBILITY per mode:
+    //      face-anchored — MEASURED: every sample of the outer circle at the
+    //        entry plane (0.1 mm into material) must classify IN the actual
+    //        solid.  This replaces the AABB approximation entirely: a round
+    //        watch case clamps against its rim (an AABB over-allows up to
+    //        √2× on diagonal offsets), lugs/crown that inflate the bbox do
+    //        not inflate the footprint, and a circle over an EXISTING cut's
+    //        void also fails — transferring onto occupied real estate is not
+    //        a clean transfer.  The clamp bisects the largest feasible
+    //        radius; that search assumes the footprint is star-shaped about
+    //        the executed centre (true of every shipped product).
+    //      frame-only — the AABB per-axis test (no shape to interrogate).
+    //
+    //    CLAMP application per family: the groove shrinks OD and ID by ONE
+    //    factor (ratio-preserving — it keeps its proportions); the pattern
+    //    shrinks the PITCH CIRCLE alone (newPcd = 2·feasibleR − widest) —
+    //    the member diameters are fastener sizes, the mating identity being
+    //    transferred, and stay preserved.  Post-clamp refusals: a groove
+    //    wall < 0.5 mm; a PCD at or below the widest member (the skill's own
+    //    validate error); a member-to-member chord below the widest dia
+    //    (adjacent cuts would merge — no longer a pattern).
     const double margin = opts.fit_margin_mm;
     const double offX = fam != nullptr ? std::abs(eccX)
                                        : (faceAnchored ? std::abs(eccX) : std::abs(cx));
     const double offY = fam != nullptr ? std::abs(eccY)
                                        : (faceAnchored ? std::abs(eccY) : std::abs(cy));
-    if (fam == nullptr) {
-        const bool fitsX = offX + 0.5 * od <= dstFrame.hx - margin;
-        const bool fitsY = offY + 0.5 * od <= dstFrame.hy - margin;
-        if (od > 1e-9 && (!fitsX || !fitsY)) {
-            const double maxOdX = (dstFrame.hx - margin - offX) * 2.0;
-            const double maxOdY = (dstFrame.hy - margin - offY) * 2.0;
-            const double feasibleOd = std::max(0.0, std::min(maxOdX, maxOdY));
-            const double factor = feasibleOd / od;
-            od *= factor;
-            id *= factor;
-            p["outer_dia_mm"] = od;
-            p["inner_dia_mm"] = id;
-            result.fit_clamped = true;
-            result.notes.push_back("fit clamp: OD/ID scaled by " + std::to_string(factor) +
-                                   " to fit the destination footprint");
-            // A clamp that leaves no machinable groove wall is a refusal, not a
-            // transfer — a sub-0.5 mm ring wall cannot be cut.
-            if (0.5 * (od - id) < 0.5) {
-                neuter(result, "post-clamp groove wall " + std::to_string(0.5 * (od - id)) +
-                               " mm < 0.5 mm — refusing transfer");
-                spdlog::debug("adapt::transferFeature {}->{}: refused (post-clamp wall too thin)",
-                              srcProduct, dstProduct);
-                return result;   // transferred stays false
-            }
-        }
-    } else {
-        const double pcd    = num("bolt_circle_dia_mm", 0.0);
-        const double widest = num(fam->widest_key, 0.0);
+
+    // Pattern intrinsics (validated before the fit so a degenerate source
+    // refuses whether or not it fits).
+    double pcd = 0.0, widest = 0.0;
+    int    count = 0;
+    if (fam != nullptr) {
+        pcd    = num("bolt_circle_dia_mm", 0.0);
+        widest = num(fam->widest_key, 0.0);
         const double countD = num(fam->count_key, 0.0);
         if (std::isnan(pcd) || std::isnan(widest) || std::isnan(countD)) {
             neuter(result, "malformed pattern param in source step");
             return result;
         }
-        const int count = static_cast<int>(countD);
+        count = static_cast<int>(countD);
         if (count < 3 || pcd <= widest || widest <= 0.0) {
             // The skills' own validate errors (count >= 3, positive dias,
             // pitch circle wider than the widest member) — apply() would
@@ -588,42 +607,97 @@ TransferResult transferFeature(const process::StepInvocation& src,
                            "the skill's validate rejects it");
             return result;
         }
-        const double rOut  = 0.5 * (pcd + widest);
-        const bool   fitsX = offX + rOut <= dstFrame.hx - margin;
-        const bool   fitsY = offY + rOut <= dstFrame.hy - margin;
-        if (!fitsX || !fitsY) {
-            const double feasibleR = std::max(
-                0.0, std::min(dstFrame.hx - margin - offX,
-                              dstFrame.hy - margin - offY));
-            const double newPcd = 2.0 * feasibleR - widest;
-            if (newPcd <= widest) {
-                neuter(result, "post-clamp pitch circle " + std::to_string(newPcd) +
-                               " mm <= widest member " + std::to_string(widest) +
-                               " mm — the skill's validate rejects it");
-                spdlog::debug("adapt::transferFeature {}->{}: refused (post-clamp PCD)",
-                              srcProduct, dstProduct);
-                return result;
+    }
+
+    const double rOut = fam != nullptr ? 0.5 * (pcd + widest) : 0.5 * od;
+    bool   violated  = false;
+    double feasibleR = rOut;
+    if (rOut > 1e-9) {
+        if (faceAnchored) {
+            BRepClass3d_SolidClassifier cls(*opts.dst_shape);
+            const double probeZ = faceZ - nzEntry * 0.1;
+            const double execX  = dstFrame.cx + eccX;
+            const double execY  = dstFrame.cy + eccY;
+            if (!circleInMaterial(cls, execX, execY, probeZ, rOut + margin)) {
+                violated = true;
+                if (!circleInMaterial(cls, execX, execY, probeZ, margin)) {
+                    feasibleR = 0.0;   // even the bare margin circle overhangs
+                } else {
+                    double lo = 0.0, hi = rOut;
+                    for (int i = 0; i < 24; ++i) {
+                        const double mid = 0.5 * (lo + hi);
+                        if (circleInMaterial(cls, execX, execY, probeZ,
+                                             mid + margin))
+                            lo = mid;
+                        else
+                            hi = mid;
+                    }
+                    feasibleR = lo;
+                }
+                result.notes.push_back(
+                    "measured footprint: largest feasible radius " +
+                    std::to_string(feasibleR) + " mm at the entry plane");
             }
-            const double chord = newPcd * std::sin(M_PI / count);
-            if (chord < widest) {
-                neuter(result, "post-clamp member chord " + std::to_string(chord) +
-                               " mm < widest member " + std::to_string(widest) +
-                               " mm — adjacent cuts would merge");
-                spdlog::debug("adapt::transferFeature {}->{}: refused (members merge)",
-                              srcProduct, dstProduct);
-                return result;
+        } else {
+            const bool fitsX = offX + rOut <= dstFrame.hx - margin;
+            const bool fitsY = offY + rOut <= dstFrame.hy - margin;
+            if (!fitsX || !fitsY) {
+                violated  = true;
+                feasibleR = std::max(0.0,
+                                     std::min(dstFrame.hx - margin - offX,
+                                              dstFrame.hy - margin - offY));
             }
-            if (chord - widest < 1.5)
-                result.notes.push_back("post-clamp member gap " +
-                                       std::to_string(chord - widest) +
-                                       " mm is inside the DFM-003 density "
-                                       "warning band");
-            p["bolt_circle_dia_mm"] = newPcd;
-            result.fit_clamped = true;
-            result.notes.push_back("fit clamp: pitch circle " + std::to_string(pcd) +
-                                   " -> " + std::to_string(newPcd) +
-                                   " mm (member diameters preserved)");
         }
+    }
+
+    if (violated && fam == nullptr) {
+        const double feasibleOd = 2.0 * feasibleR;
+        const double factor = feasibleOd / od;
+        od *= factor;
+        id *= factor;
+        p["outer_dia_mm"] = od;
+        p["inner_dia_mm"] = id;
+        result.fit_clamped = true;
+        result.notes.push_back("fit clamp: OD/ID scaled by " + std::to_string(factor) +
+                               " to fit the destination footprint");
+        // A clamp that leaves no machinable groove wall is a refusal, not a
+        // transfer — a sub-0.5 mm ring wall cannot be cut.
+        if (0.5 * (od - id) < 0.5) {
+            neuter(result, "post-clamp groove wall " + std::to_string(0.5 * (od - id)) +
+                           " mm < 0.5 mm — refusing transfer");
+            spdlog::debug("adapt::transferFeature {}->{}: refused (post-clamp wall too thin)",
+                          srcProduct, dstProduct);
+            return result;   // transferred stays false
+        }
+    } else if (violated) {
+        const double newPcd = 2.0 * feasibleR - widest;
+        if (newPcd <= widest) {
+            neuter(result, "post-clamp pitch circle " + std::to_string(newPcd) +
+                           " mm <= widest member " + std::to_string(widest) +
+                           " mm — the skill's validate rejects it");
+            spdlog::debug("adapt::transferFeature {}->{}: refused (post-clamp PCD)",
+                          srcProduct, dstProduct);
+            return result;
+        }
+        const double chord = newPcd * std::sin(M_PI / count);
+        if (chord < widest) {
+            neuter(result, "post-clamp member chord " + std::to_string(chord) +
+                           " mm < widest member " + std::to_string(widest) +
+                           " mm — adjacent cuts would merge");
+            spdlog::debug("adapt::transferFeature {}->{}: refused (members merge)",
+                          srcProduct, dstProduct);
+            return result;
+        }
+        if (chord - widest < 1.5)
+            result.notes.push_back("post-clamp member gap " +
+                                   std::to_string(chord - widest) +
+                                   " mm is inside the DFM-003 density "
+                                   "warning band");
+        p["bolt_circle_dia_mm"] = newPcd;
+        result.fit_clamped = true;
+        result.notes.push_back("fit clamp: pitch circle " + std::to_string(pcd) +
+                               " -> " + std::to_string(newPcd) +
+                               " mm (member diameters preserved)");
     }
 
     // 9. Success.
