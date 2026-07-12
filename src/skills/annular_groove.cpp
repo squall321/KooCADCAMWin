@@ -216,10 +216,15 @@ struct AnnularFloor {
     bool   ok = false;
 };
 
-AnnularFloor findAnnularFloor(const Workpiece& wp)
+// ALL candidate annular planes, widest first.  A part can carry several
+// axis-normal annuli (the groove floor, a chamfered TOP face between two rim
+// chamfers, a counterbore seat) — the caller must pick the one that the
+// groove's own WALL gates confirm, not simply the widest: on the default
+// chamfered bezel the top-face annulus is WIDER than the real floor and a
+// widest-only pick recognised nothing.
+std::vector<AnnularFloor> findAnnularFloors(const Workpiece& wp)
 {
-    AnnularFloor best;
-    double bestWidth = -1.0;
+    std::vector<AnnularFloor> floors;
     for (int i = 0; i < wp.faceCount(); ++i) {
         if (!wp.isFacePlanar(i)) continue;
         gp_Dir fn;
@@ -248,14 +253,16 @@ AnnularFloor findAnnularFloor(const Workpiece& wp)
         gp_Vec d(cIn, cOut);
         const gp_Vec axV(fn);
         if ((d - axV * d.Dot(axV)).Magnitude() > 0.1) continue;
-        const double width = outerR - innerR;
-        if (width > bestWidth) {
-            bestWidth = width;
-            best.faceIdx = i; best.axis = fn; best.center = fc;
-            best.innerR = innerR; best.outerR = outerR; best.ok = true;
-        }
+        AnnularFloor f;
+        f.faceIdx = i; f.axis = fn; f.center = fc;
+        f.innerR = innerR; f.outerR = outerR; f.ok = true;
+        floors.push_back(f);
     }
-    return best;
+    std::sort(floors.begin(), floors.end(),
+              [](const AnnularFloor& a, const AnnularFloor& b) {
+                  return (a.outerR - a.innerR) > (b.outerR - b.innerR);
+              });
+    return floors;
 }
 
 }  // namespace
@@ -286,8 +293,11 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     // floor's inner radius whose deep end sits AT the floor — a counterbore's
     // pilot cylinder runs PAST the seat floor, so its inner wall is deeper than
     // the floor and is rejected.
-    const AnnularFloor floor = findAnnularFloor(wp);
-    if (!floor.ok) return out;
+    // Try every candidate annular plane (widest first): the WALL and
+    // specificity gates below decide which one is the genuine groove floor —
+    // e.g. on a rim-chamfered bezel the top-face annulus is wider than the
+    // real floor but has no inner wall ending at it, so it falls through.
+    for (const AnnularFloor& floor : findAnnularFloors(wp)) {
 
     const gp_Dir adir = floor.axis;
     // Project any point onto a single fixed axis line (so all faces compare on
@@ -311,8 +321,8 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     const auto cyls = collectCyls(wp);
 
     // The inner WALL: a coaxial cylinder at radius ~ floor.innerR running entry
-    // -> floor (the floor must be one END of its axial range).  depth = its span.
-    double depth = -1.0;
+    // -> floor (the floor must be one END of its axial range).
+    double wallSpan = -1.0;
     int innerFace = -1, outerFace = -1;
     for (const auto& cyl : cyls) {
         if (std::abs(cyl.radius - floor.outerR) < 0.2) { outerFace = cyl.faceIdx; continue; }
@@ -321,9 +331,59 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         double lo, hi; cylRange(cyl, lo, hi);
         if (std::min(std::abs(lo - floorAxial), std::abs(hi - floorAxial)) > 0.25) continue;
         const double d = hi - lo;
-        if (d > depth) { depth = d; innerFace = cyl.faceIdx; }
+        if (d > wallSpan) { wallSpan = d; innerFace = cyl.faceIdx; }
     }
-    if (depth < 0.1) return out;
+    if (wallSpan < 0.1) continue;   // no inner wall ends here → not a groove floor
+
+    // DEPTH is FLOOR-ANCHORED, not the wall extent: a rim CHAMFER replaces the
+    // top band of the wall with a cone, so the wall alone reads SHORT (measured
+    // 0.7 for the default watch's nominal 1.0) — a same-part replay hid that
+    // because the chamfer step replays too, but a single-step consumer (the
+    // cross-product transfer) inherited a groove 30 % shallower than the real
+    // one, and even the same-part ring under-cut the chamfer band.  Recover the
+    // true mouth by CHAINING coaxial chamfer cones whose lower rim meets the
+    // current entry estimate; depth = entry − floor.  With no chamfer the mouth
+    // IS the wall top, so the plain case is bit-identical to the old reading.
+    double entryAxial = floorAxial + wallSpan;   // wall top = first estimate
+    {
+        bool grew = true;
+        while (grew) {
+            grew = false;
+            for (int i = 0; i < wp.faceCount(); ++i) {
+                BRepAdaptor_Surface s(wp.face(i));
+                if (s.GetType() != GeomAbs_Cone) continue;
+                const gp_Cone cone = s.Cone();
+                if (std::abs(std::abs(cone.Axis().Direction().Dot(adir)) - 1.0) > 1e-2)
+                    continue;
+                gp_Vec rel(floor.center, cone.Axis().Location());
+                if ((rel - gp_Vec(adir) * rel.Dot(gp_Vec(adir))).Magnitude() > 0.3)
+                    continue;
+                // The cone face's axial range + rim radii from its circular rims.
+                double clo = 1e30, chi = -1e30, rLow = -1.0;
+                for (TopExp_Explorer exp(wp.face(i), TopAbs_EDGE); exp.More(); exp.Next()) {
+                    BRepAdaptor_Curve crv(TopoDS::Edge(exp.Current()));
+                    if (crv.GetType() != GeomAbs_Circle) continue;
+                    const gp_Circ c = crv.Circle();
+                    const double a = axialOf(c.Location());
+                    if (a < clo) { clo = a; rLow = c.Radius(); }
+                    chi = std::max(chi, a);
+                }
+                if (chi <= clo) continue;
+                // A groove-rim chamfer SPRINGS from a rim: its lower rim radius
+                // sits near the inner or outer wall radius, and its lower rim
+                // meets the current entry estimate.
+                if (std::abs(rLow - floor.innerR) > 0.4 &&
+                    std::abs(rLow - floor.outerR) > 0.4)
+                    continue;
+                if (clo <= entryAxial + 0.25 && chi > entryAxial + 1e-6) {
+                    entryAxial = chi;
+                    grew = true;
+                }
+            }
+        }
+    }
+    const double depth = entryAxial - floorAxial;
+    if (depth < 0.1) continue;
 
     // SPECIFICITY — the floor's own INNER WALL must end at the floor (a closed
     // ring channel), NOT continue past it.  A COUNTERBORE / STEPPED BORE has its
@@ -332,12 +392,18 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     // ITSELF, within tolerance) reaches below the floor.  A SMALLER, separate
     // coaxial hole inside the inner radius (e.g. a watch display pocket cut
     // inside the bezel ring) is a DIFFERENT feature and must NOT disqualify the
-    // ring — the bezel floor is still a genuine closed annulus.
-    for (const auto& cyl : cyls) {
-        if (std::abs(cyl.radius - floor.innerR) > 0.3) continue;  // not the inner WALL
-        if (!coaxial(cyl)) continue;
-        double lo, hi; cylRange(cyl, lo, hi);
-        if (lo < floorAxial - 0.15) return out;             // the inner wall continues past the floor
+    // ring — the bezel floor is still a genuine closed annulus.  (This
+    // candidate being a SEAT does not preclude another annulus being a genuine
+    // groove floor — skip to the next candidate.)
+    {
+        bool wallContinuesPastFloor = false;
+        for (const auto& cyl : cyls) {
+            if (std::abs(cyl.radius - floor.innerR) > 0.3) continue;  // not the inner WALL
+            if (!coaxial(cyl)) continue;
+            double lo, hi; cylRange(cyl, lo, hi);
+            if (lo < floorAxial - 0.15) { wallContinuesPastFloor = true; break; }
+        }
+        if (wallContinuesPastFloor) continue;
     }
 
     // TAPER recovery: a sloped bezel/deco ring has a CONE outer wall (apply()
@@ -393,6 +459,9 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
     // The annular floor signature (solid below the floor) is the more specific
     // and correct explanation, so it must win.
     out.push_back(RecognizedFeature{ kSkillId, recovered, 0.95, matched });
+    return out;   // single-ring parity with the pre-refactor behaviour
+
+    }  // for each candidate annular floor
     return out;
 }
 

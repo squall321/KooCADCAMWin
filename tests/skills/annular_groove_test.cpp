@@ -9,6 +9,7 @@
 #include "skills/Stock.hpp"
 #include "skills/Workpiece.hpp"
 #include "skills/annular_groove.hpp"
+#include "skills/chamfer_edge.hpp"
 #include "skills/drill_hole.hpp"
 #include "skills/bore_with_shelf.hpp"
 #include "skills/counterbore.hpp"
@@ -250,4 +251,39 @@ TEST(SkillAnnularGroove, ValidateRejectsBadInput)
     in.depth_mm     = 1.0;
     EXPECT_THROW(skill::annular_groove::apply(*stock, in), skill::SkillError);
     EXPECT_FALSE(skill::annular_groove::validate(*stock, in).passed);
+}
+
+// ─── 11. FLOOR-ANCHORED depth: a rim chamfer must not shorten the recovered
+// groove depth.  The chamfer replaces the top band of the groove's inner wall
+// with a cone, so a wall-extent reading came up short (0.7 for a nominal 1.0
+// on the default watch) — the ring then under-cut on replay and a single-step
+// transfer inherited a 30 % shallower groove.  depth = entry − floor. ───────
+TEST(SkillAnnularGroove, RimChamferDoesNotShortenRecoveredDepth)
+{
+    auto stock = skill::createCylindricalStock(50.0, 10.0);   // Ø50 x 10 puck
+    skill::annular_groove::Input in;
+    in.entry_face   = skill::FaceByNormal{ gp_Dir(0, 0, 1), 5.0, "largest" };
+    in.outer_dia_mm = 40.0;
+    in.inner_dia_mm = 34.0;
+    in.depth_mm     = 2.0;
+    auto ringOut = skill::annular_groove::apply(*stock, in);
+    ASSERT_NE(ringOut.workpiece, nullptr);
+
+    // Chamfer the top edges (z = 10): the groove's rims lose their top band to
+    // cones, exactly the geometry that made the wall-extent depth read short.
+    skill::chamfer_edge::Input ch;
+    ch.edge_selector   = skill::chamfer_edge::EdgesAtZBand{ 10.0, 1e-2 };
+    ch.chamfer_size_mm = 0.6;
+    auto chOut = skill::chamfer_edge::apply(*ringOut.workpiece, ch);
+    ASSERT_NE(chOut.workpiece, nullptr);
+
+    skill::Workpiece foreign(chOut.workpiece->shape());       // NO history
+    const auto cands = skill::annular_groove::recognize(foreign);
+    ASSERT_GE(cands.size(), 1u) << "the chamfered bezel ring must still be recognised";
+    const auto& p = cands[0].recovered_params;
+    EXPECT_NEAR(p.value("outer_dia_mm", 0.0), 40.0, 0.5);
+    EXPECT_NEAR(p.value("inner_dia_mm", 0.0), 34.0, 0.5);
+    EXPECT_NEAR(p.value("depth_mm", 0.0), 2.0, 0.15)
+        << "depth must be FLOOR-anchored (entry − floor), not the chamfer-"
+           "shortened wall extent (which would read ~1.4)";
 }
