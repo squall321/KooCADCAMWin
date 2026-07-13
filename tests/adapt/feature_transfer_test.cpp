@@ -831,3 +831,138 @@ TEST(FeatureTransfer, FaceAnchoredLugsDoNotInflateFootprint)
     EXPECT_NEAR(res.step.params["bolt_circle_dia_mm"].get<double>(), 34.0, 0.8);
     EXPECT_DOUBLE_EQ(res.step.params["seat_dia_mm"].get<double>(), 6.0);
 }
+
+// ═══ LINEAR hole array (speaker-grille class): start/direction/pitch
+//     placement, per-member fit, pitch-only clamp about the array centre. ═══
+
+namespace {
+
+process::StepInvocation makeLinearArrayStep()
+{
+    process::StepInvocation s;
+    s.skill_id = "linear_hole_array";
+    s.params = {
+        { "hole_count",   5 },
+        { "hole_dia_mm",  1.5 },
+        { "pitch_mm",     3.0 },
+        { "span_mm",     12.0 },
+        { "start_x_mm",  -6.0 },
+        { "start_y_mm",   0.0 },
+        { "direction",    json::array({ 1.0, 0.0, 0.0 }) },
+        { "axis_dir",     json::array({ 0.0, 0.0, -1.0 }) },
+        { "position_z_mm", 10.0 },
+        { "hole_centers", json::array({ json::array({ -6.0, 0.0, 10.0 }) }) },
+    };
+    return s;
+}
+
+}  // namespace
+
+// ─── 25. Linear start re-expresses world-RELATIVE; intrinsics survive ───────
+TEST(FeatureTransfer, LinearArrayStartReExpressesRelativeToFrames)
+{
+    auto s = makeLinearArrayStep();
+    s.params["start_x_mm"] = 24.0;   // world, in a frame centred at 30
+    s.params["start_y_mm"] = 10.0;
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 30.0, 10.0, 5.0, 20.0, 20.0, 5.0 },
+        adapt::AnchorFrame{  0.0,  0.0, 0.0, 40.0, 40.0, 5.0 });
+    ASSERT_TRUE(res.transferred);
+    EXPECT_FALSE(res.fit_clamped);
+
+    const json& tp = res.step.params;
+    EXPECT_NEAR(tp["start_x_mm"].get<double>(), -12.0, 1e-9)
+        << "0 + (24-30)*(40/20) — world-relative, not the bare ratio 48";
+    EXPECT_NEAR(tp["start_y_mm"].get<double>(), 0.0, 1e-9);
+    EXPECT_DOUBLE_EQ(tp["pitch_mm"].get<double>(),    3.0);
+    EXPECT_DOUBLE_EQ(tp["hole_dia_mm"].get<double>(), 1.5);
+    EXPECT_EQ(tp["hole_count"].get<int>(),            5);
+    EXPECT_FALSE(tp.contains("hole_centers"));
+    ASSERT_TRUE(tp.contains("axis_dir"));
+    ASSERT_TRUE(tp.contains("direction")) << "the row direction is intrinsic";
+}
+
+// ─── 26. Linear fit clamps the PITCH about the array centre ────────────────
+// Frame-only: an X-row of 5 holes centred at x = 10 with halfSpan 6 must end
+// at 10 + 6 + dia/2 <= hx - margin; on a hx = 14 destination the pitch
+// shrinks from 3.0 to s*3.0 with s = (14-2-0.75-10)/6 = 0.208.
+TEST(FeatureTransfer, LinearArrayClampShrinksPitchPreservesDiaAndCount)
+{
+    auto s = makeLinearArrayStep();
+    s.params["start_x_mm"] = 4.0;    // centre 10, halfSpan 6 -> reaches 16.75
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 14, 14, 5 },
+        adapt::AnchorFrame{ 0, 0, 0, 14, 14, 5 });   // identity scaling
+    // s = 0.208 -> newPitch 0.625 < dia 1.5 -> the holes would merge: REFUSE.
+    EXPECT_FALSE(res.transferred);
+    EXPECT_EQ(res.step.skill_id, "refused_transfer");
+
+    // A milder violation clamps instead: centre 2, halfSpan 6 -> reaches
+    // 8.75 <= 12? yes — use a farther start: centre 4 -> 10.75 <= 12 fits.
+    // Overhang case: centre 6 -> 12.75 > 12 -> s = (12-0.75-6)/6 = 0.875.
+    s.params["start_x_mm"] = 0.0;    // centre 6
+    const auto clamped = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 14, 14, 5 },
+        adapt::AnchorFrame{ 0, 0, 0, 14, 14, 5 });
+    ASSERT_TRUE(clamped.transferred);
+    EXPECT_TRUE(clamped.fit_clamped);
+    const json& tp = clamped.step.params;
+    EXPECT_NEAR(tp["pitch_mm"].get<double>(), 3.0 * 0.875, 1e-6);
+    EXPECT_DOUBLE_EQ(tp["hole_dia_mm"].get<double>(), 1.5);
+    EXPECT_EQ(tp["hole_count"].get<int>(), 5);
+    // The clamp is centre-preserving: start moves in by the same scale.
+    EXPECT_NEAR(tp["start_x_mm"].get<double>(), 6.0 - 0.875 * 6.0, 1e-6);
+    EXPECT_NEAR(tp["span_mm"].get<double>(), 4.0 * 3.0 * 0.875, 1e-6)
+        << "the span breadcrumb must stay true after the clamp";
+}
+
+// ─── 27. Linear atom-gate mirror: sub-0.8 holes / blind depth<=0 refuse ────
+TEST(FeatureTransfer, LinearArrayAtomGateViolationsRefuse)
+{
+    const adapt::AnchorFrame f{ 0, 0, 0, 30, 30, 10 };
+    {
+        auto s = makeLinearArrayStep();
+        s.params["hole_dia_mm"] = 0.5;   // micro-drill: apply() throws DFM-002
+        EXPECT_FALSE(adapt::transferFeature(s, "phone", "watch", f, f).transferred);
+    }
+    {
+        auto s = makeLinearArrayStep();
+        s.params["through_hole"] = false;
+        s.params["depth_mm"]     = 0.0;  // blind depth must be > 0
+        EXPECT_FALSE(adapt::transferFeature(s, "phone", "watch", f, f).transferred);
+    }
+    {
+        auto s = makeLinearArrayStep();
+        s.params["axis_dir"] = json::array({ 1.0, 0.0, 0.0 });   // side row
+        EXPECT_FALSE(adapt::transferFeature(s, "phone", "watch", f, f).transferred);
+    }
+}
+
+// ─── 28. Face-anchored linear fit is PER-MEMBER, not a bounding circle ─────
+// A row along Y on the recessed-deck plate: every member sits in material,
+// but the array's BOUNDING circle (halfSpan 6 + margin) would poke past the
+// plate's y-extent — a bounding-circle implementation would clamp a row that
+// actually fits.
+TEST(FeatureTransfer, FaceAnchoredLinearRowFitsPerMember)
+{
+    auto stock = skill::createCuboidStock(80.0, 16.0, 10.0);   // narrow in Y
+    const TopoDS_Shape dst = stock->shape();
+
+    auto s = makeLinearArrayStep();                 // 5 holes, pitch 3, dia 1.5
+    s.params["start_x_mm"] = 34.0;                  // row ALONG X: centre (40, 8)
+    s.params["start_y_mm"] = 8.0;
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 40, 8, 5, 40, 8, 5 },   // identity
+        adapt::AnchorFrame::fromShape(dst), opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_FALSE(res.fit_clamped)
+        << "members reach y 8±0.75+margin 2 <= 16 and x 34..46 — in material; "
+           "a bounding circle (r = 6+0.75+2 = 8.75 about (40,8)) would spill "
+           "past y = 16 and wrongly clamp";
+}

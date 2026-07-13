@@ -47,6 +47,7 @@
 #include "skills/Workpiece.hpp"
 #include "skills/annular_groove.hpp"
 #include "skills/counterbore_ring_pattern.hpp"
+#include "skills/linear_hole_array.hpp"
 
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
@@ -433,4 +434,104 @@ TEST(FeatureTransferWatchToPhone, DecoRingTransfersBackToWatchMeasured)
     EXPECT_TRUE(found)
         << "the deco ring must be re-recognised on the watch alongside the "
            "bezel ring (distinct ODs) — the reverse transfer round-trips";
+}
+
+// ═══ LINEAR array (speaker-grille class), phone → watch: a blind hole row
+//     machined onto the phone display is geometrically recovered (grammar
+//     compound over drill atoms), transferred with start/direction/pitch
+//     re-anchored, executed on the watch, volume-checked and re-recognised. ═══
+TEST(FeatureTransferWatchToPhone, LinearHoleRowTransfersToWatchMeasured)
+{
+    // ── 1. Build both products; machine a hole row onto the phone ─────────
+    const json watchSpec = engine::defaultSpecForProduct("watch");
+    const json phoneSpec = engine::defaultSpecForProduct("phone");
+    std::vector<engine::BuildWarning> wWatch, wPhone;
+    const TopoDS_Shape watchShape = engine::buildProduct(watchSpec, wWatch);
+    const TopoDS_Shape phoneShape = engine::buildProduct(phoneSpec, wPhone);
+    ASSERT_FALSE(watchShape.IsNull());
+    ASSERT_FALSE(phoneShape.IsNull());
+
+    skill::linear_hole_array::Input lin;
+    lin.entry_face   = skill::FaceByNormal{ gp_Dir(0.0, 0.0, 1.0) };
+    lin.hole_count   = 5;
+    lin.hole_dia_mm  = 1.7;          // distinctive vs any shipped grille dia
+    lin.start_x_mm   = -6.0;
+    lin.start_y_mm   = 0.0;
+    lin.dir_x        = 1.0;
+    lin.dir_y        = 0.0;
+    lin.pitch_mm     = 3.0;
+    lin.axis_dir     = gp_Dir(0.0, 0.0, -1.0);
+    lin.depth_mm     = 2.0;
+    lin.through_hole = false;
+    skill::Workpiece phoneWp(phoneShape);
+    const auto rowOut = skill::linear_hole_array::apply(phoneWp, lin);
+    ASSERT_NE(rowOut.workpiece, nullptr);
+    const TopoDS_Shape rowPhone = rowOut.workpiece->shape();
+
+    // ── 2. Recover the row GEOMETRICALLY from a foreign copy ──────────────
+    skill::Workpiece foreignRow(rowPhone);
+    ASSERT_TRUE(foreignRow.features().empty());
+    const process::ProcessPlan plan = re::inferProcessPlan(foreignRow, 0.7);
+    const process::StepInvocation* row = nullptr;
+    for (const auto& s : plan.steps()) {
+        if (s.skill_id != "linear_hole_array") continue;
+        if (std::abs(s.params.value("hole_dia_mm", 0.0) - 1.7) > 0.3) continue;
+        row = &s;
+        break;
+    }
+    ASSERT_NE(row, nullptr)
+        << "the machined hole row must be recovered as a linear_hole_array";
+    EXPECT_EQ(row->params.value("hole_count", 0), 5);
+    EXPECT_NEAR(row->params.value("pitch_mm", 0.0), 3.0, 0.2);
+
+    // ── 3. Transfer phone → watch, face-anchored ──────────────────────────
+    const adapt::AnchorFrame phoneFrame = adapt::AnchorFrame::fromShape(rowPhone);
+    const adapt::AnchorFrame watchFrame = adapt::AnchorFrame::fromShape(watchShape);
+    adapt::TransferOptions transferOpts;
+    transferOpts.dst_shape = &watchShape;
+    const adapt::TransferResult tr = adapt::transferFeature(
+        *row, "phone", "watch", phoneFrame, watchFrame, transferOpts);
+    ASSERT_TRUE(tr.transferred);
+    EXPECT_FALSE(tr.fit_clamped)
+        << "a 12 mm row of Ø1.7 holes at the case centre fits the Ø44 watch";
+    const json& tp = tr.step.params;
+    EXPECT_DOUBLE_EQ(tp["hole_dia_mm"].get<double>(),
+                     row->params["hole_dia_mm"].get<double>());
+    EXPECT_DOUBLE_EQ(tp["pitch_mm"].get<double>(),
+                     row->params["pitch_mm"].get<double>());
+    EXPECT_FALSE(tp.contains("hole_centers"));
+    EXPECT_FALSE(tp.contains("entry_face_id"));
+
+    // ── 4. Execute on the watch; the row removes its analytic volume ──────
+    const double vBefore = volumeOf(watchShape);
+    process::ProcessPlan transferPlan;
+    transferPlan.append(tr.step);
+    auto watchStock = std::make_shared<skill::Workpiece>(watchShape);
+    const auto result = process::Executor::execute(transferPlan, watchStock);
+    ASSERT_TRUE(result.ok())
+        << (result.errors.empty() ? "" : result.errors.front());
+    const TopoDS_Shape rowedWatch = result.workpiece->shape();
+    const int    n     = tp["hole_count"].get<int>();
+    const double dia   = tp["hole_dia_mm"].get<double>();
+    const double depth = tp["depth_mm"].get<double>();
+    const double expectedCut = n * (M_PI / 4.0) * dia * dia * depth;
+    EXPECT_NEAR(vBefore - volumeOf(rowedWatch), expectedCut, expectedCut * 0.05)
+        << "the machined row must remove its analytic volume";
+
+    // ── 5. Re-recognition on a metadata-free copy of the machined watch ───
+    skill::Workpiece foreignRowed(rowedWatch);
+    ASSERT_TRUE(foreignRowed.features().empty());
+    bool found = false;
+    for (const auto& c : re::analyzeFiltered(foreignRowed, 0.7)) {
+        if (c.skill_id != "linear_hole_array") continue;
+        const auto& rp = c.recovered_params;
+        if (std::abs(rp.value("hole_dia_mm", 0.0) - dia) > 0.3) continue;
+        EXPECT_EQ(rp.value("hole_count", 0), n);
+        EXPECT_NEAR(rp.value("pitch_mm", 0.0), tp["pitch_mm"].get<double>(), 0.2);
+        found = true;
+        break;
+    }
+    EXPECT_TRUE(found)
+        << "the transferred hole row must be re-recognised on the watch with "
+           "the transferred count/dia/pitch (measured)";
 }

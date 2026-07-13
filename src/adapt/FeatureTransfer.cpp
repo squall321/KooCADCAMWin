@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -216,17 +217,21 @@ TransferResult transferFeature(const process::StepInvocation& src,
     result.step.note = result.step.note.empty() ? tag : result.step.note + "; " + tag;
     result.notes.push_back(tag);
 
-    // 2. Whitelist — explicit refusal beats silent wrongness.  Two placement
-    //    families (see the header): FACE-LOCAL annular_groove, and the
-    //    WORLD-XY pitch-circle hole patterns.
+    // 2. Whitelist — explicit refusal beats silent wrongness.  Three
+    //    placement families (see the header): FACE-LOCAL annular_groove, the
+    //    WORLD-XY pitch-circle hole patterns, and the WORLD-XY linear hole
+    //    array (start/direction/pitch instead of a pitch circle).
     const PatternFamily* fam = patternFamily(result.step.skill_id);
-    if (result.step.skill_id != "annular_groove" && fam == nullptr) {
+    const bool linear = result.step.skill_id == "linear_hole_array";
+    if (result.step.skill_id != "annular_groove" && fam == nullptr && !linear) {
         neuter(result, "unsupported skill for cross-product transfer: '" +
                        src.skill_id + "'");
         spdlog::debug("adapt::transferFeature {}->{}: refused (skill '{}' not whitelisted)",
                       srcProduct, dstProduct, src.skill_id);
         return result;   // transferred stays false
     }
+    // WORLD-XY placement family (frame-relative re-expression + world ecc).
+    const bool worldXY = fam != nullptr || linear;
 
     // Degenerate frames make every downstream ratio meaningless — refuse.
     if (srcFrame.hx <= 1e-9 || srcFrame.hy <= 1e-9 ||
@@ -269,7 +274,7 @@ TransferResult transferFeature(const process::StepInvocation& src,
     //    resolution and the depth limit below key off it.
     double nzEntry  = 1.0;
     gp_Dir entryDir(0.0, 0.0, 1.0);   // the exact dir the Executor will resolve
-    if (fam == nullptr) {
+    if (!worldXY) {
         if (!p.contains("face_normal")) {
             p["face_normal"] = json::array({ 0.0, 0.0, 1.0 });
             result.notes.push_back("injected face_normal [0,0,1] (front-face role)");
@@ -328,12 +333,16 @@ TransferResult transferFeature(const process::StepInvocation& src,
         { 'x', srcFrame.cx, dstFrame.cx, srcFrame.hx, dstFrame.hx },
         { 'y', srcFrame.cy, dstFrame.cy, srcFrame.hy, dstFrame.hy } };
     for (const auto& a : axes) {
-        for (const char* pre : kPositionalPrefixes) {
+        // kPositionalPrefixes plus the linear array's start_ family (a
+        // Positional key by classifyParam, but not a shared prefix).
+        static const char* kScaledPrefixes[] =
+            { "position_", "center_", "offset_", "start_" };
+        for (const char* pre : kScaledPrefixes) {
             const std::string key = std::string(pre) + a.axis + "_mm";
             if (!p.contains(key) || !p[key].is_number()) continue;
             if (classifyParam(key) != ParamRole::Positional) continue;
             const double v = p[key].get<double>();
-            p[key] = fam != nullptr
+            p[key] = worldXY
                          ? a.dstC + (v - a.srcC) * (a.dstHalf / a.srcHalf)
                          : v * (a.dstHalf / a.srcHalf);
         }
@@ -393,7 +402,7 @@ TransferResult transferFeature(const process::StepInvocation& src,
                 return result;
             }
             const gp_Pnt C = dstWp.faceCenter(*fid);
-            if (fam == nullptr) {
+            if (!worldXY) {
                 const double ySign = nzEntry;   // vy = n × vx flips for −Z
                 eccX = (C.X() + cx) - dstFrame.cx;
                 eccY = (C.Y() + ySign * cy) - dstFrame.cy;
@@ -439,12 +448,12 @@ TransferResult transferFeature(const process::StepInvocation& src,
     // to hold ANY cut refuses instead of stamping a nonsense depth (the
     // transferred=true contract means "safe to execute").
     //
-    // A THROUGH-drilled bolt circle skips the clamp entirely — through is
-    // through, whatever the destination thickness (depth_mm is ignored by the
-    // skill; parseBoltCirclePattern defaults through_hole to true, mirrored
-    // here).
+    // A THROUGH-drilled bolt circle / linear array skips the clamp entirely —
+    // through is through, whatever the destination thickness (depth_mm is
+    // ignored by the skill; parseBoltCirclePattern / parseLinearHoleArray
+    // default through_hole to true, mirrored here).
     const bool throughPattern =
-        fam != nullptr && result.step.skill_id == "bolt_circle_pattern" &&
+        (result.step.skill_id == "bolt_circle_pattern" || linear) &&
         (p.contains("through_hole") && p["through_hole"].is_boolean()
              ? p["through_hole"].get<bool>()
              : true);
@@ -520,6 +529,31 @@ TransferResult transferFeature(const process::StepInvocation& src,
             neuter(result, "source bolt circle violates the composed drill "
                            "atom's gates (hole dia >= 0.8, blind depth > 0) — "
                            "apply() would throw");
+            return result;
+        }
+    } else if (linear) {
+        // Same composed drill_hole atom as bolt_circle, plus the array's own
+        // validate errors (count >= 3, positive dia/pitch, non-zero direction).
+        const double hole  = num("hole_dia_mm", 0.0);
+        const double pitch = num("pitch_mm", 0.0);
+        const double cnt   = num("hole_count", 0.0);
+        if (std::isnan(hole) || std::isnan(pitch) || std::isnan(cnt)) {
+            neuter(result, "malformed linear array param in source step");
+            return result;
+        }
+        double ux = 1.0, uy = 0.0;
+        if (p.contains("direction") && p["direction"].is_array() &&
+            p["direction"].size() >= 2 &&
+            p["direction"][0].is_number() && p["direction"][1].is_number()) {
+            ux = p["direction"][0].get<double>();
+            uy = p["direction"][1].get<double>();
+        }
+        if (static_cast<int>(cnt) < 3 || hole < 0.8 || pitch <= 0.0 ||
+            std::hypot(ux, uy) < 1e-9 || (!throughPattern && depth <= 0.0)) {
+            neuter(result, "source linear array violates the skill's validate "
+                           "gates or the composed drill atom's (count >= 3, "
+                           "hole dia >= 0.8, pitch > 0, non-zero direction, "
+                           "blind depth > 0) — apply() would throw");
             return result;
         }
     }
@@ -606,6 +640,97 @@ TransferResult transferFeature(const process::StepInvocation& src,
                            "diameters, or pitch circle <= widest member) — "
                            "the skill's validate rejects it");
             return result;
+        }
+    }
+
+    // LINEAR-array fit: the members are colinear world circles — test EACH
+    // member's circle (dia/2 + margin) instead of one bounding circle (which
+    // would be laterally over-conservative for a long row).  When violated,
+    // the PITCH shrinks about the array CENTRE — member dia and count are
+    // preserved (the holes are what they are; the row's spread adapts) and
+    // start_x/y move in so the centre stays put.  Refuse when the clamped
+    // pitch would merge adjacent holes (pitch < dia).  The bisection assumes
+    // the footprint is star-shaped about the array centre, like the circular
+    // clamp.  (od is 0 here, so the circle-based fit below self-skips.)
+    if (linear) {
+        const double dia   = num("hole_dia_mm", 0.0);    // gated >= 0.8 above
+        const double pitch = num("pitch_mm", 0.0);       // gated > 0 above
+        const int    nArr  = static_cast<int>(num("hole_count", 0.0));
+        const double sx    = num("start_x_mm", 0.0);
+        const double sy    = num("start_y_mm", 0.0);
+        if (std::isnan(sx) || std::isnan(sy)) {
+            neuter(result, "malformed linear array start in source step");
+            return result;
+        }
+        double ux = 1.0, uy = 0.0;                       // parse default parity
+        if (p.contains("direction") && p["direction"].is_array() &&
+            p["direction"].size() >= 2 &&
+            p["direction"][0].is_number() && p["direction"][1].is_number()) {
+            ux = p["direction"][0].get<double>();
+            uy = p["direction"][1].get<double>();
+        }
+        const double ul = std::hypot(ux, uy);            // gated non-zero above
+        ux /= ul; uy /= ul;
+        const double halfSpan = 0.5 * (nArr - 1) * pitch;
+        const double ccx      = sx + ux * halfSpan;      // array centre (world)
+        const double ccy      = sy + uy * halfSpan;
+        const double rMember  = 0.5 * dia + margin;
+
+        std::unique_ptr<BRepClass3d_SolidClassifier> clsPtr;
+        if (faceAnchored)
+            clsPtr = std::make_unique<BRepClass3d_SolidClassifier>(*opts.dst_shape);
+        const double probeZ = faceAnchored ? faceZ - nzEntry * 0.1 : 0.0;
+
+        auto membersFit = [&](double s) {
+            for (int i = 0; i < nArr; ++i) {
+                const double t  = (i - 0.5 * (nArr - 1)) * pitch * s;
+                const double mx = ccx + ux * t, my = ccy + uy * t;
+                if (clsPtr != nullptr) {
+                    if (!circleInMaterial(*clsPtr, mx, my, probeZ, rMember))
+                        return false;
+                } else {
+                    if (std::abs(mx - dstFrame.cx) + rMember > dstFrame.hx ||
+                        std::abs(my - dstFrame.cy) + rMember > dstFrame.hy)
+                        return false;
+                }
+            }
+            return true;
+        };
+
+        if (!membersFit(1.0)) {
+            double s = 0.0;
+            if (membersFit(0.0)) {
+                double lo = 0.0, hi = 1.0;
+                for (int i = 0; i < 24; ++i) {
+                    const double mid = 0.5 * (lo + hi);
+                    if (membersFit(mid)) lo = mid; else hi = mid;
+                }
+                s = lo;
+            }
+            const double newPitch = pitch * s;
+            if (newPitch < dia) {
+                neuter(result, "post-clamp pitch " + std::to_string(newPitch) +
+                               " mm < hole dia " + std::to_string(dia) +
+                               " mm — adjacent holes would merge");
+                spdlog::debug("adapt::transferFeature {}->{}: refused (array merges)",
+                              srcProduct, dstProduct);
+                return result;
+            }
+            if (newPitch - dia < 1.5)
+                result.notes.push_back("post-clamp hole gap " +
+                                       std::to_string(newPitch - dia) +
+                                       " mm is inside the DFM-003 density "
+                                       "warning band");
+            p["pitch_mm"]   = newPitch;
+            p["start_x_mm"] = ccx - ux * 0.5 * (nArr - 1) * newPitch;
+            p["start_y_mm"] = ccy - uy * 0.5 * (nArr - 1) * newPitch;
+            if (p.contains("span_mm"))
+                p["span_mm"] = (nArr - 1) * newPitch;    // keep the breadcrumb true
+            result.fit_clamped = true;
+            result.notes.push_back("fit clamp: pitch " + std::to_string(pitch) +
+                                   " -> " + std::to_string(newPitch) +
+                                   " mm about the array centre (hole dia and "
+                                   "count preserved)");
         }
     }
 

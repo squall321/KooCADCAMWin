@@ -29,15 +29,20 @@
 //       FACE-LOCAL  { "annular_groove" }: center_x/y are offsets from the
 //                   resolved entry face's centre (apply()'s in-plane basis);
 //       WORLD-XY    { "bolt_circle_pattern", "counterbore_ring_pattern",
-//                   "countersink_ring_pattern" }: center_x/y are WORLD
-//                   coordinates (the member atoms pierce the entry plane at
-//                   world (px, py) — see skills/Workpiece.hpp
+//                   "countersink_ring_pattern", "linear_hole_array" }:
+//                   positions (center_x/y, start_x/y) are WORLD coordinates
+//                   (the member atoms pierce the entry plane at world
+//                   (px, py) — see skills/Workpiece.hpp
 //                   entryPointOnFacePlane), so they re-express RELATIVE to
 //                   the frame centres: v' = dstC + (v − srcC)·(dstHalf/srcHalf).
 //                   The per-member hole_centers breadcrumb is stripped
 //                   (Diagnostic) — apply() RECOMPUTES every member from
-//                   centre + PCD + count + start angle, which is the whole
-//                   re-anchoring story for patterns.
+//                   centre + PCD + count + phase (pitch circles) or
+//                   start + direction + pitch (linear arrays), which is the
+//                   whole re-anchoring story for patterns.  A linear array
+//                   fits by PER-MEMBER circles and clamps its PITCH about
+//                   the array centre (hole dia and count preserved; refuse
+//                   when the clamped pitch would merge adjacent holes).
 //   • FRONT/BACK (±Z) entry only — a non-±Z face_normal (face-local family)
 //     or a non-±Z axis_dir (pattern family; mirrors the skills' own
 //     validate error) refuses;
