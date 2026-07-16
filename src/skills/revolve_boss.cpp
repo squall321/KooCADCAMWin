@@ -803,9 +803,18 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         { "max_radius_mm",        maxR },
         { "axial_span_mm",        axialSpan },
     };
+    // The COAXIAL revolution faces this candidate explains — the dedupe
+    // face-id arbitration input (collectFaceIds keys on the "cyl_face"
+    // substring).  Without these a full-confidence revolve and a bore/drill
+    // claiming the same walls BOTH survive dedupe as duplicate steps
+    // (face-id-less candidates skip arbitration entirely).
+    json revIds = json::array();
+    for (const auto& rf : revFaces)
+        if (coaxial(rf.axis, axis)) revIds.push_back(rf.id);
     json matched = {
         { "source",                "geometry" },
         { "revolution_face_count", bestCount },
+        { "rev_cyl_face_ids",      revIds },
         { "max_radius_mm",         maxR },
         { "axial_span_mm",         axialSpan },
         { "meridian_recovered",    !meridian.empty() },
