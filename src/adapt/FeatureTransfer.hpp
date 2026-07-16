@@ -29,8 +29,10 @@
 //       FACE-LOCAL  { "annular_groove" }: center_x/y are offsets from the
 //                   resolved entry face's centre (apply()'s in-plane basis);
 //       WORLD-XY    { "bolt_circle_pattern", "counterbore_ring_pattern",
-//                   "countersink_ring_pattern", "linear_hole_array" }:
-//                   positions (center_x/y, start_x/y) are WORLD coordinates
+//                   "countersink_ring_pattern", "linear_hole_array",
+//                   "rectangular_hole_grid" }:
+//                   positions (center_x/y, start_x/y, origin_x/y) are WORLD
+//                   coordinates
 //                   (the member atoms pierce the entry plane at world
 //                   (px, py) — see skills/Workpiece.hpp
 //                   entryPointOnFacePlane), so they re-express RELATIVE to

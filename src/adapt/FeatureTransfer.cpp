@@ -89,6 +89,7 @@ ParamRole classifyParam(const std::string& key)
         }
     }
     if (key == "start_x_mm"  || key == "start_y_mm"  ||
+        key == "origin_x_mm" || key == "origin_y_mm" ||
         key == "world_ox_mm" || key == "world_oy_mm" || key == "world_oz_mm" ||
         key == "edges_at_z_mm")
         return ParamRole::Positional;
@@ -223,7 +224,9 @@ TransferResult transferFeature(const process::StepInvocation& src,
     //    array (start/direction/pitch instead of a pitch circle).
     const PatternFamily* fam = patternFamily(result.step.skill_id);
     const bool linear = result.step.skill_id == "linear_hole_array";
-    if (result.step.skill_id != "annular_groove" && fam == nullptr && !linear) {
+    const bool grid   = result.step.skill_id == "rectangular_hole_grid";
+    if (result.step.skill_id != "annular_groove" && fam == nullptr &&
+        !linear && !grid) {
         neuter(result, "unsupported skill for cross-product transfer: '" +
                        src.skill_id + "'");
         spdlog::debug("adapt::transferFeature {}->{}: refused (skill '{}' not whitelisted)",
@@ -231,7 +234,7 @@ TransferResult transferFeature(const process::StepInvocation& src,
         return result;   // transferred stays false
     }
     // WORLD-XY placement family (frame-relative re-expression + world ecc).
-    const bool worldXY = fam != nullptr || linear;
+    const bool worldXY = fam != nullptr || linear || grid;
 
     // Degenerate frames make every downstream ratio meaningless — refuse.
     if (srcFrame.hx <= 1e-9 || srcFrame.hy <= 1e-9 ||
@@ -333,10 +336,11 @@ TransferResult transferFeature(const process::StepInvocation& src,
         { 'x', srcFrame.cx, dstFrame.cx, srcFrame.hx, dstFrame.hx },
         { 'y', srcFrame.cy, dstFrame.cy, srcFrame.hy, dstFrame.hy } };
     for (const auto& a : axes) {
-        // kPositionalPrefixes plus the linear array's start_ family (a
-        // Positional key by classifyParam, but not a shared prefix).
+        // kPositionalPrefixes plus the linear array's start_ / the grid's
+        // origin_ families (Positional keys by classifyParam, but not
+        // shared prefixes).
         static const char* kScaledPrefixes[] =
-            { "position_", "center_", "offset_", "start_" };
+            { "position_", "center_", "offset_", "start_", "origin_" };
         for (const char* pre : kScaledPrefixes) {
             const std::string key = std::string(pre) + a.axis + "_mm";
             if (!p.contains(key) || !p[key].is_number()) continue;
@@ -448,12 +452,12 @@ TransferResult transferFeature(const process::StepInvocation& src,
     // to hold ANY cut refuses instead of stamping a nonsense depth (the
     // transferred=true contract means "safe to execute").
     //
-    // A THROUGH-drilled bolt circle / linear array skips the clamp entirely —
-    // through is through, whatever the destination thickness (depth_mm is
-    // ignored by the skill; parseBoltCirclePattern / parseLinearHoleArray
-    // default through_hole to true, mirrored here).
+    // A THROUGH-drilled bolt circle / linear array / hole grid skips the
+    // clamp entirely — through is through, whatever the destination thickness
+    // (depth_mm is ignored by the skill; the Executor parsers default
+    // through_hole to true, mirrored here).
     const bool throughPattern =
-        (result.step.skill_id == "bolt_circle_pattern" || linear) &&
+        (result.step.skill_id == "bolt_circle_pattern" || linear || grid) &&
         (p.contains("through_hole") && p["through_hole"].is_boolean()
              ? p["through_hole"].get<bool>()
              : true);
@@ -556,6 +560,37 @@ TransferResult transferFeature(const process::StepInvocation& src,
                            "blind depth > 0) — apply() would throw");
             return result;
         }
+    } else if (grid) {
+        // Grid validate errors (cols, rows >= 2, cols*rows >= 6, positive
+        // dia/pitches, non-zero basis) + the composed drill atom's gates.
+        const double hole  = num("hole_dia_mm", 0.0);
+        const double pu    = num("pitch_u_mm", 0.0);
+        const double pv    = num("pitch_v_mm", 0.0);
+        const double colsD = num("cols", 0.0);
+        const double rowsD = num("rows", 0.0);
+        if (std::isnan(hole) || std::isnan(pu) || std::isnan(pv) ||
+            std::isnan(colsD) || std::isnan(rowsD)) {
+            neuter(result, "malformed hole-grid param in source step");
+            return result;
+        }
+        auto basisOk = [&](const char* key) {
+            if (!p.contains(key)) return true;   // parse defaults are non-zero
+            if (!p[key].is_array() || p[key].size() < 2 ||
+                !p[key][0].is_number() || !p[key][1].is_number()) return true;
+            return std::hypot(p[key][0].get<double>(),
+                              p[key][1].get<double>()) >= 1e-9;
+        };
+        const int cols = static_cast<int>(colsD), rows = static_cast<int>(rowsD);
+        if (cols < 2 || rows < 2 || cols * rows < 6 || hole < 0.8 ||
+            pu <= 0.0 || pv <= 0.0 || !basisOk("u_dir") || !basisOk("v_dir") ||
+            (!throughPattern && depth <= 0.0)) {
+            neuter(result, "source hole grid violates the skill's validate "
+                           "gates or the composed drill atom's (cols, rows >= "
+                           "2, >= 6 holes, hole dia >= 0.8, pitches > 0, "
+                           "non-zero basis, blind depth > 0) — apply() would "
+                           "throw");
+            return result;
+        }
     }
 
     if (!throughPattern) {
@@ -643,48 +678,106 @@ TransferResult transferFeature(const process::StepInvocation& src,
         }
     }
 
-    // LINEAR-array fit: the members are colinear world circles — test EACH
-    // member's circle (dia/2 + margin) instead of one bounding circle (which
-    // would be laterally over-conservative for a long row).  When violated,
-    // the PITCH shrinks about the array CENTRE — member dia and count are
-    // preserved (the holes are what they are; the row's spread adapts) and
-    // start_x/y move in so the centre stays put.  Refuse when the clamped
-    // pitch would merge adjacent holes (pitch < dia).  The bisection assumes
-    // the footprint is star-shaped about the array centre, like the circular
-    // clamp.  (od is 0 here, so the circle-based fit below self-skips.)
-    if (linear) {
-        const double dia   = num("hole_dia_mm", 0.0);    // gated >= 0.8 above
-        const double pitch = num("pitch_mm", 0.0);       // gated > 0 above
-        const int    nArr  = static_cast<int>(num("hole_count", 0.0));
-        const double sx    = num("start_x_mm", 0.0);
-        const double sy    = num("start_y_mm", 0.0);
-        if (std::isnan(sx) || std::isnan(sy)) {
-            neuter(result, "malformed linear array start in source step");
-            return result;
-        }
-        double ux = 1.0, uy = 0.0;                       // parse default parity
-        if (p.contains("direction") && p["direction"].is_array() &&
-            p["direction"].size() >= 2 &&
-            p["direction"][0].is_number() && p["direction"][1].is_number()) {
-            ux = p["direction"][0].get<double>();
-            uy = p["direction"][1].get<double>();
-        }
-        const double ul = std::hypot(ux, uy);            // gated non-zero above
-        ux /= ul; uy /= ul;
-        const double halfSpan = 0.5 * (nArr - 1) * pitch;
-        const double ccx      = sx + ux * halfSpan;      // array centre (world)
-        const double ccy      = sy + uy * halfSpan;
-        const double rMember  = 0.5 * dia + margin;
+    // MEMBER-BASED fit (linear array / rectangular grid): every member's
+    // circle (dia/2 + margin) is tested individually — a bounding circle
+    // would be laterally over-conservative for a long row or a wide grid.
+    // When violated, the PITCH(ES) shrink by ONE scale s about the pattern
+    // CENTRE — member dia and count/cols/rows are preserved (the holes are
+    // what they are; the pattern's spread adapts, keeping a grid's aspect)
+    // and start/origin move in so the centre stays put.  Refuse when the
+    // clamped minimum pitch would merge adjacent holes (pitch < dia).  The
+    // bisection assumes the footprint is star-shaped about the pattern
+    // centre, like the circular clamp.  (od is 0 here, so the circle-based
+    // fit below self-skips.)
+    if (linear || grid) {
+        const double dia = num("hole_dia_mm", 0.0);      // gated >= 0.8 above
 
+        // A guarded 2-vector read with parse-default parity.
+        auto vec2 = [&](const char* key, double defX, double defY,
+                        double& outX, double& outY) {
+            outX = defX; outY = defY;
+            if (p.contains(key) && p[key].is_array() && p[key].size() >= 2 &&
+                p[key][0].is_number() && p[key][1].is_number()) {
+                outX = p[key][0].get<double>();
+                outY = p[key][1].get<double>();
+            }
+        };
+
+        // Member offsets about the pattern centre (at s = 1), the centre
+        // itself, and the anchor key the clamp rewrites.
+        std::vector<std::pair<double, double>> offs;
+        double ccx = 0.0, ccy = 0.0;
+        double minPitch = 0.0;                           // merge gate basis
+        if (linear) {
+            const double pitch = num("pitch_mm", 0.0);   // gated > 0 above
+            const int    nArr  = static_cast<int>(num("hole_count", 0.0));
+            const double sx    = num("start_x_mm", 0.0);
+            const double sy    = num("start_y_mm", 0.0);
+            if (std::isnan(sx) || std::isnan(sy)) {
+                neuter(result, "malformed linear array start in source step");
+                return result;
+            }
+            double ux, uy;
+            vec2("direction", 1.0, 0.0, ux, uy);
+            const double ul = std::hypot(ux, uy);        // gated non-zero above
+            ux /= ul; uy /= ul;
+            const double halfSpan = 0.5 * (nArr - 1) * pitch;
+            ccx = sx + ux * halfSpan;
+            ccy = sy + uy * halfSpan;
+            offs.reserve(static_cast<std::size_t>(nArr));
+            for (int i = 0; i < nArr; ++i) {
+                const double t = (i - 0.5 * (nArr - 1)) * pitch;
+                offs.emplace_back(ux * t, uy * t);
+            }
+            minPitch = pitch;
+        } else {
+            const double pu   = num("pitch_u_mm", 0.0);  // gated > 0 above
+            const double pv   = num("pitch_v_mm", 0.0);
+            const int    cols = static_cast<int>(num("cols", 0.0));
+            const int    rows = static_cast<int>(num("rows", 0.0));
+            const double ox   = num("origin_x_mm", 0.0);
+            const double oy   = num("origin_y_mm", 0.0);
+            if (std::isnan(ox) || std::isnan(oy)) {
+                neuter(result, "malformed hole-grid origin in source step");
+                return result;
+            }
+            double ux, uy, vx, vy;
+            vec2("u_dir", 1.0, 0.0, ux, uy);
+            vec2("v_dir", 0.0, 1.0, vx, vy);
+            const double ul = std::hypot(ux, uy), vl = std::hypot(vx, vy);
+            ux /= ul; uy /= ul; vx /= vl; vy /= vl;      // gated non-zero above
+            const double hu = 0.5 * (cols - 1) * pu, hv = 0.5 * (rows - 1) * pv;
+            ccx = ox + ux * hu + vx * hv;
+            ccy = oy + uy * hu + vy * hv;
+            offs.reserve(static_cast<std::size_t>(cols * rows));
+            for (int i = 0; i < cols; ++i) {
+                const double tu = (i - 0.5 * (cols - 1)) * pu;
+                for (int j = 0; j < rows; ++j) {
+                    const double tv = (j - 0.5 * (rows - 1)) * pv;
+                    offs.emplace_back(ux * tu + vx * tv, uy * tu + vy * tv);
+                }
+            }
+            // The minimum ADJACENT member spacing over the whole lattice: the
+            // grammar's fitGridXY only requires a NON-COLLINEAR basis, so a
+            // legitimately skewed grid's closest neighbours can sit on the
+            // short cross-diagonal, well under min(pu, pv) — a merge gate on
+            // the pitches alone would pass a clamp that physically fuses them.
+            minPitch = std::min(pu, pv);
+            minPitch = std::min(minPitch,
+                                std::hypot(pu * ux - pv * vx, pu * uy - pv * vy));
+            minPitch = std::min(minPitch,
+                                std::hypot(pu * ux + pv * vx, pu * uy + pv * vy));
+        }
+
+        const double rMember = 0.5 * dia + margin;
         std::unique_ptr<BRepClass3d_SolidClassifier> clsPtr;
         if (faceAnchored)
             clsPtr = std::make_unique<BRepClass3d_SolidClassifier>(*opts.dst_shape);
         const double probeZ = faceAnchored ? faceZ - nzEntry * 0.1 : 0.0;
 
         auto membersFit = [&](double s) {
-            for (int i = 0; i < nArr; ++i) {
-                const double t  = (i - 0.5 * (nArr - 1)) * pitch * s;
-                const double mx = ccx + ux * t, my = ccy + uy * t;
+            for (const auto& o : offs) {
+                const double mx = ccx + s * o.first, my = ccy + s * o.second;
                 if (clsPtr != nullptr) {
                     if (!circleInMaterial(*clsPtr, mx, my, probeZ, rMember))
                         return false;
@@ -707,29 +800,37 @@ TransferResult transferFeature(const process::StepInvocation& src,
                 }
                 s = lo;
             }
-            const double newPitch = pitch * s;
-            if (newPitch < dia) {
-                neuter(result, "post-clamp pitch " + std::to_string(newPitch) +
+            if (minPitch * s < dia) {
+                neuter(result, "post-clamp pitch " + std::to_string(minPitch * s) +
                                " mm < hole dia " + std::to_string(dia) +
                                " mm — adjacent holes would merge");
-                spdlog::debug("adapt::transferFeature {}->{}: refused (array merges)",
+                spdlog::debug("adapt::transferFeature {}->{}: refused (pattern merges)",
                               srcProduct, dstProduct);
                 return result;
             }
-            if (newPitch - dia < 1.5)
+            if (minPitch * s - dia < 1.5)
                 result.notes.push_back("post-clamp hole gap " +
-                                       std::to_string(newPitch - dia) +
+                                       std::to_string(minPitch * s - dia) +
                                        " mm is inside the DFM-003 density "
                                        "warning band");
-            p["pitch_mm"]   = newPitch;
-            p["start_x_mm"] = ccx - ux * 0.5 * (nArr - 1) * newPitch;
-            p["start_y_mm"] = ccy - uy * 0.5 * (nArr - 1) * newPitch;
-            if (p.contains("span_mm"))
-                p["span_mm"] = (nArr - 1) * newPitch;    // keep the breadcrumb true
+            if (linear) {
+                const double pitch = num("pitch_mm", 0.0);
+                const int    nArr  = static_cast<int>(num("hole_count", 0.0));
+                p["pitch_mm"]   = pitch * s;
+                p["start_x_mm"] = ccx + s * offs.front().first;
+                p["start_y_mm"] = ccy + s * offs.front().second;
+                if (p.contains("span_mm"))
+                    p["span_mm"] = (nArr - 1) * pitch * s;   // keep it true
+            } else {
+                p["pitch_u_mm"]  = num("pitch_u_mm", 0.0) * s;
+                p["pitch_v_mm"]  = num("pitch_v_mm", 0.0) * s;
+                p["origin_x_mm"] = ccx + s * offs.front().first;
+                p["origin_y_mm"] = ccy + s * offs.front().second;
+            }
             result.fit_clamped = true;
-            result.notes.push_back("fit clamp: pitch " + std::to_string(pitch) +
-                                   " -> " + std::to_string(newPitch) +
-                                   " mm about the array centre (hole dia and "
+            result.notes.push_back("fit clamp: pitch scaled by " +
+                                   std::to_string(s) +
+                                   " about the pattern centre (hole dia and "
                                    "count preserved)");
         }
     }

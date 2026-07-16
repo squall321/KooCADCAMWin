@@ -87,6 +87,8 @@ TEST(FeatureTransfer, ClassifyParamTable)
     EXPECT_EQ(classifyParam("center_y_mm"),   ParamRole::Positional);
     EXPECT_EQ(classifyParam("offset_z_mm"),   ParamRole::Positional);
     EXPECT_EQ(classifyParam("start_x_mm"),    ParamRole::Positional);
+    EXPECT_EQ(classifyParam("origin_x_mm"),   ParamRole::Positional);
+    EXPECT_EQ(classifyParam("origin_y_mm"),   ParamRole::Positional);
     EXPECT_EQ(classifyParam("world_oy_mm"),   ParamRole::Positional);
     EXPECT_EQ(classifyParam("edges_at_z_mm"), ParamRole::Positional);
 
@@ -939,6 +941,117 @@ TEST(FeatureTransfer, LinearArrayAtomGateViolationsRefuse)
         s.params["axis_dir"] = json::array({ 1.0, 0.0, 0.0 });   // side row
         EXPECT_FALSE(adapt::transferFeature(s, "phone", "watch", f, f).transferred);
     }
+}
+
+// ─── 27b. Rectangular grid: single-scale pitch clamp preserves the aspect ──
+// A 4x3 grid overhanging in X on an identity frame: BOTH pitches scale by
+// the same s (the grid's aspect is its identity), cols/rows/dia are
+// preserved, and the origin moves in so the centre stays put.
+TEST(FeatureTransfer, RectangularGridClampScalesBothPitchesAboutCentre)
+{
+    process::StepInvocation s;
+    s.skill_id = "rectangular_hole_grid";
+    s.params = {
+        { "hole_count",  12 },
+        { "hole_dia_mm",  1.5 },
+        { "cols",         4 },
+        { "rows",         3 },
+        { "pitch_u_mm",   4.0 },
+        { "pitch_v_mm",   3.0 },
+        { "origin_x_mm",  0.0 },     // centre (6, 3): hu = 6, hv = 3
+        { "origin_y_mm",  0.0 },
+        { "u_dir",        json::array({ 1.0, 0.0, 0.0 }) },
+        { "v_dir",        json::array({ 0.0, 1.0, 0.0 }) },
+        { "axis_dir",     json::array({ 0.0, 0.0, -1.0 }) },
+        { "hole_centers", json::array({ json::array({ 0.0, 0.0, 10.0 }) }) },
+    };
+    // Frame hx = 10: farthest member x = 12, 12 + 2.75 > 10 -> violated.
+    // Closed form: 6 + 6s + 2.75 <= 10 -> s = 1.25/6 = 0.2083 -> min pitch
+    // 3*0.2083 = 0.625 < dia 1.5 -> the grid would merge: REFUSE.
+    const auto refused = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 10, 10, 5 },
+        adapt::AnchorFrame{ 0, 0, 0, 10, 10, 5 });
+    EXPECT_FALSE(refused.transferred);
+
+    // Frame hx = 14: 6 + 6s + 2.75 <= 14 -> s = 5.25/6 = 0.875; min pitch
+    // 2.625 >= 1.5 -> clamp.  Y never binds (3 + 3s + 2.75 <= 14).
+    const auto clamped = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 14, 14, 5 },
+        adapt::AnchorFrame{ 0, 0, 0, 14, 14, 5 });
+    ASSERT_TRUE(clamped.transferred);
+    EXPECT_TRUE(clamped.fit_clamped);
+    const json& tp = clamped.step.params;
+    EXPECT_NEAR(tp["pitch_u_mm"].get<double>(), 4.0 * 0.875, 1e-6);
+    EXPECT_NEAR(tp["pitch_v_mm"].get<double>(), 3.0 * 0.875, 1e-6)
+        << "BOTH pitches scale by one s — the grid keeps its aspect";
+    EXPECT_EQ(tp["cols"].get<int>(), 4);
+    EXPECT_EQ(tp["rows"].get<int>(), 3);
+    EXPECT_DOUBLE_EQ(tp["hole_dia_mm"].get<double>(), 1.5);
+    // Centre-preserving: origin = centre - s*(hu, hv) = (6-5.25, 3-2.625).
+    EXPECT_NEAR(tp["origin_x_mm"].get<double>(), 0.75,  1e-6);
+    EXPECT_NEAR(tp["origin_y_mm"].get<double>(), 0.375, 1e-6);
+    EXPECT_FALSE(tp.contains("hole_centers"));
+}
+
+// ─── 27c. Grid gate mirror: too-few holes / sub-0.8 dia refuse ─────────────
+TEST(FeatureTransfer, RectangularGridGateViolationsRefuse)
+{
+    const adapt::AnchorFrame f{ 0, 0, 0, 30, 30, 10 };
+    process::StepInvocation s;
+    s.skill_id = "rectangular_hole_grid";
+    s.params = {
+        { "hole_dia_mm", 1.5 },
+        { "cols",        2 },
+        { "rows",        2 },     // 4 holes < 6 — the skill's validate error
+        { "pitch_u_mm",  4.0 },
+        { "pitch_v_mm",  3.0 },
+        { "origin_x_mm", 0.0 },
+        { "origin_y_mm", 0.0 },
+        { "axis_dir",    json::array({ 0.0, 0.0, -1.0 }) },
+    };
+    EXPECT_FALSE(adapt::transferFeature(s, "phone", "watch", f, f).transferred);
+
+    s.params["rows"] = 3;
+    s.params["hole_dia_mm"] = 0.5;   // micro-drill: the atom throws DFM-002
+    EXPECT_FALSE(adapt::transferFeature(s, "phone", "watch", f, f).transferred);
+
+    s.params["hole_dia_mm"] = 1.5;   // sanity: the base grid DOES transfer
+    EXPECT_TRUE(adapt::transferFeature(s, "phone", "watch", f, f).transferred);
+}
+
+// ─── 27d. SKEWED grid: the merge gate uses the true lattice spacing ─────────
+// fitGridXY only requires a non-collinear basis, so a legitimately skewed
+// grid's closest neighbours sit on the short cross-diagonal |pu·û − pv·v̂|
+// (1.58 here), well under min(pu, pv) = 3.81.  A clamp to s = 0.83 fuses
+// those neighbours (1.32 < dia 1.5) — a pitch-only gate would pass it.
+TEST(FeatureTransfer, SkewedGridMergeGateUsesLatticeSpacing)
+{
+    process::StepInvocation s;
+    s.skill_id = "rectangular_hole_grid";
+    s.params = {
+        { "hole_dia_mm", 1.5 },
+        { "cols",        3 },
+        { "rows",        3 },
+        { "pitch_u_mm",  3.8079 },   // |(3.5, 1.5)|
+        { "pitch_v_mm",  4.0 },
+        { "origin_x_mm", 0.0 },
+        { "origin_y_mm", 0.0 },
+        { "u_dir",       json::array({ 3.5, 1.5, 0.0 }) },   // skewed column axis
+        { "v_dir",       json::array({ 1.0, 0.0, 0.0 }) },
+        { "axis_dir",    json::array({ 0.0, 0.0, -1.0 }) },
+    };
+    // Members span x 0..15, centre (7.5, 1.5); an hx = 9 identity frame
+    // forces s = (9 - 2.75)/7.5 = 0.833.
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 7.5, 1.5, 5, 9, 9, 5 },
+        adapt::AnchorFrame{ 7.5, 1.5, 5, 9, 9, 5 });
+    EXPECT_FALSE(res.transferred)
+        << "diagonal neighbours at 1.58 * 0.833 = 1.32 mm < dia 1.5 merge — "
+           "min(pu, pv) * s = 3.17 would wrongly pass";
+    EXPECT_EQ(res.step.skill_id, "refused_transfer");
 }
 
 // ─── 28. Face-anchored linear fit is PER-MEMBER, not a bounding circle ─────
