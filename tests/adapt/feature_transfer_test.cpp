@@ -1089,6 +1089,186 @@ TEST(FeatureTransfer, SkewedGridMergeGateUsesLatticeSpacing)
     EXPECT_EQ(res.step.skill_id, "refused_transfer");
 }
 
+// ═══ BOX POCKET (use_world): world_center IS the placement — kept, re-
+//     expressed (XY frame-relative, Z re-anchored to the destination entry
+//     plane); rectangular perimeter fit, ratio-preserving clamp. ═══
+
+namespace {
+
+process::StepInvocation makeBoxPocketStep()
+{
+    process::StepInvocation s;
+    s.skill_id = "box_pocket";
+    s.params = {
+        { "length_mm",         8.0 },
+        { "width_mm",          4.0 },
+        { "depth_mm",          1.0 },
+        { "face_normal",       json::array({ 0.0, 0.0, 1.0 }) },
+        { "face_xaxis",        json::array({ 1.0, 0.0, 0.0 }) },
+        { "use_world",         true },
+        { "world_center",      json::array({ 24.0, 10.0, 10.0 }) },
+        { "center_x_world_mm", 24.0 },
+        { "center_y_world_mm", 10.0 },
+        { "center_z_world_mm", 10.0 },
+    };
+    return s;
+}
+
+}  // namespace
+
+// ─── 29. use_world mouth re-expresses; Z is the MEASURED entry plane ───────
+TEST(FeatureTransfer, BoxPocketUseWorldMouthReExpresses)
+{
+    auto plate = skill::createCuboidStock(80.0, 80.0, 10.0);
+    const TopoDS_Shape dst = plate->shape();
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        makeBoxPocketStep(), "phone", "watch",
+        adapt::AnchorFrame{ 30.0, 10.0, 5.0, 20.0, 20.0, 5.0 },
+        adapt::AnchorFrame::fromShape(dst), opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_FALSE(res.fit_clamped);
+
+    const json& tp = res.step.params;
+    ASSERT_TRUE(tp.contains("world_center"))
+        << "world_center is the use_world PLACEMENT, not a breadcrumb — it "
+           "must survive the diagnostic strip";
+    EXPECT_NEAR(tp["world_center"][0].get<double>(), 28.0, 1e-9)
+        << "40 + (24-30)*(40/20) — frame-relative";
+    EXPECT_NEAR(tp["world_center"][1].get<double>(), 40.0, 1e-9);
+    EXPECT_NEAR(tp["world_center"][2].get<double>(), 10.0, 1e-9)
+        << "the mouth re-anchors to the destination's measured entry plane, "
+           "not the source product's z";
+    EXPECT_DOUBLE_EQ(tp["length_mm"].get<double>(), 8.0);
+    EXPECT_DOUBLE_EQ(tp["width_mm"].get<double>(),  4.0);
+    EXPECT_TRUE(tp.value("use_world", false));
+    ASSERT_TRUE(tp.contains("face_xaxis")) << "orientation is intrinsic";
+    EXPECT_NEAR(tp["center_x_world_mm"].get<double>(), 28.0, 1e-9)
+        << "the CAM breadcrumbs stay true";
+}
+
+// ─── 29b. box_pocket REFUSES frame-only: its Z executes VERBATIM ───────────
+// Every other family re-resolves its entry plane at execute time; a mouth
+// baked at the bbox extreme would float over a recessed deck and cut air.
+TEST(FeatureTransfer, BoxPocketFrameOnlyRefuses)
+{
+    const adapt::AnchorFrame f{ 0, 0, 0, 30, 30, 10 };
+    const auto res = adapt::transferFeature(
+        makeBoxPocketStep(), "phone", "watch", f, f);   // no dst_shape
+    EXPECT_FALSE(res.transferred);
+    EXPECT_EQ(res.step.skill_id, "refused_transfer")
+        << "a verbatim-executed mouth Z must be MEASURED, never approximated";
+}
+
+// ─── 30. Rectangular clamp is ratio-preserving; slivers refuse ─────────────
+TEST(FeatureTransfer, BoxPocketClampRatioPreservingOrSliverRefuses)
+{
+    auto plate = skill::createCuboidStock(24.0, 24.0, 10.0);   // centre (12,12)
+    const TopoDS_Shape dst = plate->shape();
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const adapt::AnchorFrame f{ 12, 12, 5, 12, 12, 5 };
+    auto s = makeBoxPocketStep();
+    s.params["length_mm"]    = 30.0;
+    s.params["width_mm"]     = 20.0;
+    s.params["world_center"] = json::array({ 12.0, 12.0, 10.0 });
+    const auto clamped = adapt::transferFeature(s, "phone", "watch", f, f, opts);
+    ASSERT_TRUE(clamped.transferred);
+    EXPECT_TRUE(clamped.fit_clamped);
+    // X binds at the plate edge: (15s + margin 2) <= 12 -> s = 2/3; ONE
+    // factor for both dims.
+    EXPECT_NEAR(clamped.step.params["length_mm"].get<double>(), 20.0,       1e-4);
+    EXPECT_NEAR(clamped.step.params["width_mm"].get<double>(),  20.0 / 1.5, 1e-4);
+
+    s.params["width_mm"] = 1.0;      // post-clamp 0.667 < 0.8 sliver floor
+    const auto refused = adapt::transferFeature(s, "phone", "watch", f, f, opts);
+    EXPECT_FALSE(refused.transferred);
+    EXPECT_EQ(refused.step.skill_id, "refused_transfer");
+}
+
+// ─── 30b. A mouth BURIED under a higher deck refuses ───────────────────────
+// wz is pinned to the largest face's PLANE; a re-expressed (wx, wy) under
+// the RIM of a stepped destination has material below that plane too — but
+// no open air above.  Cutting there would carve an internal cavity.
+TEST(FeatureTransfer, BoxPocketBuriedMouthRefuses)
+{
+    auto stock = skill::createCuboidStock(80.0, 40.0, 10.0);
+    skill::mill_rect_pocket::Input mp;      // floor z=7 largest; rim x<20 at 10
+    mp.entry_face  = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    mp.center_x_mm = 50.0;
+    mp.center_y_mm = 20.0;
+    mp.length_mm   = 60.0;
+    mp.width_mm    = 40.0;
+    mp.depth_mm    = 3.0;
+    const auto stepped = skill::mill_rect_pocket::apply(*stock, mp);
+    ASSERT_NE(stepped.workpiece, nullptr);
+    const TopoDS_Shape dst = stepped.workpiece->shape();
+
+    auto s = makeBoxPocketStep();
+    // Re-expresses to wx = 40 + (-16.5)*(40/22) = 10 — squarely under the rim.
+    s.params["world_center"] = json::array({ -16.5, 0.0, 99.0 });
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 22, 22, 5 },
+        adapt::AnchorFrame::fromShape(dst), opts);
+    EXPECT_FALSE(res.transferred)
+        << "material sits below z=7 under the rim too, but the mouth there "
+           "is buried (no air above) — an internal cavity is not a pocket";
+    EXPECT_EQ(res.step.skill_id, "refused_transfer");
+}
+
+// ─── 31. The face-local box_pocket form refuses (use_world only) ───────────
+TEST(FeatureTransfer, BoxPocketFaceLocalFormRefuses)
+{
+    const adapt::AnchorFrame f{ 0, 0, 0, 30, 30, 10 };
+    process::StepInvocation s;
+    s.skill_id = "box_pocket";
+    s.params = {
+        { "length_mm",   8.0 },
+        { "width_mm",    4.0 },
+        { "depth_mm",    1.0 },
+        { "center_x_mm", 5.0 },
+        { "center_y_mm", 0.0 },
+        { "face_normal", json::array({ 0.0, 0.0, 1.0 }) },
+    };
+    const auto res = adapt::transferFeature(s, "phone", "watch", f, f);
+    EXPECT_FALSE(res.transferred);
+    EXPECT_EQ(res.step.skill_id, "refused_transfer")
+        << "a face-local pocket needs a design datum the destination lacks";
+}
+
+// ─── 32. Face-anchored: the mouth Z is the RESOLVED entry plane ─────────────
+TEST(FeatureTransfer, BoxPocketFaceAnchoredMouthZFromResolvedFace)
+{
+    auto stock = skill::createCuboidStock(80.0, 40.0, 10.0);
+    skill::mill_rect_pocket::Input mp;      // recessed largest face at z = 7
+    mp.entry_face  = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    mp.center_x_mm = 50.0;
+    mp.center_y_mm = 20.0;
+    mp.length_mm   = 60.0;
+    mp.width_mm    = 40.0;
+    mp.depth_mm    = 3.0;
+    const auto stepped = skill::mill_rect_pocket::apply(*stock, mp);
+    ASSERT_NE(stepped.workpiece, nullptr);
+    const TopoDS_Shape dst = stepped.workpiece->shape();
+
+    auto s = makeBoxPocketStep();
+    s.params["world_center"] = json::array({ 10.0, 10.0, 99.0 });
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 22, 22, 5 },
+        adapt::AnchorFrame::fromShape(dst), opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_NEAR(res.step.params["world_center"][2].get<double>(), 7.0, 1e-6)
+        << "the mouth sits on the MEASURED entry plane (the recessed floor "
+           "at z = 7), not the bbox top at 10";
+}
+
 // ─── 28. Face-anchored linear fit is PER-MEMBER, not a bounding circle ─────
 // A row along Y on the recessed-deck plate: every member sits in material,
 // but the array's BOUNDING circle (halfSpan 6 + margin) would poke past the

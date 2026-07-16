@@ -179,6 +179,21 @@ const PatternFamily* patternFamily(const std::string& skillId)
     return it == kFamilies.end() ? nullptr : &it->second;
 }
 
+// A well-formed USE_WORLD box_pocket step: use_world true plus the numeric
+// world_center[3] + face_normal[3] placement the Executor's parse requires.
+bool p0IsUseWorld(const nlohmann::json& p)
+{
+    if (!p.is_object()) return false;
+    if (!(p.contains("use_world") && p["use_world"].is_boolean() &&
+          p["use_world"].get<bool>()))
+        return false;
+    auto vec3 = [&](const char* k) {
+        return p.contains(k) && p[k].is_array() && p[k].size() == 3 &&
+               p[k][0].is_number() && p[k][1].is_number() && p[k][2].is_number();
+    };
+    return vec3("world_center") && vec3("face_normal");
+}
+
 // MEASURED radial feasibility (face-anchored mode): every sample on the
 // circle of radius r about (cx, cy) at height z must classify IN (or ON)
 // the destination solid.  The sample count scales with the circle so
@@ -225,8 +240,9 @@ TransferResult transferFeature(const process::StepInvocation& src,
     const PatternFamily* fam = patternFamily(result.step.skill_id);
     const bool linear = result.step.skill_id == "linear_hole_array";
     const bool grid   = result.step.skill_id == "rectangular_hole_grid";
+    const bool boxPkt = result.step.skill_id == "box_pocket";
     if (result.step.skill_id != "annular_groove" && fam == nullptr &&
-        !linear && !grid) {
+        !linear && !grid && !boxPkt) {
         neuter(result, "unsupported skill for cross-product transfer: '" +
                        src.skill_id + "'");
         spdlog::debug("adapt::transferFeature {}->{}: refused (skill '{}' not whitelisted)",
@@ -235,6 +251,16 @@ TransferResult transferFeature(const process::StepInvocation& src,
     }
     // WORLD-XY placement family (frame-relative re-expression + world ecc).
     const bool worldXY = fam != nullptr || linear || grid;
+    // box_pocket transfers in its USE_WORLD form only: the recovered step's
+    // placement IS the world_center array (mouth centre + face_normal +
+    // face_xaxis; the face-local center_x/y path needs a resolvable design
+    // datum the destination does not share).
+    if (boxPkt &&
+        !(p0IsUseWorld(result.step.params))) {
+        neuter(result, "box_pocket transfer supports the use_world form only "
+                       "(world_center + face_normal placement)");
+        return result;
+    }
 
     // Degenerate frames make every downstream ratio meaningless — refuse.
     if (srcFrame.hx <= 1e-9 || srcFrame.hy <= 1e-9 ||
@@ -253,6 +279,11 @@ TransferResult transferFeature(const process::StepInvocation& src,
     {
         std::vector<std::string> doomed;
         for (auto it = p.begin(); it != p.end(); ++it) {
+            // world_center is a recognizer BREADCRUMB on most skills, but on
+            // a use_world box_pocket it is the PLACEMENT itself (the mouth
+            // centre apply() cuts at) — keep it there; it is re-expressed
+            // for the destination below.
+            if (boxPkt && it.key() == "world_center") continue;
             const ParamRole role = classifyParam(it.key());
             if (role == ParamRole::Diagnostic) doomed.push_back(it.key());
             else if (role == ParamRole::Datum &&
@@ -406,7 +437,7 @@ TransferResult transferFeature(const process::StepInvocation& src,
                 return result;
             }
             const gp_Pnt C = dstWp.faceCenter(*fid);
-            if (!worldXY) {
+            if (!worldXY && !boxPkt) {
                 const double ySign = nzEntry;   // vy = n × vx flips for −Z
                 eccX = (C.X() + cx) - dstFrame.cx;
                 eccY = (C.Y() + ySign * cy) - dstFrame.cy;
@@ -428,7 +459,7 @@ TransferResult transferFeature(const process::StepInvocation& src,
     // are only faithful while the ring stays near the frame centre.  Face-
     // anchored mode replaces this approximation with the exact placement test
     // below; the pattern family's world placement is exact in BOTH modes.
-    if (fam == nullptr && !faceAnchored &&
+    if (result.step.skill_id == "annular_groove" && !faceAnchored &&
         (std::abs(cx) > 0.5 * dstFrame.hx || std::abs(cy) > 0.5 * dstFrame.hy)) {
         neuter(result, "scaled ring centre beyond half the destination half-extent"
                        " — outside the slice-1 concentric envelope");
@@ -589,6 +620,21 @@ TransferResult transferFeature(const process::StepInvocation& src,
                            "2, >= 6 holes, hole dia >= 0.8, pitches > 0, "
                            "non-zero basis, blind depth > 0) — apply() would "
                            "throw");
+            return result;
+        }
+    } else if (boxPkt) {
+        // box_pocket::validate errors (positive dims) plus the recognizer's
+        // own 0.8 mm sliver floor — a sub-sliver pocket is not machinable.
+        const double len = num("length_mm", 0.0);
+        const double wid = num("width_mm", 0.0);
+        if (std::isnan(len) || std::isnan(wid)) {
+            neuter(result, "malformed box_pocket dims in source step");
+            return result;
+        }
+        if (len <= 0.0 || wid <= 0.0 || depth <= 0.0 ||
+            std::min(len, wid) < 0.8) {
+            neuter(result, "source box pocket violates the skill's validate "
+                           "gates (positive dims) or the 0.8 mm sliver floor");
             return result;
         }
     }
@@ -833,6 +879,135 @@ TransferResult transferFeature(const process::StepInvocation& src,
                                    " about the pattern centre (hole dia and "
                                    "count preserved)");
         }
+    }
+
+    // BOX-POCKET (use_world) placement + fit: world_center is the MOUTH
+    // centre [x, y, z].  XY re-expresses frame-relative like every WORLD
+    // position; Z becomes the DESTINATION entry plane (face-anchored: the
+    // resolved face's Z; frame-only: the ±Z bbox face) — the mouth must sit
+    // ON the destination surface, not at the source product's height.
+    // face_xaxis (the in-plane length direction) is intrinsic and preserved.
+    // The RECTANGULAR footprint's margin-expanded perimeter is sampled
+    // (<= 0.4 mm apart, like the circular probe); on violation length and
+    // width shrink by ONE factor about the centre (ratio-preserving, like
+    // the groove's OD/ID), refusing below the 0.8 mm sliver floor.
+    if (boxPkt) {
+        // FACE-ANCHORED ONLY: box_pocket is the one family whose transferred
+        // Z executes VERBATIM (apply() cuts at world_center; every other
+        // family re-resolves its entry plane at execute time), so a bbox
+        // approximation here would land in the executed geometry — a mouth
+        // baked at the bbox extreme floats above a recessed deck and the
+        // pocket cuts air/short with the signature stamping full depth.
+        // Explicit refusal beats silent wrongness.
+        if (!faceAnchored) {
+            neuter(result, "box_pocket transfer needs opts.dst_shape — its "
+                           "mouth Z executes verbatim, so it must be the "
+                           "MEASURED entry plane, not a bbox approximation");
+            return result;
+        }
+        const double len = num("length_mm", 0.0);   // gated > 0 above
+        const double wid = num("width_mm", 0.0);
+        auto& wc = p["world_center"];               // validated 3-vector
+        const double wx = dstFrame.cx +
+            (wc[0].get<double>() - srcFrame.cx) * (dstFrame.hx / srcFrame.hx);
+        const double wy = dstFrame.cy +
+            (wc[1].get<double>() - srcFrame.cy) * (dstFrame.hy / srcFrame.hy);
+        const double wz = faceZ;
+
+        // In-plane basis: x̂ from face_xaxis (apply()'s default when the key
+        // is absent/degenerate is an arbitrary in-plane axis — mirror with
+        // +X), ŷ = n × x̂ (flips with the entry sign).
+        double xx = 1.0, xy = 0.0;
+        if (p.contains("face_xaxis") && p["face_xaxis"].is_array() &&
+            p["face_xaxis"].size() >= 2 &&
+            p["face_xaxis"][0].is_number() && p["face_xaxis"][1].is_number()) {
+            const double rx = p["face_xaxis"][0].get<double>();
+            const double ry = p["face_xaxis"][1].get<double>();
+            const double rl = std::hypot(rx, ry);
+            if (rl > 1e-9) { xx = rx / rl; xy = ry / rl; }
+        }
+        const double yx = nzEntry > 0.0 ? -xy : xy;
+        const double yy = nzEntry > 0.0 ?  xx : -xx;
+
+        BRepClass3d_SolidClassifier cls(*opts.dst_shape);
+        const double belowZ = faceZ - nzEntry * 0.1;   // just inside material
+        const double aboveZ = faceZ + nzEntry * 0.1;   // just outside the mouth
+
+        // A sample is sound when material exists just BELOW the entry plane
+        // AND open air exists just ABOVE it: wz was pinned to the resolved
+        // face's PLANE, but the re-expressed (wx, wy) can land under a
+        // HIGHER deck of a stepped destination — material below then holds
+        // while the mouth is buried, and apply() would carve an internal,
+        // unmachinable cavity.  The mouth must sit ON the surface.
+        auto mouthOpenAt = [&](double px, double py) {
+            cls.Perform(gp_Pnt(px, py, belowZ), 1e-6);
+            const TopAbs_State below = cls.State();
+            if (below != TopAbs_IN && below != TopAbs_ON) return false;
+            cls.Perform(gp_Pnt(px, py, aboveZ), 1e-6);
+            return cls.State() == TopAbs_OUT;
+        };
+
+        auto rectFits = [&](double s) {
+            const double hl = 0.5 * len * s + margin;
+            const double hw = 0.5 * wid * s + margin;
+            // Sample the perimeter of the margin-expanded rectangle, plus
+            // the centre (a rect can straddle a step with all-perimeter
+            // sound while its middle is buried only in exotic footprints —
+            // the centre probe is cheap honesty).
+            if (!mouthOpenAt(wx, wy)) return false;
+            auto edge = [&](double ax, double ay, double bx, double by) {
+                const double elen = std::hypot(bx - ax, by - ay);
+                const int    n    = std::max(
+                    2, static_cast<int>(std::ceil(elen / 0.4)) + 1);
+                for (int i = 0; i < n; ++i) {
+                    const double t  = static_cast<double>(i) / (n - 1);
+                    if (!mouthOpenAt(ax + (bx - ax) * t, ay + (by - ay) * t))
+                        return false;
+                }
+                return true;
+            };
+            const double c1x = wx + xx * hl + yx * hw, c1y = wy + xy * hl + yy * hw;
+            const double c2x = wx - xx * hl + yx * hw, c2y = wy - xy * hl + yy * hw;
+            const double c3x = wx - xx * hl - yx * hw, c3y = wy - xy * hl - yy * hw;
+            const double c4x = wx + xx * hl - yx * hw, c4y = wy + xy * hl - yy * hw;
+            return edge(c1x, c1y, c2x, c2y) && edge(c2x, c2y, c3x, c3y) &&
+                   edge(c3x, c3y, c4x, c4y) && edge(c4x, c4y, c1x, c1y);
+        };
+
+        double s = 1.0;
+        if (!rectFits(1.0)) {
+            s = 0.0;
+            if (rectFits(0.0)) {
+                double lo = 0.0, hi = 1.0;
+                for (int i = 0; i < 24; ++i) {
+                    const double mid = 0.5 * (lo + hi);
+                    if (rectFits(mid)) lo = mid; else hi = mid;
+                }
+                s = lo;
+            }
+            if (std::min(len, wid) * s < 0.8) {
+                neuter(result, "post-clamp pocket " +
+                               std::to_string(len * s) + " x " +
+                               std::to_string(wid * s) +
+                               " mm falls under the 0.8 mm sliver floor — "
+                               "refusing transfer");
+                spdlog::debug("adapt::transferFeature {}->{}: refused (pocket sliver)",
+                              srcProduct, dstProduct);
+                return result;
+            }
+            p["length_mm"] = len * s;
+            p["width_mm"]  = wid * s;
+            result.fit_clamped = true;
+            result.notes.push_back("fit clamp: pocket scaled by " +
+                                   std::to_string(s) +
+                                   " about its centre (ratio-preserving)");
+        }
+
+        // Commit the re-expressed mouth (and keep the CAM breadcrumbs true).
+        wc[0] = wx; wc[1] = wy; wc[2] = wz;
+        if (p.contains("center_x_world_mm")) p["center_x_world_mm"] = wx;
+        if (p.contains("center_y_world_mm")) p["center_y_world_mm"] = wy;
+        if (p.contains("center_z_world_mm")) p["center_z_world_mm"] = wz;
     }
 
     const double rOut = fam != nullptr ? 0.5 * (pcd + widest) : 0.5 * od;

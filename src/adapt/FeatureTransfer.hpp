@@ -45,6 +45,21 @@
 //                   fits by PER-MEMBER circles and clamps its PITCH about
 //                   the array centre (hole dia and count preserved; refuse
 //                   when the clamped pitch would merge adjacent holes).
+//       USE-WORLD   { "box_pocket" } (use_world form only, FACE-ANCHORED
+//                   only): world_center is the PLACEMENT (the mouth centre
+//                   apply() cuts at), not a breadcrumb — its XY re-expresses
+//                   frame-relative and its Z re-anchors to the MEASURED
+//                   destination entry plane.  Frame-only refuses: this is
+//                   the one family whose transferred Z executes VERBATIM
+//                   (no execute-time face resolution), so a bbox-approximate
+//                   mouth would cut air/short in the executed geometry.
+//                   face_xaxis (orientation) is intrinsic.  Fit probes the
+//                   rectangle's margin-expanded perimeter AND requires the
+//                   mouth OPEN at every sample (material just below the
+//                   plane, air just above): a re-expressed centre buried
+//                   under a HIGHER deck of a stepped destination refuses —
+//                   an internal cavity is not a pocket.  One-factor
+//                   ratio-preserving clamp; sub-0.8 mm slivers refuse.
 //   • FRONT/BACK (±Z) entry only — a non-±Z face_normal (face-local family)
 //     or a non-±Z axis_dir (pattern family; mirrors the skills' own
 //     validate error) refuses;
