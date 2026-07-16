@@ -15,9 +15,13 @@
 #include "skills/Workpiece.hpp"
 #include "skills/revolve_boss.hpp"
 
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <TopoDS_Shape.hxx>
 
 #include <cmath>
@@ -140,4 +144,114 @@ TEST(SkillRevolveBoss, RecognizeFindsAxisymmetricFaces)
     // Signature pattern carries vertex count.
     EXPECT_EQ(out.signature.pattern.value("sketch_vertex_count", 0),
               static_cast<int>(in.profile_polyline.size()));
+}
+
+// ─── STEPPED meridian: a multi-segment turned part round-trips ─────────────
+// Three coaxial segments (two cylinders + a cone frustum) — the single-face
+// meridian paths cannot express this; the stepped assembler chains the
+// segments (shoulder steps included) and the Pappus gate confirms the
+// profile against the real solid before it ships.
+TEST(SkillRevolveBoss, SteppedShaftMeridianRoundTrips)
+{
+    // A PURE stepped solid (no stock box — the cap-only specificity gate
+    // rightly aborts on any prismatic walls in the shape): three coaxial
+    // cylinder steps r5/r3/r1.5.  (A cone-TOPPED stack is claimed first by
+    // the cone-protrusion path B-prime — the crown-knob detector — which
+    // returns before the whole-part assembler; the stepped path's practical
+    // target is the all-cylinder turned shaft.)
+    TopoDS_Shape shaft = BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 5.0, 5.0).Shape();
+    shaft = BRepAlgoAPI_Fuse(shaft, BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 5.0), gp_Dir(0, 0, 1)), 3.0, 5.0).Shape()).Shape();
+    shaft = BRepAlgoAPI_Fuse(shaft, BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 10.0), gp_Dir(0, 0, 1)), 1.5, 3.0).Shape()).Shape();
+    const double vOrig = volumeOf(shaft);
+
+    // Foreign copy: NO feature history — recovery must be geometric.
+    skill::Workpiece foreign(shaft);
+    ASSERT_TRUE(foreign.features().empty());
+    const auto cands = skill::revolve_boss::recognize(foreign);
+    const skill::RecognizedFeature* g = nullptr;
+    for (const auto& c : cands) {
+        if (c.matched_geometry.value("source", std::string{}) != "geometry")
+            continue;
+        if (!c.recovered_params.contains("profile_polyline")) continue;
+        if (c.recovered_params["profile_polyline"].size() >= 8) { g = &c; break; }
+    }
+    ASSERT_NE(g, nullptr)
+        << "a stepped shaft must recover a multi-segment meridian "
+           "(2 axis points + 2 per segment = 8 vertices for 3 segments)";
+
+    // Regenerate from the RECOVERED profile on fresh stock: Pappus parity.
+    skill::revolve_boss::Input rin;
+    for (const auto& p : g->recovered_params["profile_polyline"])
+        rin.profile_polyline.push_back(
+            { p["r"].get<double>(), p["z"].get<double>() });
+    const auto& ao = g->recovered_params["axis_origin"];
+    const auto& ad = g->recovered_params["axis_dir"];
+    rin.axis_origin = gp_Pnt(ao[0].get<double>(), ao[1].get<double>(),
+                             ao[2].get<double>());
+    rin.axis_dir    = gp_Dir(ad[0].get<double>(), ad[1].get<double>(),
+                             ad[2].get<double>());
+    rin.revolution_angle_deg = 360.0;
+    auto stock2 = emptyStock();
+    auto regen  = skill::revolve_boss::apply(*stock2, rin);
+    const double vRegen = volumeOf(regen.workpiece->shape()) -
+                          volumeOf(stock2->shape());
+    EXPECT_NEAR(vRegen, vOrig, vOrig * 0.03)
+        << "the recovered stepped meridian must revolve back to the same solid";
+}
+
+// ─── HOLLOW ring: overlapping coaxial walls keep the meridian EMPTY ────────
+// An inner + outer wall pair share the same axial range — that is a bore,
+// not an outer profile; the stepped assembler must abstain (empty meridian,
+// sub-threshold) instead of fabricating a solid profile that would FILL the
+// hole on regeneration.
+TEST(SkillRevolveBoss, HollowRingKeepsMeridianEmpty)
+{
+    // A stepped PIPE: two outer wall steps (r14 z0-5, r12 z5-10) with a
+    // through bore (r10) — three coaxial cylinders, but the bore wall's
+    // axial range OVERLAPS both outer steps.
+    TopoDS_Shape pipe = BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 14.0, 5.0).Shape();
+    pipe = BRepAlgoAPI_Fuse(pipe, BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 5.0), gp_Dir(0, 0, 1)), 12.0, 5.0).Shape()).Shape();
+    pipe = BRepAlgoAPI_Cut(pipe, BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, -1.0), gp_Dir(0, 0, 1)), 10.0, 12.0).Shape()).Shape();
+
+    skill::Workpiece foreign(pipe);
+    const auto cands = skill::revolve_boss::recognize(foreign);
+    for (const auto& c : cands) {
+        if (c.matched_geometry.value("source", std::string{}) != "geometry")
+            continue;
+        if (c.recovered_params.contains("profile_polyline"))
+            EXPECT_TRUE(c.recovered_params["profile_polyline"].empty())
+                << "an inner/outer wall pair (hollow ring) must NOT be "
+                   "assembled into a solid meridian";
+    }
+}
+
+// ─── ECCENTRIC journal: near-coaxial but offset — must abstain ──────────────
+// The grouping tolerance (0.5 mm) would collect the offset middle step, but
+// assembling it concentric about one axis would silently FLATTEN a real
+// eccentric-stud class — and the Pappus gate cannot see a lateral offset of
+// an axially-disjoint segment (volume is translation-invariant).
+TEST(SkillRevolveBoss, EccentricJournalKeepsMeridianEmpty)
+{
+    TopoDS_Shape shaft = BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 5.0, 5.0).Shape();
+    shaft = BRepAlgoAPI_Fuse(shaft, BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0.3, 0, 5.0), gp_Dir(0, 0, 1)), 3.0, 5.0).Shape()).Shape();
+    shaft = BRepAlgoAPI_Fuse(shaft, BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 10.0), gp_Dir(0, 0, 1)), 1.5, 3.0).Shape()).Shape();
+
+    skill::Workpiece foreign(shaft);
+    for (const auto& c : skill::revolve_boss::recognize(foreign)) {
+        if (c.matched_geometry.value("source", std::string{}) != "geometry")
+            continue;
+        if (c.recovered_params.contains("profile_polyline"))
+            EXPECT_TRUE(c.recovered_params["profile_polyline"].empty())
+                << "a 0.3 mm eccentric step must NOT be concentricized into "
+                   "a single-axis meridian";
+    }
 }

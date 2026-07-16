@@ -7,6 +7,8 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -647,6 +649,149 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
             });
             recAxisOrigin = cLoc;
             recAxisDir    = cDir;
+        }
+    } else if (cylCount + coneCount >= 3 &&
+               cylCount + coneCount == static_cast<int>(revFaces.size())) {
+        // STEPPED meridian: THREE OR MORE coaxial cylinder/cone faces stacked
+        // along one axis (a turned/lathe part — stepped shaft, crown stem +
+        // collar).  Exactly TWO faces stay in the legacy sub-threshold
+        // isolation: that class is dominated by a chamfered cylinder (rim
+        // cone + wall), which the chamfer_edge skill owns — assembling it
+        // here would swallow the chamfer into a revolve profile
+        // (RevolveRoundTripAdv.ChamferedCylinderPuckCapsOnly pins this).
+        // Each face contributes one meridian segment measured ALONG THE GROUP
+        // AXIS; radius steps between segments are the SHOULDER annuli (axis-
+        // normal planes the cap-only specificity gate already admits).  Any
+        // torus/sphere face (an arc segment we cannot express yet), an axial
+        // OVERLAP (a hollow/stepped BORE, not an outer profile) or a gap
+        // between segments leaves the meridian EMPTY — the candidate stays
+        // sub-threshold instead of mis-regenerating.  The Pappus volume gate
+        // below is the final defence.
+        gp_Dir gDir = aDir;
+        if (std::abs(gDir.Z()) > 0.999 && gDir.Z() < 0.0)
+            gDir = gp_Dir(0.0, 0.0, 1.0);            // legacy +Z parity (-Z mirror fix)
+        const gp_Pnt gLoc = aLoc;
+
+        struct Seg { double aLo, aHi, rLo, rHi; };
+        // TIGHT lateral tolerance for ASSEMBLY: the grouping tolerance
+        // (coaxial(), 0.5 mm) is fine for counting faces, but rebuilding
+        // every segment concentric about ONE axis silently FLATTENS a
+        // genuinely eccentric journal (a real lathe class: eccentric
+        // adjuster studs/bushings run 0.3–0.5 mm offsets) — and the Pappus
+        // gate is mathematically blind to it, because an axially-disjoint
+        // segment's volume is invariant under lateral translation.  Abstain
+        // instead of concentricizing.
+        auto lateralOff = [&](const gp_Ax1& a) {
+            const gp_Vec v(gLoc, a.Location());
+            const gp_Vec d(gDir);
+            return (v - d * v.Dot(d)).Magnitude();
+        };
+        std::vector<Seg> segs;
+        bool segsOk = true;
+        for (const auto& rf : revFaces) {
+            if (!coaxial(rf.axis, axis) || lateralOff(rf.axis) > 0.05) {
+                segsOk = false;
+                break;
+            }
+            BRepAdaptor_Surface s(wp.face(rf.id));
+            // Axial extent of THIS face along the group axis (tight face bbox
+            // corner projection — orientation-robust; a full cylindrical face
+            // has no corner vertices, so the bbox is the reliable measure).
+            Bnd_Box fb;
+            BRepBndLib::AddOptimal(wp.face(rf.id), fb);
+            if (fb.IsVoid()) { segsOk = false; break; }
+            double q0, q1, q2, q3, q4, q5; fb.Get(q0, q1, q2, q3, q4, q5);
+            const double qx[2] = { q0, q3 }, qy[2] = { q1, q4 }, qz[2] = { q2, q5 };
+            double lo = 1e30, hi = -1e30;
+            for (int ix = 0; ix < 2; ++ix)
+                for (int iy = 0; iy < 2; ++iy)
+                    for (int iz = 0; iz < 2; ++iz) {
+                        const double a =
+                            gp_Vec(gLoc, gp_Pnt(qx[ix], qy[iy], qz[iz]))
+                                .Dot(gp_Vec(gDir));
+                        lo = std::min(lo, a); hi = std::max(hi, a);
+                    }
+            if (!(hi - lo > 1e-3)) { segsOk = false; break; }
+            if (s.GetType() == GeomAbs_Cylinder) {
+                const double R = s.Cylinder().Radius();
+                if (!std::isfinite(R) || R <= 0.0) { segsOk = false; break; }
+                segs.push_back({ lo, hi, R, R });
+            } else if (s.GetType() == GeomAbs_Cone) {
+                const gp_Cone cone = BRepAdaptor_Surface(wp.face(rf.id)).Cone();
+                const double refR = cone.RefRadius();
+                const double tanA = std::tan(cone.SemiAngle());
+                // Radii at the segment ends, measured from the CONE's own
+                // location along the GROUP axis (coaxial, so axial offsets
+                // differ only by the fixed location shift along gDir).
+                const double shift =
+                    gp_Vec(cone.Axis().Location(), gLoc).Dot(gp_Vec(gDir));
+                const double sgn =
+                    gp_Vec(cone.Axis().Direction()).Dot(gp_Vec(gDir)) >= 0.0
+                        ? 1.0 : -1.0;
+                const double rA = refR + sgn * (lo + shift) * tanA;
+                const double rB = refR + sgn * (hi + shift) * tanA;
+                if (!std::isfinite(rA) || !std::isfinite(rB) ||
+                    rA < -1e-6 || rB < -1e-6) { segsOk = false; break; }
+                segs.push_back({ lo, hi, std::max(0.0, rA), std::max(0.0, rB) });
+            } else {
+                segsOk = false;                       // torus/sphere arc — defer
+                break;
+            }
+        }
+
+        if (segsOk && segs.size() >= 3) {
+            std::sort(segs.begin(), segs.end(),
+                      [](const Seg& a, const Seg& b) { return a.aLo < b.aLo; });
+            bool chainOk = true;
+            for (std::size_t i = 0; i + 1 < segs.size(); ++i) {
+                // Adjacent segments must MEET (gap => unexplained band) and
+                // must not OVERLAP (an inner/outer wall pair => hollow bore).
+                if (std::abs(segs[i].aHi - segs[i + 1].aLo) > 0.1) {
+                    chainOk = false;
+                    break;
+                }
+            }
+            if (chainOk) {
+                json m = json::array();
+                m.push_back({ { "r", 0.0 }, { "z", segs.front().aLo } });
+                for (std::size_t i = 0; i < segs.size(); ++i) {
+                    m.push_back({ { "r", segs[i].rLo }, { "z", segs[i].aLo } });
+                    m.push_back({ { "r", segs[i].rHi }, { "z", segs[i].aHi } });
+                }
+                m.push_back({ { "r", 0.0 }, { "z", segs.back().aHi } });
+
+                // PAPPUS volume gate — the final defence for the assembled
+                // profile: V = 2π·r̄·A must match the solid within 3%.  A
+                // hidden inner bore (walls the overlap check somehow missed),
+                // an unmodelled arc band or any mis-assembly shows up as a
+                // volume mismatch; the meridian is then dropped so the
+                // candidate stays sub-threshold instead of mis-regenerating.
+                double a2 = 0.0, cr6 = 0.0;   // 2·area, 6·area·centroid_r
+                for (std::size_t i = 0; i < m.size(); ++i) {
+                    const auto& p0 = m[i];
+                    const auto& p1 = m[(i + 1) % m.size()];
+                    const double r0v = p0["r"].get<double>();
+                    const double z0v = p0["z"].get<double>();
+                    const double r1v = p1["r"].get<double>();
+                    const double z1v = p1["z"].get<double>();
+                    const double cross = r0v * z1v - r1v * z0v;
+                    a2  += cross;
+                    cr6 += (r0v + r1v) * cross;
+                }
+                const double areaAbs = 0.5 * std::abs(a2);
+                const double vPappus = (std::abs(a2) > 1e-9)
+                    ? 2.0 * M_PI * (cr6 / (3.0 * a2)) * areaAbs
+                    : 0.0;
+                GProp_GProps vp;
+                BRepGProp::VolumeProperties(wp.shape(), vp);
+                const double vSolid = vp.Mass();
+                if (vSolid > 1e-6 && vPappus > 1e-6 &&
+                    std::abs(vPappus - vSolid) <= 0.03 * vSolid) {
+                    meridian      = std::move(m);
+                    recAxisOrigin = gLoc;
+                    recAxisDir    = gDir;
+                }
+            }
         }
     }
 
