@@ -834,6 +834,41 @@ TEST(FeatureTransfer, FaceAnchoredLugsDoNotInflateFootprint)
     EXPECT_DOUBLE_EQ(res.step.params["seat_dia_mm"].get<double>(), 6.0);
 }
 
+// ─── 24b. Ring fit is PER-MEMBER: a void between members must not clamp ────
+// A Ø3 pocket sits on the OUTER test circle's path (radius 15, at 45°) but
+// exactly between two members (15° and 75°): the outer-circle bound would
+// cross the void and clamp; the members' own circles (pitch radius 10,
+// rm = 5) stay clear of it — the ring fits as-is.
+TEST(FeatureTransfer, FaceAnchoredRingVoidBetweenMembersDoesNotClamp)
+{
+    auto disc = skill::createCylindricalStock(44.0, 10.0);
+    skill::mill_rect_pocket::Input mp;      // a small square void stands in
+    mp.entry_face  = skill::FaceByNormal{ gp_Dir(0, 0, 1) };
+    mp.center_x_mm = 15.0 * std::cos(M_PI / 4.0);   // (10.6, 10.6): radius 15,
+    mp.center_y_mm = 15.0 * std::sin(M_PI / 4.0);   // 45 deg — between members
+    mp.length_mm   = 3.0;
+    mp.width_mm    = 3.0;
+    mp.depth_mm    = 3.0;
+    const auto pocketed = skill::mill_rect_pocket::apply(*disc, mp);
+    ASSERT_NE(pocketed.workpiece, nullptr);
+    const TopoDS_Shape dst = pocketed.workpiece->shape();
+
+    auto s = makeCounterboreRingStep();     // PCD 40 -> use 20; start 15 deg
+    s.params["bolt_circle_dia_mm"] = 20.0;
+    adapt::TransferOptions opts;
+    opts.dst_shape = &dst;
+    const auto res = adapt::transferFeature(
+        s, "phone", "watch",
+        adapt::AnchorFrame{ 0, 0, 0, 22, 22, 5 },
+        adapt::AnchorFrame::fromShape(dst), opts);
+    ASSERT_TRUE(res.transferred);
+    EXPECT_FALSE(res.fit_clamped)
+        << "the void at radius 15/45deg lies on the OUTER circle (rOut+margin "
+           "= 15) but between the members at 15 and 75 deg — a per-member fit "
+           "leaves the ring untouched";
+    EXPECT_DOUBLE_EQ(res.step.params["bolt_circle_dia_mm"].get<double>(), 20.0);
+}
+
 // ═══ LINEAR hole array (speaker-grille class): start/direction/pitch
 //     placement, per-member fit, pitch-only clamp about the array centre. ═══
 

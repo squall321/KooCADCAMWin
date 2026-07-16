@@ -839,7 +839,50 @@ TransferResult transferFeature(const process::StepInvocation& src,
     bool   violated  = false;
     double feasibleR = rOut;
     if (rOut > 1e-9) {
-        if (faceAnchored) {
+        if (faceAnchored && fam != nullptr) {
+            // PER-MEMBER (like linear/grid): the ring's members land at
+            // start_angle + i·360/count on the pitch circle, so test the
+            // material exactly there — a member over a side cutout is
+            // caught, and the empty arc between members no longer
+            // over-constrains.  The frame-only path below keeps the
+            // rotation-invariant outer-circle bound instead: an UNMEASURED
+            // clamp must not swing with recognition noise in the phase.
+            BRepClass3d_SolidClassifier cls(*opts.dst_shape);
+            const double probeZ = faceZ - nzEntry * 0.1;
+            const double execX  = dstFrame.cx + eccX;
+            const double execY  = dstFrame.cy + eccY;
+            double startDeg = num("start_angle_deg", 0.0);
+            if (std::isnan(startDeg)) startDeg = 0.0;   // parse default parity
+            const double rm = 0.5 * widest + margin;
+            auto ringFits = [&](double rr) {
+                for (int i = 0; i < count; ++i) {
+                    const double a =
+                        (startDeg + i * 360.0 / count) * M_PI / 180.0;
+                    if (!circleInMaterial(cls, execX + rr * std::cos(a),
+                                          execY + rr * std::sin(a), probeZ, rm))
+                        return false;
+                }
+                return true;
+            };
+            if (!ringFits(0.5 * pcd)) {
+                violated = true;
+                double rFeas = 0.0;
+                if (ringFits(0.0)) {
+                    double lo = 0.0, hi = 0.5 * pcd;
+                    for (int i = 0; i < 24; ++i) {
+                        const double mid = 0.5 * (lo + hi);
+                        if (ringFits(mid)) lo = mid; else hi = mid;
+                    }
+                    rFeas = lo;
+                }
+                // The clamp below derives newPcd = 2*feasibleR − widest;
+                // express the measured pitch-circle radius in those terms.
+                feasibleR = rFeas + 0.5 * widest;
+                result.notes.push_back(
+                    "measured footprint: largest feasible pitch radius " +
+                    std::to_string(rFeas) + " mm at the entry plane");
+            }
+        } else if (faceAnchored) {
             BRepClass3d_SolidClassifier cls(*opts.dst_shape);
             const double probeZ = faceZ - nzEntry * 0.1;
             const double execX  = dstFrame.cx + eccX;
