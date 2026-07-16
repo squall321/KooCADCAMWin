@@ -202,32 +202,77 @@ TEST(SkillRevolveBoss, SteppedShaftMeridianRoundTrips)
         << "the recovered stepped meridian must revolve back to the same solid";
 }
 
-// ─── HOLLOW ring: overlapping coaxial walls keep the meridian EMPTY ────────
-// An inner + outer wall pair share the same axial range — that is a bore,
-// not an outer profile; the stepped assembler must abstain (empty meridian,
-// sub-threshold) instead of fabricating a solid profile that would FILL the
-// hole on regeneration.
-TEST(SkillRevolveBoss, HollowRingKeepsMeridianEmpty)
+// ─── HOLLOW: a stepped PIPE with a THROUGH bore round-trips as an annulus ──
+// Two outer wall steps (r14 z0-5, r12 z5-10) + a through bore (r10): the
+// through inner wall becomes the profile's inner boundary; regeneration
+// must reproduce the pipe's volume (the hole stays a hole).
+TEST(SkillRevolveBoss, SteppedPipeMeridianRoundTrips)
 {
-    // A stepped PIPE: two outer wall steps (r14 z0-5, r12 z5-10) with a
-    // through bore (r10) — three coaxial cylinders, but the bore wall's
-    // axial range OVERLAPS both outer steps.
     TopoDS_Shape pipe = BRepPrimAPI_MakeCylinder(
         gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 14.0, 5.0).Shape();
     pipe = BRepAlgoAPI_Fuse(pipe, BRepPrimAPI_MakeCylinder(
         gp_Ax2(gp_Pnt(0, 0, 5.0), gp_Dir(0, 0, 1)), 12.0, 5.0).Shape()).Shape();
     pipe = BRepAlgoAPI_Cut(pipe, BRepPrimAPI_MakeCylinder(
         gp_Ax2(gp_Pnt(0, 0, -1.0), gp_Dir(0, 0, 1)), 10.0, 12.0).Shape()).Shape();
+    const double vOrig = volumeOf(pipe);
 
     skill::Workpiece foreign(pipe);
+    ASSERT_TRUE(foreign.features().empty());
     const auto cands = skill::revolve_boss::recognize(foreign);
+    const skill::RecognizedFeature* g = nullptr;
     for (const auto& c : cands) {
+        if (c.matched_geometry.value("source", std::string{}) != "geometry")
+            continue;
+        if (!c.recovered_params.contains("profile_polyline")) continue;
+        if (!c.recovered_params["profile_polyline"].empty()) { g = &c; break; }
+    }
+    ASSERT_NE(g, nullptr) << "a through-bored stepped pipe must recover an "
+                             "annulus meridian";
+    // The profile's minimum radius is the bore wall — the hole is preserved.
+    double minR = 1e30;
+    for (const auto& p : g->recovered_params["profile_polyline"])
+        minR = std::min(minR, p["r"].get<double>());
+    EXPECT_NEAR(minR, 10.0, 0.1);
+
+    skill::revolve_boss::Input rin;
+    for (const auto& p : g->recovered_params["profile_polyline"])
+        rin.profile_polyline.push_back(
+            { p["r"].get<double>(), p["z"].get<double>() });
+    const auto& ao = g->recovered_params["axis_origin"];
+    const auto& ad = g->recovered_params["axis_dir"];
+    rin.axis_origin = gp_Pnt(ao[0].get<double>(), ao[1].get<double>(),
+                             ao[2].get<double>());
+    rin.axis_dir    = gp_Dir(ad[0].get<double>(), ad[1].get<double>(),
+                             ad[2].get<double>());
+    rin.revolution_angle_deg = 360.0;
+    auto stock2 = emptyStock();
+    auto regen  = skill::revolve_boss::apply(*stock2, rin);
+    const double vRegen = volumeOf(regen.workpiece->shape()) -
+                          volumeOf(stock2->shape());
+    EXPECT_NEAR(vRegen, vOrig, vOrig * 0.03)
+        << "the recovered annulus must revolve back to the same pipe";
+}
+
+// ─── BLIND bore: a partial-span inner wall keeps the meridian EMPTY ────────
+// The bore wall does not span the whole part, so its floor would need
+// modelling — the assembler must abstain instead of fabricating a profile
+// that either fills the hole or drills it through.
+TEST(SkillRevolveBoss, BlindBoreKeepsMeridianEmpty)
+{
+    TopoDS_Shape part = BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 14.0, 5.0).Shape();
+    part = BRepAlgoAPI_Fuse(part, BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 5.0), gp_Dir(0, 0, 1)), 12.0, 5.0).Shape()).Shape();
+    part = BRepAlgoAPI_Cut(part, BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, 4.0), gp_Dir(0, 0, 1)), 10.0, 7.0).Shape()).Shape();
+
+    skill::Workpiece foreign(part);
+    for (const auto& c : skill::revolve_boss::recognize(foreign)) {
         if (c.matched_geometry.value("source", std::string{}) != "geometry")
             continue;
         if (c.recovered_params.contains("profile_polyline"))
             EXPECT_TRUE(c.recovered_params["profile_polyline"].empty())
-                << "an inner/outer wall pair (hollow ring) must NOT be "
-                   "assembled into a solid meridian";
+                << "a BLIND bore's partial-span inner wall must abstain";
     }
 }
 

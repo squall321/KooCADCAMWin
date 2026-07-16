@@ -661,12 +661,14 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         // (RevolveRoundTripAdv.ChamferedCylinderPuckCapsOnly pins this).
         // Each face contributes one meridian segment measured ALONG THE GROUP
         // AXIS; radius steps between segments are the SHOULDER annuli (axis-
-        // normal planes the cap-only specificity gate already admits).  Any
-        // torus/sphere face (an arc segment we cannot express yet), an axial
-        // OVERLAP (a hollow/stepped BORE, not an outer profile) or a gap
-        // between segments leaves the meridian EMPTY — the candidate stays
-        // sub-threshold instead of mis-regenerating.  The Pappus volume gate
-        // below is the final defence.
+        // normal planes the cap-only specificity gate already admits).  A
+        // THROUGH bore is supported (it becomes the annulus inner boundary —
+        // see the hollow extraction below); any torus/sphere face (an arc
+        // segment we cannot express yet), a BLIND or STEPPED bore (partial-
+        // span / multiple inner walls) or a gap between outer segments leaves
+        // the meridian EMPTY — the candidate stays sub-threshold instead of
+        // mis-regenerating.  The Pappus volume gate below is the final
+        // defence.
         gp_Dir gDir = aDir;
         if (std::abs(gDir.Z()) > 0.999 && gDir.Z() < 0.0)
             gDir = gp_Dir(0.0, 0.0, 1.0);            // legacy +Z parity (-Z mirror fix)
@@ -740,25 +742,57 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         }
 
         if (segsOk && segs.size() >= 3) {
+            // HOLLOW (pipe/bushing) support: a THROUGH inner wall — exactly
+            // one CYLINDER segment spanning the whole axial range at a
+            // radius clear of every other segment — becomes the profile's
+            // inner boundary (an annulus meridian; apply() revolves r > 0
+            // polygons into pipes already).  Blind or STEPPED bores stay
+            // abstained: their inner boundary needs floor/step modelling.
+            double gLo = 1e30, gHi = -1e30;
+            for (const auto& s : segs) {
+                gLo = std::min(gLo, s.aLo);
+                gHi = std::max(gHi, s.aHi);
+            }
+            double rInner   = 0.0;
+            int    innerIdx = -1;
+            bool   hollowOk = true;
+            for (std::size_t i = 0; i < segs.size(); ++i) {
+                const bool fullSpan = std::abs(segs[i].aLo - gLo) <= 0.1 &&
+                                      std::abs(segs[i].aHi - gHi) <= 0.1;
+                const bool isCyl = std::abs(segs[i].rLo - segs[i].rHi) < 1e-6;
+                if (!fullSpan || !isCyl) continue;
+                bool smallest = true;
+                for (std::size_t j = 0; j < segs.size(); ++j) {
+                    if (j == i) continue;
+                    if (std::min(segs[j].rLo, segs[j].rHi) <
+                        segs[i].rLo + 0.4) { smallest = false; break; }
+                }
+                if (!smallest) continue;
+                if (innerIdx >= 0) { hollowOk = false; break; }   // two bores
+                innerIdx = static_cast<int>(i);
+                rInner   = segs[i].rLo;
+            }
+            if (hollowOk && innerIdx >= 0)
+                segs.erase(segs.begin() + innerIdx);
+
             std::sort(segs.begin(), segs.end(),
                       [](const Seg& a, const Seg& b) { return a.aLo < b.aLo; });
-            bool chainOk = true;
-            for (std::size_t i = 0; i + 1 < segs.size(); ++i) {
-                // Adjacent segments must MEET (gap => unexplained band) and
-                // must not OVERLAP (an inner/outer wall pair => hollow bore).
-                if (std::abs(segs[i].aHi - segs[i + 1].aLo) > 0.1) {
+            bool chainOk = hollowOk && segs.size() >= 2;
+            for (std::size_t i = 0; chainOk && i + 1 < segs.size(); ++i) {
+                // Adjacent OUTER segments must MEET (gap => unexplained band)
+                // and must not OVERLAP (a remaining inner/outer wall pair =>
+                // a bore the through-wall extraction did not explain).
+                if (std::abs(segs[i].aHi - segs[i + 1].aLo) > 0.1)
                     chainOk = false;
-                    break;
-                }
             }
             if (chainOk) {
                 json m = json::array();
-                m.push_back({ { "r", 0.0 }, { "z", segs.front().aLo } });
+                m.push_back({ { "r", rInner }, { "z", segs.front().aLo } });
                 for (std::size_t i = 0; i < segs.size(); ++i) {
                     m.push_back({ { "r", segs[i].rLo }, { "z", segs[i].aLo } });
                     m.push_back({ { "r", segs[i].rHi }, { "z", segs[i].aHi } });
                 }
-                m.push_back({ { "r", 0.0 }, { "z", segs.back().aHi } });
+                m.push_back({ { "r", rInner }, { "z", segs.back().aHi } });
 
                 // PAPPUS volume gate — the final defence for the assembled
                 // profile: V = 2π·r̄·A must match the solid within 3%.  A
@@ -819,12 +853,13 @@ std::vector<RecognizedFeature> recognize(const Workpiece& wp)
         { "axial_span_mm",         axialSpan },
         { "meridian_recovered",    !meridian.empty() },
     };
-    // Surface at full confidence ONLY when the meridian was recovered (a single
-    // cylinder), so a regeneratable revolve reaches the Executor.  A cone /
-    // stepped / hollow revolution has an EMPTY profile that apply() would reject
-    // (profile.size() < 3) — emit it as a weak, sub-threshold detection so it is
-    // NOT replayed into a failing Executor step.  (Full cone/stepped meridian
-    // recovery is a follow-up.)
+    // Surface at full confidence ONLY when the meridian was recovered — a
+    // single cylinder/cone, a stepped stack (3+ coaxial faces) or a
+    // through-bored hollow.  Everything the assembler abstains from (arc
+    // meridians, blind/stepped bores, eccentric journals, 2-face parts)
+    // has an EMPTY profile that apply() would reject (profile.size() < 3)
+    // — emit those as weak, sub-threshold detections so they are NOT
+    // replayed into a failing Executor step.
     const double conf = meridian.empty() ? 0.5 : 0.9;
     out.push_back(RecognizedFeature{ kSkillId, recovered, conf, matched });
     return out;
